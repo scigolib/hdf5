@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/hdf5.iml" filepath="$PROJECT_DIR$/.idea/hdf5.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../hdf5manus/.idea/hdf5manus.iml" filepath="$PROJECT_DIR$/../hdf5manus/.idea/hdf5manus.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../matlab/.idea/matlab.iml" filepath="$PROJECT_DIR$/../matlab/.idea/matlab.iml" />
+    </modules>
+  </component>
+</project>
