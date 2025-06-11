@@ -12,7 +12,7 @@ var bufferPool = sync.Pool{
 func GetBuffer(size int) []byte {
 	buf := bufferPool.Get().([]byte)
 	if cap(buf) < size {
-		return make([]byte, size)
+		return make([]byte, size, size*2) // Увеличиваем capacity
 	}
 	return buf[:size]
 }

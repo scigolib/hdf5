@@ -40,13 +40,14 @@ const (
 	MsgLinkInfo     MessageType = 2
 	MsgDatatype     MessageType = 3
 	MsgFillValueOld MessageType = 4
+	MsgDataLayout   MessageType = 5
 	MsgAttribute    MessageType = 12
 	MsgName         MessageType = 11
 	MsgSymbolTable  MessageType = 17
+	MsgLinkMessage  MessageType = 18
 )
 
 func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHeader, error) {
-	// Преобразуем адрес в int64
 	offset := int64(address)
 	if offset < 0 {
 		return nil, fmt.Errorf("negative offset: %d", offset)
@@ -59,39 +60,36 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 		return nil, utils.WrapError("object header read failed", err)
 	}
 
-	// Проверяем сигнатуру
-	signature := string(prefix[0:4])
-	if signature != "OHDR" {
-		// Попробуем интерпретировать как little-endian
-		leSignature := string([]byte{prefix[3], prefix[2], prefix[1], prefix[0]})
-		if leSignature == "OHDR" {
-			fmt.Println("Note: object header signature in little-endian format")
-			// Переключаем порядок байт
-			sb.Endianness = binary.LittleEndian
-		} else {
-			return nil, fmt.Errorf("invalid object header signature: %s (hex: % x)", signature, prefix[0:4])
-		}
+	// Улучшенное определение порядка байт
+	isBE := false
+	if string(prefix[0:4]) == "OHDR" {
+		// Little-endian
+	} else if string([]byte{prefix[3], prefix[2], prefix[1], prefix[0]}) == "OHDR" {
+		isBE = true
+	} else {
+		return nil, fmt.Errorf("invalid object header signature: % x", prefix[0:4])
 	}
 
-	version := prefix[4]
-	flags := prefix[5]
-
-	header := &ObjectHeader{
-		Version: version,
-		Flags:   flags,
+	header := &ObjectHeader{}
+	if isBE {
+		header.Version = prefix[7]
+		header.Flags = prefix[6]
+	} else {
+		header.Version = prefix[4]
+		header.Flags = prefix[5]
 	}
 
 	var err error
-	switch version {
+	switch header.Version {
 	case 1:
 		return nil, errors.New("version 1 headers not supported")
 	case 2:
-		header.Messages, header.Name, err = parseV2Header(r, address+8, sb)
+		header.Messages, header.Name, err = parseV2Header(r, address+8, sb, isBE)
 		if err != nil {
 			return nil, utils.WrapError("v2 header parse failed", err)
 		}
 	default:
-		return nil, fmt.Errorf("unsupported object header version: %d", version)
+		return nil, fmt.Errorf("unsupported object header version: %d", header.Version)
 	}
 
 	header.Type = determineObjectType(header.Messages)
@@ -102,7 +100,6 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 func determineObjectType(messages []*HeaderMessage) ObjectType {
 	hasDataspace := false
 	hasDatatype := false
-	hasSymbolTable := false
 
 	for _, msg := range messages {
 		switch msg.Type {
@@ -110,21 +107,18 @@ func determineObjectType(messages []*HeaderMessage) ObjectType {
 			hasDataspace = true
 		case MsgDatatype:
 			hasDatatype = true
-		case MsgSymbolTable:
-			hasSymbolTable = true
+		case MsgSymbolTable, MsgLinkInfo, MsgLinkMessage:
+			return ObjectTypeGroup
 		}
 	}
 
-	if hasSymbolTable {
-		return ObjectTypeGroup
-	}
 	if hasDataspace && hasDatatype {
 		return ObjectTypeDataset
 	}
 	return ObjectTypeUnknown
 }
 
-func parseV2Header(r io.ReaderAt, offset uint64, sb *Superblock) ([]*HeaderMessage, string, error) {
+func parseV2Header(r io.ReaderAt, offset uint64, sb *Superblock, isBE bool) ([]*HeaderMessage, string, error) {
 	var messages []*HeaderMessage
 	var name string
 
@@ -134,7 +128,13 @@ func parseV2Header(r io.ReaderAt, offset uint64, sb *Superblock) ([]*HeaderMessa
 	if _, err := r.ReadAt(sizeBuf, int64(offset)); err != nil {
 		return nil, "", utils.WrapError("header size read failed", err)
 	}
-	headerSize := sb.Endianness.Uint32(sizeBuf)
+
+	var headerSize uint32
+	if isBE {
+		headerSize = binary.BigEndian.Uint32(sizeBuf)
+	} else {
+		headerSize = binary.LittleEndian.Uint32(sizeBuf)
+	}
 
 	current := offset + 4
 	end := offset + uint64(headerSize)
@@ -142,12 +142,25 @@ func parseV2Header(r io.ReaderAt, offset uint64, sb *Superblock) ([]*HeaderMessa
 	for current < end {
 		typeSizeBuf := utils.GetBuffer(4)
 		if _, err := r.ReadAt(typeSizeBuf, int64(current)); err != nil {
+			utils.ReleaseBuffer(typeSizeBuf)
 			return nil, "", utils.WrapError("message header read failed", err)
 		}
 
-		msgType := MessageType(sb.Endianness.Uint16(typeSizeBuf[0:2]))
-		msgSize := sb.Endianness.Uint16(typeSizeBuf[2:4])
+		var msgType MessageType
+		var msgSize uint16
+		if isBE {
+			msgType = MessageType(binary.BigEndian.Uint16(typeSizeBuf[0:2]))
+			msgSize = binary.BigEndian.Uint16(typeSizeBuf[2:4])
+		} else {
+			msgType = MessageType(binary.LittleEndian.Uint16(typeSizeBuf[0:2]))
+			msgSize = binary.LittleEndian.Uint16(typeSizeBuf[2:4])
+		}
 		utils.ReleaseBuffer(typeSizeBuf)
+
+		if msgSize == 0 {
+			current += 4
+			continue
+		}
 
 		data := utils.GetBuffer(int(msgSize))
 		if _, err := r.ReadAt(data, int64(current+4)); err != nil {

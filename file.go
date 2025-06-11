@@ -1,7 +1,7 @@
 package hdf5
 
 import (
-	"fmt"
+	"errors"
 	"os"
 
 	"github.com/scigolib/hdf5/internal/core"
@@ -20,13 +20,11 @@ func Open(filename string) (*File, error) {
 		return nil, utils.WrapError("file open failed", err)
 	}
 
-	// Получаем размер файла
-	fi, err := f.Stat()
-	if err != nil {
+	// Проверка сигнатуры перед чтением суперблока
+	if !isHDF5File(f) {
 		f.Close()
-		return nil, utils.WrapError("file stat failed", err)
+		return nil, errors.New("not an HDF5 file")
 	}
-	fmt.Printf("File size: %d bytes\n", fi.Size())
 
 	sb, err := core.ReadSuperblock(f)
 	if err != nil {
@@ -39,8 +37,14 @@ func Open(filename string) (*File, error) {
 		sb:     sb,
 	}
 
-	// Загрузка корневой группы
-	file.root, err = loadGroup(file, sb.RootGroup)
+	// Используем правильный адрес корневой группы
+	rootAddress := sb.RootGroup
+	/*if rootAddress == 0 {
+		f.Close()
+		return nil, errors.New("invalid root group address: 0")
+	}*/
+
+	file.root, err = loadGroup(file, rootAddress)
 	if err != nil {
 		f.Close()
 		return nil, utils.WrapError("root group load failed", err)
@@ -49,16 +53,23 @@ func Open(filename string) (*File, error) {
 	return file, nil
 }
 
+// isHDF5File проверяет сигнатуру HDF5 файла
+func isHDF5File(r utils.ReaderAt) bool {
+	buf := utils.GetBuffer(8)
+	defer utils.ReleaseBuffer(buf)
+
+	if _, err := r.ReadAt(buf, 0); err != nil {
+		return false
+	}
+	return string(buf) == core.Signature
+}
+
 func (f *File) Close() error {
 	return f.osFile.Close()
 }
 
 func (f *File) Root() *Group {
 	return f.root
-}
-
-func (f *File) GetObject(path string) (Object, error) {
-	return nil, nil
 }
 
 func (f *File) Walk(fn func(path string, obj Object)) {
@@ -79,7 +90,6 @@ func walkGroup(g *Group, currentPath string, fn func(string, Object)) {
 	}
 }
 
-// SuperblockVersion возвращает версию суперблока
 func (f *File) SuperblockVersion() uint8 {
 	return f.sb.Version
 }

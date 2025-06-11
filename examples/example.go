@@ -10,19 +10,33 @@ import (
 )
 
 func main() {
-	testFile := "testdata/simple.h5"
-
-	if _, err := os.Stat(testFile); os.IsNotExist(err) {
-		createTestFile()
+	// Создаем тестовые файлы разных версий
+	if err := createTestFiles(); err != nil {
+		log.Fatalf("Failed to create test files: %v", err)
 	}
 
-	file, err := hdf5.Open(testFile)
+	// Тестируем все файлы
+	files := []string{
+		"testdata/v0.h5",
+		"testdata/v2.h5",
+		"testdata/v3.h5",
+		"testdata/with_groups.h5",
+	}
+
+	for _, fname := range files {
+		fmt.Printf("\n===== Testing file: %s =====\n", fname)
+		testFile(fname)
+	}
+}
+
+func testFile(filename string) {
+	file, err := hdf5.Open(filename)
 	if err != nil {
-		log.Fatalf("Failed to open file: %v", err)
+		log.Printf("Failed to open file: %v", err)
+		return
 	}
 	defer file.Close()
 
-	// Используем новый метод для получения версии
 	fmt.Printf("File opened successfully. Superblock version: %d\n", file.SuperblockVersion())
 
 	fmt.Println("File structure:")
@@ -38,47 +52,64 @@ func main() {
 	})
 }
 
-func createTestFile() {
+func createTestFiles() error {
 	if !checkPythonDependencies() {
-		log.Fatalf("Required Python dependencies missing. Install with: pip install h5py numpy")
+		log.Printf("Required Python dependencies missing. Install with: pip install h5py numpy")
+		return nil
 	}
 
 	if err := os.MkdirAll("testdata", 0755); err != nil {
-		log.Fatalf("Failed to create testdata directory: %v", err)
+		return fmt.Errorf("failed to create testdata directory: %v", err)
 	}
 
+	// Создаем скрипт для генерации тестовых файлов
 	pyScript := `
 import h5py
 import numpy as np
 
-# Используем совместимый формат HDF5 1.8
-with h5py.File('testdata/simple.h5', 'w', libver='v108') as f:
-    f.attrs['description'] = 'Simple test file'
-    
-    # Create datasets
-    f.create_dataset('ints', data=np.array([1, 2, 3]), dtype='int32')
-    f.create_dataset('floats', data=np.array([1.1, 2.2, 3.3]), dtype='float32')
-    
-    # Create groups
-    grp1 = f.create_group('group1')
-    grp1.create_dataset('data', data=np.arange(10), dtype='int32')
-    
-    grp2 = f.create_group('group2')
-    grp2.create_dataset('matrix', data=np.eye(3), dtype='float32')
+print("Creating test HDF5 files...")
+
+# Файл версии 0 (HDF5 1.0)
+filename = 'testdata/v0.h5'
+with h5py.File(filename, 'w', libver='earliest') as f:
+    f.create_dataset('test', data=[1, 2, 3])
+print(f'Created: {filename}')
+
+# Файл версии 2 (HDF5 1.8)
+filename = 'testdata/v2.h5'
+with h5py.File(filename, 'w', libver='v108') as f:
+    f.create_dataset('data', data=np.arange(10))
+print(f'Created: {filename}')
+
+# Файл версии 3 (HDF5 1.10+)
+filename = 'testdata/v3.h5'
+with h5py.File(filename, 'w', libver='latest') as f:
+    f.create_dataset('data', data=np.arange(10))
+print(f'Created: {filename}')
+
+# Файл с группами
+filename = 'testdata/with_groups.h5'
+with h5py.File(filename, 'w', libver='v108') as f:
+    f.create_dataset('dataset1', data=[1.1, 2.2, 3.3])
+    grp = f.create_group('subgroup')
+    grp.create_dataset('dataset2', data=[4, 5, 6])
+    grp.create_group('nested_group').create_dataset('nested_data', data=[7, 8, 9])
+print(f'Created: {filename}')
 `
 
-	pyFile := "testdata/create_test_file.py"
+	pyFile := "testdata/create_test_files.py"
 	if err := os.WriteFile(pyFile, []byte(pyScript), 0644); err != nil {
-		log.Fatalf("Failed to write Python script: %v", err)
+		return fmt.Errorf("failed to write Python script: %v", err)
 	}
 
 	cmd := exec.Command(getPythonCommand(), pyFile)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		log.Fatalf("Failed to create test file: %v", err)
+		return fmt.Errorf("failed to create test files: %v", err)
 	}
-	fmt.Println("Test file created: testdata/simple.h5")
+
+	return nil
 }
 
 func checkPythonDependencies() bool {
@@ -87,5 +118,9 @@ func checkPythonDependencies() bool {
 }
 
 func getPythonCommand() string {
-	return "python" // Для Windows всегда используем "python"
+	// Пытаемся использовать python3, если доступен
+	if _, err := exec.LookPath("python3"); err == nil {
+		return "python3"
+	}
+	return "python"
 }

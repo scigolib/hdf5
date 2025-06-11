@@ -1,32 +1,68 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: dump_hdf5 <file.h5>")
+	// Определение флагов
+	offset := flag.Int64("offset", 0, "Offset in file to start dumping from")
+	length := flag.Int("length", 64, "Number of bytes to dump")
+	flag.Parse()
+
+	args := flag.Args()
+	if len(args) < 1 {
+		fmt.Println("Usage: dump_hdf5 [flags] <file.h5>")
+		fmt.Println("Flags:")
+		flag.PrintDefaults()
 		return
 	}
 
-	file := os.Args[1]
+	file := args[0]
 	f, err := os.Open(file)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to open file: %v", err)
 	}
 	defer f.Close()
 
-	// Читаем первые 512 байт файла
-	buf := make([]byte, 512)
-	n, err := f.Read(buf)
+	// Получаем размер файла
+	fileInfo, err := f.Stat()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to get file info: %v", err)
+	}
+	fileSize := fileInfo.Size()
+
+	// Проверка корректности параметров
+	if *offset < 0 || *offset >= fileSize {
+		log.Fatalf("Invalid offset: %d (file size: %d)", *offset, fileSize)
 	}
 
-	fmt.Printf("First %d bytes of %s:\n", n, file)
+	if *length < 1 {
+		log.Fatalf("Invalid length: %d", *length)
+	}
+
+	// Рассчитываем реальную длину для чтения
+	remaining := fileSize - *offset
+	readLength := int64(*length)
+	if readLength > remaining {
+		readLength = remaining
+		fmt.Printf("Warning: requested length %d exceeds available bytes (%d). Dumping %d bytes.\n",
+			*length, remaining, readLength)
+	}
+
+	// Читаем указанный участок файла
+	buf := make([]byte, readLength)
+	n, err := f.ReadAt(buf, *offset)
+	if err != nil {
+		log.Printf("Read error: %v (read %d of %d bytes)", err, n, readLength)
+	}
+
+	fmt.Printf("Dumping %d bytes at offset 0x%x (%d) of %s (size: %d bytes):\n",
+		n, *offset, *offset, file, fileSize)
+
 	for i := 0; i < n; i += 16 {
 		end := i + 16
 		if end > n {
@@ -35,7 +71,7 @@ func main() {
 		chunk := buf[i:end]
 
 		// Шестнадцатеричный дамп
-		fmt.Printf("%08x: ", i)
+		fmt.Printf("%08x: ", *offset+int64(i))
 		for j := 0; j < 16; j++ {
 			if j < len(chunk) {
 				fmt.Printf("%02x ", chunk[j])
