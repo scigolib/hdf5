@@ -48,6 +48,7 @@ const (
 )
 
 func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHeader, error) {
+	
 	offset := int64(address)
 	if offset < 0 {
 		return nil, fmt.Errorf("negative offset: %d", offset)
@@ -98,22 +99,15 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 }
 
 func determineObjectType(messages []*HeaderMessage) ObjectType {
-	hasDataspace := false
-	hasDatatype := false
-
 	for _, msg := range messages {
 		switch msg.Type {
-		case MsgDataspace:
-			hasDataspace = true
-		case MsgDatatype:
-			hasDatatype = true
 		case MsgSymbolTable, MsgLinkInfo, MsgLinkMessage:
 			return ObjectTypeGroup
+		case MsgDataspace:
+			return ObjectTypeDataset
+		case MsgDatatype:
+			return ObjectTypeDatatype
 		}
-	}
-
-	if hasDataspace && hasDatatype {
-		return ObjectTypeDataset
 	}
 	return ObjectTypeUnknown
 }

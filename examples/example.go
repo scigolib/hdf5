@@ -21,6 +21,7 @@ func main() {
 		"testdata/v2.h5",
 		"testdata/v3.h5",
 		"testdata/with_groups.h5",
+		"testdata/test_v1.12_simple.h5",
 	}
 
 	for _, fname := range files {
