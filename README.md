@@ -213,6 +213,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - gonum/hdf5 for inspiration
 - All contributors to this project
 
+### Special Thanks
+
+**Professor Ancha Baranova** - This project would not have been possible without her invaluable help and support. Her assistance was crucial in bringing this library to life.
+
 ---
 
 ## 📞 Support
