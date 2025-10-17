@@ -1,0 +1,70 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Dependency directories
+vendor/
+
+# AI agents
+.claude
+.gode
+.goco
+
+# Development scripts (not for release)
+/scripts/
+
+# Go workspace file
+go.work
+
+# Build directories
+/bin/
+/dist/
+/build/
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+
+# Archives (keep archive directory, but ignore common archive files)
+*.zip
+*.tar.gz
+*.rar
+
+# Editor backup files
+*~
+.*.swp
+.*.swo
+
+# Dev docs
+docs/dev
