@@ -51,6 +51,7 @@ const (
 	MsgFilterPipeline MessageType = 11 // Filter Pipeline (compression, etc)
 	MsgAttribute      MessageType = 12
 	MsgName           MessageType = 13 // Corrected: Name is 0x000D
+	MsgContinuation   MessageType = 16 // Object header continuation (0x0010)
 	MsgSymbolTable    MessageType = 17
 	MsgLinkMessage    MessageType = 6
 )
