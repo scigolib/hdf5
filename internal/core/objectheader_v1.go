@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/scigolib/hdf5/internal/utils"
@@ -22,6 +23,11 @@ import (
 // - Bytes 4: Message flags (uint8).
 // - Bytes 5-7: Reserved (3 bytes).
 // - Then message data.
+//
+// Continuation messages (type 0x0010) contain:
+// - Address of continuation block (OffsetSize bytes).
+// - Size of continuation block (LengthSize bytes).
+// Reference: H5Ocont.c from HDF5 C library.
 func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderMessage, string, error) {
 	// Read the header prefix (16 bytes).
 	headerBuf := utils.GetBuffer(16)
@@ -50,12 +56,160 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 	var messages []*HeaderMessage
 	var name string
 
-	for i := uint16(0); i < numMessages && current < end; i++ {
+	// Parse messages in the main header block
+	blockMessages, blockName, err := parseV1MessagesInBlock(r, current, end, numMessages, sb)
+	if err != nil {
+		return nil, "", err
+	}
+	messages = append(messages, blockMessages...)
+	if blockName != "" {
+		name = blockName
+	}
+
+	// Process continuation messages
+	// We need to iterate through messages and follow any continuations
+	continuations := findContinuations(messages, sb)
+	for len(continuations) > 0 {
+		cont := continuations[0]
+		continuations = continuations[1:]
+
+		// Parse continuation block
+		contMessages, contName, err := parseV1ContinuationBlock(r, cont.Address, cont.Size, sb)
+		if err != nil {
+			return nil, "", utils.WrapError("continuation block parse failed", err)
+		}
+
+		// Add messages from continuation
+		messages = append(messages, contMessages...)
+		if contName != "" && name == "" {
+			name = contName
+		}
+
+		// Check if continuation block has more continuations
+		newConts := findContinuations(contMessages, sb)
+		continuations = append(continuations, newConts...)
+	}
+
+	return messages, name, nil
+}
+
+// continuationInfo holds information about a continuation block.
+type continuationInfo struct {
+	Address uint64
+	Size    uint64
+}
+
+// findContinuations extracts continuation block information from messages.
+func findContinuations(messages []*HeaderMessage, sb *Superblock) []continuationInfo {
+	var continuations []continuationInfo
+	for _, msg := range messages {
+		if msg.Type == MsgContinuation && len(msg.Data) > 0 {
+			// Parse continuation message data
+			// Format: Address (OffsetSize bytes) + Size (LengthSize bytes)
+			// Reference: H5Ocont.c decode function
+			cont, err := parseContinuationMessage(msg.Data, sb)
+			if err != nil {
+				// Skip invalid continuation messages
+				continue
+			}
+			continuations = append(continuations, cont)
+		}
+	}
+	return continuations
+}
+
+// parseContinuationMessage extracts address and size from continuation message data.
+// Continuation message format (from H5Ocont.c):
+// - Address of continuation block (OffsetSize bytes from superblock).
+// - Size of continuation block (LengthSize bytes from superblock).
+func parseContinuationMessage(data []byte, sb *Superblock) (continuationInfo, error) {
+	minSize := int(sb.OffsetSize + sb.LengthSize)
+	if len(data) < minSize {
+		return continuationInfo{}, fmt.Errorf("continuation message too small: need %d bytes, got %d", minSize, len(data))
+	}
+
+	offset := 0
+
+	// Decode address (OffsetSize bytes)
+	var address uint64
+	switch sb.OffsetSize {
+	case 1:
+		address = uint64(data[offset])
+	case 2:
+		address = uint64(sb.Endianness.Uint16(data[offset : offset+2]))
+	case 4:
+		address = uint64(sb.Endianness.Uint32(data[offset : offset+4]))
+	case 8:
+		address = sb.Endianness.Uint64(data[offset : offset+8])
+	default:
+		return continuationInfo{}, fmt.Errorf("invalid offset size: %d", sb.OffsetSize)
+	}
+	offset += int(sb.OffsetSize)
+
+	// Decode size (LengthSize bytes)
+	var size uint64
+	switch sb.LengthSize {
+	case 1:
+		size = uint64(data[offset])
+	case 2:
+		size = uint64(sb.Endianness.Uint16(data[offset : offset+2]))
+	case 4:
+		size = uint64(sb.Endianness.Uint32(data[offset : offset+4]))
+	case 8:
+		size = sb.Endianness.Uint64(data[offset : offset+8])
+	default:
+		return continuationInfo{}, fmt.Errorf("invalid length size: %d", sb.LengthSize)
+	}
+
+	// Validate continuation
+	if size == 0 {
+		return continuationInfo{}, fmt.Errorf("invalid continuation block size: 0")
+	}
+
+	return continuationInfo{
+		Address: address,
+		Size:    size,
+	}, nil
+}
+
+// parseV1ContinuationBlock parses messages from a continuation block.
+func parseV1ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, sb *Superblock) ([]*HeaderMessage, string, error) {
+	// V1 continuation blocks don't have a header, just messages
+	// They continue with the same message format as the main header
+	current := blockAddr
+	end := blockAddr + blockSize
+
+	// Count messages in this block by scanning
+	// V1 continuations don't have a message count, so we parse until end of block
+	return parseV1MessagesInBlock(r, current, end, 0xFFFF, sb) // Large number to parse all messages
+}
+
+// parseV1MessagesInBlock parses messages from a block (header or continuation).
+func parseV1MessagesInBlock(r io.ReaderAt, start, end uint64, maxMessages uint16, sb *Superblock) ([]*HeaderMessage, string, error) {
+	var messages []*HeaderMessage
+	var name string
+	current := start
+	messageCount := uint16(0)
+
+	for current < end {
+		// Check if we've read enough messages
+		if messageCount >= maxMessages {
+			break
+		}
+
+		// Check if we have enough space for message header
+		if current+8 > end {
+			break
+		}
+
 		// Read message header (8 bytes).
 		msgHeaderBuf := utils.GetBuffer(8)
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(msgHeaderBuf, int64(current)); err != nil {
 			utils.ReleaseBuffer(msgHeaderBuf)
+			if err == io.EOF {
+				break // End of block reached
+			}
 			return nil, "", utils.WrapError("message header read failed", err)
 		}
 
@@ -66,8 +220,14 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 		utils.ReleaseBuffer(msgHeaderBuf)
 
 		if msgSize == 0 {
+			// Zero-size message, skip it but don't count it
 			current += 8
 			continue
+		}
+
+		// Check if we have enough space for message data
+		if current+8+uint64(msgSize) > end {
+			break
 		}
 
 		// Read message data.
@@ -75,6 +235,9 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(data, int64(current+8)); err != nil {
 			utils.ReleaseBuffer(data)
+			if err == io.EOF {
+				break
+			}
 			return nil, "", utils.WrapError("message data read failed", err)
 		}
 
@@ -104,6 +267,9 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 			msgTotalSize += 8 - (msgTotalSize % 8)
 		}
 		current += msgTotalSize
+
+		// Count this as a parsed message
+		messageCount++
 	}
 
 	return messages, name, nil

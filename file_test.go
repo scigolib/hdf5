@@ -176,6 +176,33 @@ func TestDatasetObject(t *testing.T) {
 	require.True(t, foundDataset, "file should contain at least one dataset")
 }
 
+// TestGroupAttributes tests reading attributes from groups.
+func TestGroupAttributes(t *testing.T) {
+	file, err := Open("testdata/with_groups.h5")
+	require.NoError(t, err)
+	defer file.Close()
+
+	var rootGroup *Group
+	file.Walk(func(path string, obj Object) {
+		if path == "/" {
+			if g, ok := obj.(*Group); ok {
+				rootGroup = g
+			}
+		}
+	})
+
+	require.NotNil(t, rootGroup, "should have root group")
+
+	// Try to read attributes - should not error even if empty.
+	attrs, err := rootGroup.Attributes()
+	require.NoError(t, err, "reading group attributes should not error")
+	require.NotNil(t, attrs, "attributes should not be nil (may be empty slice)")
+
+	// If group has address stored, it should be non-zero for modern groups.
+	// Traditional SNOD groups may have zero address and return empty attributes.
+	// Both cases are valid.
+}
+
 // BenchmarkOpenFile benchmarks file opening performance.
 func BenchmarkOpenFile(b *testing.B) {
 	for i := 0; i < b.N; i++ {

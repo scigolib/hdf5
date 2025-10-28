@@ -51,6 +51,8 @@ const (
 	MsgFilterPipeline MessageType = 11 // Filter Pipeline (compression, etc)
 	MsgAttribute      MessageType = 12
 	MsgName           MessageType = 13 // Corrected: Name is 0x000D
+	MsgAttributeInfo  MessageType = 15 // Attribute Info (0x000F) - for dense attribute storage
+	MsgContinuation   MessageType = 16 // Object header continuation (0x0010)
 	MsgSymbolTable    MessageType = 17
 	MsgLinkMessage    MessageType = 6
 )
@@ -117,8 +119,8 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 
 	header.Type = determineObjectType(header.Messages)
 
-	// Parse attributes from messages
-	attributes, err := ParseAttributesFromMessages(header.Messages, sb.Endianness)
+	// Parse attributes from messages (both compact and dense)
+	attributes, err := ParseAttributesFromMessages(r, header.Messages, sb)
 	//nolint:revive // empty-block: Error intentionally ignored, attributes are optional
 	if err != nil {
 		// Don't fail the whole header read if attributes fail

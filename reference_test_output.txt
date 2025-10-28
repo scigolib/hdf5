@@ -1,0 +1,9 @@
+# github.com/scigolib/hdf5_test
+# [github.com/scigolib/hdf5_test]
+.\reference_test.go:57:9: non-constant format string in call to (*testing.common).Logf
+.\reference_test.go:59:9: non-constant format string in call to (*testing.common).Logf
+.\reference_test.go:65:10: non-constant format string in call to (*testing.common).Logf
+.\reference_test.go:67:10: non-constant format string in call to (*testing.common).Logf
+.\reference_test.go:82:10: non-constant format string in call to (*testing.common).Logf
+.\reference_test.go:84:10: non-constant format string in call to (*testing.common).Logf
+FAIL	github.com/scigolib/hdf5 [build failed]

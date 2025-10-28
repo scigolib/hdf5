@@ -21,8 +21,7 @@ vendor/
 .goco
 .claude
 
-# Development scripts and docs (not for release)
-/scripts/
+# Private development docs (not for release)
 /docs/dev/
 
 # Go workspace file
