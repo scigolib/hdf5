@@ -74,6 +74,124 @@ feature/*   - Feature branches
 
 ---
 
+## 🔧 Pre-Release Validation Script
+
+### Location
+`scripts/pre-release-check.sh`
+
+### Purpose
+Runs **all quality checks locally** before creating a release, matching CI requirements exactly.
+
+### When to Use
+
+#### 1. Before Every Commit (Recommended)
+```bash
+# Quick validation before committing
+bash scripts/pre-release-check.sh
+
+# If script passes (green/yellow), safe to commit:
+git add .
+git commit -m "..."
+git push
+```
+
+#### 2. Before Creating Release Branch (Mandatory)
+```bash
+# MUST pass before starting release process
+bash scripts/pre-release-check.sh
+
+# Only proceed if output shows:
+# ✅ "All checks passed! Ready for release."
+```
+
+#### 3. Before Merging to Main (Mandatory)
+```bash
+# Final validation on release branch
+git checkout release/v0.10.0-beta
+bash scripts/pre-release-check.sh
+
+# If errors found, fix them before merging to main
+```
+
+#### 4. After Major Changes (Recommended)
+- After refactoring
+- After dependency updates
+- After documentation updates
+- After fixing bugs
+
+### What the Script Validates
+
+1. **Go version**: 1.25+ required
+2. **Code formatting**: `gofmt -l .` must be clean
+3. **Static analysis**: `go vet ./...` must pass
+4. **Build**: `go build ./...` must succeed
+5. **go.mod**: `go mod verify` and `go mod tidy` check
+6. **Tests**: All tests passing (with race detector if GCC available)
+7. **Coverage**: >70% for internal/ packages
+8. **Reference tests**: 57 HDF5 C library test files (100% pass required)
+9. **golangci-lint**: 0 issues required (34+ linters)
+10. **TODO/FIXME**: 0 comments required (production standard)
+11. **Documentation**: All critical files present
+12. **Sprint completion**: Validates tasks are complete
+
+### Exit Codes
+
+- **0 (green)**: All checks passed, ready for release
+- **0 (yellow)**: Checks passed with warnings (review recommended)
+- **1 (red)**: Checks failed with errors (must fix before release)
+
+### Example Output
+
+```bash
+$ bash scripts/pre-release-check.sh
+
+========================================
+  HDF5 Go Library - Pre-Release Check
+========================================
+
+[INFO] Checking Go version...
+[SUCCESS] Go version: go1.25.1
+
+[INFO] Checking code formatting (gofmt -l .)...
+[SUCCESS] All files are properly formatted
+
+[INFO] Running golangci-lint...
+[SUCCESS] golangci-lint passed with 0 issues
+
+...
+
+========================================
+  Summary
+========================================
+
+[SUCCESS] All checks passed! Ready for release.
+
+Next steps (from RELEASE_GUIDE.md):
+  1. Create release branch: git checkout -b release/v0.10.0-beta
+  2. Update CHANGELOG.md with version details
+  ...
+```
+
+### Warnings vs Errors
+
+**Warnings (yellow)** - Non-blocking, but review recommended:
+- Uncommitted changes detected
+- GCC not found (Windows) - race detector unavailable
+- Test coverage slightly below target
+- Some TODO comments (if < 5)
+
+**Errors (red)** - Blocking, must fix:
+- Code not formatted
+- go vet failures
+- Build failures
+- Test failures
+- golangci-lint issues
+- Coverage significantly below 70%
+- TODO comments (if requirement is 0)
+- Missing documentation files
+
+---
+
 ## 📋 Version Naming
 
 ### Semantic Versioning
