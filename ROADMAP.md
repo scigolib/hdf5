@@ -5,7 +5,8 @@
 
 **Last Updated**: 2025-10-17
 **Current Version**: v0.9.0-beta
-**Target**: v2.0 (Full read/write support)
+**Strategy**: Continue beta (v0.x.x) until feature-complete
+**Target**: v1.0.0-rc → v1.0.0 (Stable API, full read/write)
 
 ---
 
@@ -37,24 +38,27 @@ Build a **production-ready, pure Go HDF5 library** with full read/write capabili
 
 ## 📅 Release Timeline
 
-### **v1.0 - Production Read-Only** (1-2 months)
-**Status**: 🟡 In Progress (98% complete)
-**Goal**: Stable, production-ready read support
+### **v0.10.0-beta - Complete Read Support** (2-4 weeks)
+**Status**: 🟡 Next milestone
+**Goal**: Feature-complete read-only library
 
 **Remaining Work**:
-- ✅ Full attribute reading (reference: `H5A*.c` files)
-- ✅ Object header v1 support (reference: `H5Oold.c`)
-- ✅ Bug fixes and edge cases
-- ✅ Documentation completion
+- [ ] Full attribute reading (reference: `H5A*.c` files)
+- [ ] Object header v1 support (reference: `H5Oold.c`)
+- [ ] Resolve 4 TODO items
+- [ ] Test coverage >70% for all packages
+- [ ] Extensive testing with real-world files
+- [ ] Documentation completion
 
-**Validation Strategy**:
-- Test with C library-generated files
-- Compare read results with h5dump
-- Use C library test suite files
+**Deliverables**:
+- 100% read support for HDF5 format
+- All datatypes, layouts, compression
+- Production-quality code
+- Comprehensive tests
 
 ---
 
-### **v2.0-alpha - Basic Write Support** (2-3 months after v1.0)
+### **v0.11.0-beta - Basic Write Support** (2-3 months)
 **Status**: 📋 Planned
 **Goal**: MVP write functionality
 
@@ -120,9 +124,9 @@ Implementation:
 
 ---
 
-### **v2.0-beta - Full Write Support** (3-4 months after v2.0-alpha)
+### **v0.12.0-beta - Full Write Support** (3-4 months)
 **Status**: 📋 Planned
-**Goal**: Production-ready write with all features
+**Goal**: Complete write implementation
 
 **Phase 3: Advanced Features** (6-8 weeks)
 
@@ -189,9 +193,23 @@ Implementation:
 
 ---
 
-### **v2.0 - Production Release** (1-2 months after beta)
+### **v1.0.0-rc - Release Candidate** (After all features)
 **Status**: 🔮 Future
-**Goal**: Battle-tested, production-ready write support
+**Goal**: API stabilization, final testing
+
+**Scope**:
+- All features implemented (read + write)
+- API review and finalization
+- Breaking changes allowed (last chance!)
+- Extensive testing
+- Performance optimization
+- Documentation review
+
+---
+
+### **v1.0.0 - Production Release** (After RC testing)
+**Status**: 🎯 Target
+**Goal**: Stable API, production-ready library
 
 **Stabilization**:
 - Bug fixes from beta testing
@@ -311,38 +329,43 @@ diff expected.txt actual.txt
 | Basic Write | 6-8 weeks | **4-6 weeks** | Clear patterns to follow |
 | Advanced Features | 6-8 weeks | **6-8 weeks** | Complex but documented |
 | Testing & Safety | 4-6 weeks | **4-6 weeks** | Can reuse C test cases |
-| **Total v2.0** | **20-28 weeks** | **17-24 weeks** | **~4-5 months** |
+| **Total Write** | **20-28 weeks** | **17-24 weeks** | **~4-5 months** |
 
-**MVP (v2.0-alpha)**: 7-10 weeks → **2-2.5 months**
-**Full (v2.0-beta)**: 17-24 weeks → **4-5 months**
-**Production (v2.0)**: 20-28 weeks → **5-6 months**
+**Timeline Summary**:
+- **v0.10.0-beta** (Complete Read): 2-4 weeks
+- **v0.11.0-beta** (Basic Write MVP): 2-3 months
+- **v0.12.0-beta** (Full Write): 4-5 months total
+- **v1.0.0** (Stable): 6+ months total
 
 ---
 
 ## 🎯 Current Priorities
 
-### **Immediate (Next 2 Weeks)**
-1. Complete v1.0 read-only features
-2. Create detailed write support design doc
-3. Set up C library build for reference/testing
-
-### **Short Term (v1.0 Release)**
+### **Immediate (Next 2 Weeks) - v0.10.0-beta**
 1. Full attribute reading
 2. Object header v1 support
-3. Extensive testing against C-generated files
-4. Release v1.0
+3. Resolve 4 TODO items
+4. Test coverage >70% (all packages)
 
-### **Medium Term (v2.0-alpha)**
-1. Start write support MVP
-2. Port basic file creation from C
-3. Implement contiguous dataset writing
-4. Basic group creation
+### **Short Term (1-2 Months) - v0.10.0-beta Release**
+1. Extensive testing with real-world files
+2. API review and cleanup
+3. Documentation completion
+4. Performance benchmarking
+5. Release v0.10.0-beta (feature-complete read)
 
-### **Long Term (v2.0)**
-1. Full write support
-2. All compression algorithms
-3. Production deployment
-4. Community adoption
+### **Medium Term (3-5 Months) - v0.11.0-beta**
+1. Design write support architecture
+2. Set up C library for reference
+3. Port basic file creation from C
+4. Implement contiguous dataset writing
+5. Basic group creation
+
+### **Long Term (6+ Months) - v1.0.0**
+1. Complete write support (v0.12.0-beta)
+2. API stabilization (v1.0.0-rc)
+3. Production validation
+4. Release v1.0.0 stable
 
 ---
 
@@ -384,19 +407,20 @@ diff expected.txt actual.txt
 
 ## ✅ Success Criteria
 
-**v1.0 (Read-Only)**:
+**v0.10.0-beta (Complete Read)**:
 - ✅ Opens all C-generated HDF5 files
 - ✅ Reads all standard datatypes correctly
 - ✅ Handles all layout types (compact/contiguous/chunked)
 - ✅ Supports GZIP compression
 - ✅ Full attribute reading
 
-**v2.0 (Read/Write)**:
+**v1.0.0 (Stable Read/Write)**:
 - ✅ Creates files readable by C library (100% compatibility)
 - ✅ h5dump works on all Go-generated files
 - ✅ Round-trip: Go write → C read → Go read → identical data
 - ✅ Performance within 2x of C library
 - ✅ Thread-safe concurrent access
+- ✅ Stable API, no breaking changes
 
 ---
 
