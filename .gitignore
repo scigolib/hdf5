@@ -17,12 +17,11 @@ coverage.html
 vendor/
 
 # AI agents
-.claude
 .gode
 .goco
-
-# Development scripts (not for release)
-/scripts/
+.claude/agents/
+.claude/settings.local.json
+.claude/*.local.json
 
 # Go workspace file
 go.work
