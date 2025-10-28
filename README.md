@@ -79,21 +79,34 @@ func main() {
 
 ## 📚 Documentation
 
+### Getting Started
+- **[Installation Guide](docs/guides/INSTALLATION.md)** - Install and verify the library
 - **[Quick Start Guide](docs/guides/QUICKSTART.md)** - Get started in 5 minutes
-- **[Architecture Overview](docs/architecture/OVERVIEW.md)** - How it works
-- **[Examples](examples/)** - Working code examples
+- **[Reading Data](docs/guides/READING_DATA.md)** - Comprehensive guide to reading datasets and attributes
+
+### Reference
+- **[Datatypes Guide](docs/guides/DATATYPES.md)** - HDF5 to Go type mapping
+- **[Troubleshooting](docs/guides/TROUBLESHOOTING.md)** - Common issues and solutions
+- **[FAQ](docs/guides/FAQ.md)** - Frequently asked questions
 - **[API Reference](https://pkg.go.dev/github.com/scigolib/hdf5)** - GoDoc documentation
+
+### Advanced
+- **[Architecture Overview](docs/architecture/OVERVIEW.md)** - How it works internally
+- **[Examples](examples/)** - Working code examples (5 examples with detailed documentation)
 
 ---
 
 ## 🎯 Current Status
+
+**Version**: v0.10.0-beta (83% complete - 5/6 tasks) 🚀
 
 **Production Readiness: ~98% for reading common HDF5 scientific datasets!** 🎉
 
 ### ✅ Fully Implemented
 - **File Structure**:
   - Superblock parsing (v0, v2, v3)
-  - Object headers (v1 + v2 with continuations) ✨ NEW
+  - Object headers v1 (legacy HDF5 < 1.8) with continuations ✨ NEW
+  - Object headers v2 (modern HDF5 >= 1.8) with continuations
   - Groups (traditional symbol tables + modern object headers)
   - B-trees (leaf + non-leaf nodes for large files)
   - Local heaps (string storage)
@@ -101,10 +114,11 @@ func main() {
   - Fractal heap (direct blocks for dense attributes) ✨ NEW
 
 - **Dataset Reading**:
-  - Compact layout
-  - Contiguous layout
+  - Compact layout (data in object header)
+  - Contiguous layout (sequential storage)
   - Chunked layout with B-tree indexing
   - GZIP/Deflate compression
+  - Filter pipeline for compressed data ✨ NEW
 
 - **Datatypes**:
   - Fixed-point (int32, int64)
@@ -117,8 +131,15 @@ func main() {
   - Compact attributes (in object header) ✨ NEW
   - Dense attributes (fractal heap foundation) ✨ NEW
   - Attribute reading for groups and datasets ✨ NEW
+  - Full attribute API (Group.Attributes(), Dataset.Attributes()) ✨ NEW
 
 - **Navigation**: Full file tree traversal via Walk()
+
+- **Code Quality**:
+  - Test coverage: 76.3% (target: >70%) ✅
+  - Lint issues: 0 (34+ linters) ✅
+  - TODO items: 0 (all resolved) ✅
+  - 57 reference HDF5 test files ✅
 
 ### ⚠️ Partial Support
 - **Dense Attributes**: Infrastructure ready, B-tree v2 iteration deferred to v0.11.0 (<10% of files affected)
@@ -127,6 +148,7 @@ func main() {
 - Other compression (SZIP, LZF, BZIP2) - GZIP covers 95%+ of files
 - Advanced datatypes (arrays, enums, references, opaque, time)
 - Virtual datasets / external files
+- Soft links (deferred to v0.11.0)
 - Write support (planned for v0.11.0+)
 
 ---
@@ -237,7 +259,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Status**: Beta - ~98% production-ready for reading
-**Version**: 0.9.0-beta → 0.10.0-beta (in development)
+**Version**: 0.10.0-beta (83% complete - 5/6 tasks)
 **Last Updated**: 2025-10-29
 
 ---
