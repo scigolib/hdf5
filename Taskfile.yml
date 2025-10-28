@@ -1,0 +1,349 @@
+# Taskfile for HDF5 Go Library
+# Install Task: https://taskfile.dev/installation/
+# Usage: task <task-name>
+# Example: task test, task lint, task pre-release
+
+version: '3'
+
+vars:
+  # Coverage threshold (warn if below)
+  COVERAGE_THRESHOLD: 70
+
+  # Linter timeout
+  LINT_TIMEOUT: 5m
+
+tasks:
+  # Default task (runs when you type just "task")
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  # ========================================
+  # Testing
+  # ========================================
+
+  test:
+    desc: Run all tests with coverage
+    cmds:
+      - go test -v -cover ./...
+
+  test:race:
+    desc: Run all tests with race detector
+    cmds:
+      - go test -v -race -cover ./...
+
+  test:coverage:
+    desc: Run tests and generate HTML coverage report
+    cmds:
+      - go test -v -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+      - cmd: echo "Coverage report generated at coverage.html"
+        silent: true
+
+  test:core:
+    desc: Run internal/core package tests
+    cmds:
+      - go test -v -cover ./internal/core/...
+
+  test:structures:
+    desc: Run internal/structures package tests
+    cmds:
+      - go test -v -cover ./internal/structures/...
+
+  test:utils:
+    desc: Run internal/utils package tests
+    cmds:
+      - go test -v -cover ./internal/utils/...
+
+  test:watch:
+    desc: Run tests in watch mode (requires entr)
+    cmds:
+      - |
+        find . -name "*.go" -not -path "./testdata/*" | entr -c go test -v ./...
+
+  # ========================================
+  # Linting & Code Quality
+  # ========================================
+
+  lint:
+    desc: Run golangci-lint on all packages
+    cmds:
+      - golangci-lint run --config .golangci.yml --timeout={{.LINT_TIMEOUT}} ./...
+
+  lint:fix:
+    desc: Run golangci-lint and auto-fix issues
+    cmds:
+      - golangci-lint run --config .golangci.yml --fix ./...
+
+  fmt:
+    desc: Format all Go code with gofmt
+    cmds:
+      - gofmt -w -s .
+
+  vet:
+    desc: Run go vet on all packages
+    cmds:
+      - go vet ./...
+
+  check:
+    desc: Run all quality checks (fmt, vet, lint, test)
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: lint
+      - task: test
+
+  # ========================================
+  # Building
+  # ========================================
+
+  build:
+    desc: Build all packages
+    cmds:
+      - go build ./...
+
+  build:cmd:
+    desc: Build dump_hdf5 CLI utility
+    cmds:
+      - go build -o bin/dump_hdf5{{if eq OS "windows"}}.exe{{end}} ./cmd/dump_hdf5
+      - cmd: echo "Built bin/dump_hdf5{{if eq OS "windows"}}.exe{{end}}"
+        silent: true
+
+  build:all:
+    desc: Build everything (packages + CLI)
+    cmds:
+      - task: build
+      - task: build:cmd
+
+  # ========================================
+  # Dependencies
+  # ========================================
+
+  deps:
+    desc: Download and tidy all dependencies
+    cmds:
+      - go mod download
+      - go mod tidy
+
+  deps:update:
+    desc: Update all dependencies to latest
+    cmds:
+      - go get -u ./...
+      - go mod tidy
+
+  deps:verify:
+    desc: Verify dependencies haven't been modified
+    cmds:
+      - go mod verify
+
+  # ========================================
+  # Benchmarking
+  # ========================================
+
+  bench:
+    desc: Run all benchmarks
+    cmds:
+      - go test -bench=. -benchmem ./...
+
+  bench:compare:
+    desc: Run benchmarks and save for comparison
+    cmds:
+      - go test -bench=. -benchmem ./... | tee bench-new.txt
+      - cmd: echo "Compare with 'benchstat bench-old.txt bench-new.txt'"
+        silent: true
+
+  # ========================================
+  # Cleaning
+  # ========================================
+
+  clean:
+    desc: Remove build artifacts and coverage files
+    cmds:
+      - cmd: echo "Cleaning build artifacts..."
+        silent: true
+      - cmd: rm -f coverage.out coverage.html 2>/dev/null || true
+        platforms: [linux, darwin]
+      - cmd: del /Q coverage.out coverage.html 2>nul || exit /b 0
+        platforms: [windows]
+      - cmd: rm -f **/*.test 2>/dev/null || true
+        platforms: [linux, darwin]
+      - cmd: rm -rf bin/ 2>/dev/null || true
+        platforms: [linux, darwin]
+      - cmd: if exist bin rmdir /S /Q bin 2>nul || exit /b 0
+        platforms: [windows]
+      - cmd: echo "Clean complete!"
+        silent: true
+
+  # ========================================
+  # Development Helpers
+  # ========================================
+
+  dev:
+    desc: Run development checks before commit
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: lint:fix
+      - task: test
+      - cmd: echo "✅ All checks passed! Ready to commit."
+        silent: true
+
+  ci:
+    desc: Run CI checks (same as GitHub Actions)
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: lint
+      - task: test:race
+      - task: build:all
+
+  pre-commit:
+    desc: Pre-commit checks (format, lint, test)
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: test
+
+  pre-release:
+    desc: Run comprehensive pre-release validation
+    cmds:
+      - bash scripts/pre-release-check.sh
+
+  # ========================================
+  # Examples
+  # ========================================
+
+  run:basic:
+    desc: Run basic example
+    cmds:
+      - go run ./examples/01-basic/main.go
+
+  run:list:
+    desc: Run list-objects example
+    cmds:
+      - go run ./examples/02-list-objects/main.go
+
+  run:read:
+    desc: Run read-dataset example
+    cmds:
+      - go run ./examples/03-read-dataset/main.go
+
+  run:vlen:
+    desc: Run vlen-strings example
+    cmds:
+      - go run ./examples/04-vlen-strings/main.go
+
+  run:comprehensive:
+    desc: Run comprehensive example
+    cmds:
+      - go run ./examples/05-comprehensive/main.go
+
+  run:dump:
+    desc: Run dump_hdf5 on test file
+    cmds:
+      - task: build:cmd
+      - ./bin/dump_hdf5{{if eq OS "windows"}}.exe{{end}} testdata/v2.h5
+
+  # ========================================
+  # Git-Flow Helpers
+  # ========================================
+
+  flow:feature:
+    desc: Create new feature branch (use: task flow:feature -- my-feature)
+    cmds:
+      - git checkout develop
+      - git pull origin develop
+      - git checkout -b feature/{{.CLI_ARGS}}
+      - cmd: echo "✅ Created feature/{{.CLI_ARGS}} from develop"
+        silent: true
+
+  flow:bugfix:
+    desc: Create new bugfix branch (use: task flow:bugfix -- issue-123)
+    cmds:
+      - git checkout develop
+      - git pull origin develop
+      - git checkout -b bugfix/{{.CLI_ARGS}}
+      - cmd: echo "✅ Created bugfix/{{.CLI_ARGS}} from develop"
+        silent: true
+
+  flow:hotfix:
+    desc: Create new hotfix branch (use: task flow:hotfix -- critical-bug)
+    cmds:
+      - git checkout main
+      - git pull origin main
+      - git checkout -b hotfix/{{.CLI_ARGS}}
+      - cmd: echo "✅ Created hotfix/{{.CLI_ARGS}} from main"
+        silent: true
+
+  flow:merge:
+    desc: Merge current branch to develop (with pre-release check)
+    cmds:
+      - task: pre-release
+      - git checkout develop
+      - git merge --no-ff {{.BRANCH}}
+      - cmd: echo "✅ Merged to develop. Push with: git push origin develop"
+        silent: true
+    vars:
+      BRANCH:
+        sh: git rev-parse --abbrev-ref HEAD
+
+  # ========================================
+  # Documentation
+  # ========================================
+
+  docs:serve:
+    desc: Serve documentation locally
+    cmds:
+      - godoc -http=:6060
+      - cmd: echo "Documentation at http://localhost:6060/pkg/github.com/scigolib/hdf5/"
+        silent: true
+
+  docs:check:
+    desc: Check if all documentation files are present
+    cmds:
+      - cmd: |
+          if [ -f README.md ] && [ -f CHANGELOG.md ] && [ -f ROADMAP.md ] && [ -f CONTRIBUTING.md ] && [ -f SECURITY.md ] && [ -f CODE_OF_CONDUCT.md ]; then
+            echo "✅ All documentation files present"
+          else
+            echo "❌ Missing documentation files"
+            exit 1
+          fi
+        platforms: [linux, darwin]
+      - cmd: echo "Documentation check (manual verification needed on Windows)"
+        platforms: [windows]
+
+  # ========================================
+  # Release Management
+  # ========================================
+
+  release:check:
+    desc: Check if ready for release
+    cmds:
+      - task: pre-release
+      - go mod verify
+      - cmd: echo "✅ Ready for release!"
+        silent: true
+
+  release:tag:
+    desc: Create release tag (use: task release:tag -- v1.0.0)
+    cmds:
+      - git tag -a {{.CLI_ARGS}} -m "Release {{.CLI_ARGS}}"
+      - cmd: echo "✅ Created tag {{.CLI_ARGS}}. Push with: git push origin {{.CLI_ARGS}}"
+        silent: true
+
+  # ========================================
+  # Quick Commands
+  # ========================================
+
+  quick:
+    desc: Quick check before commit (fast)
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: test
+
+  full:
+    desc: Full validation (slow but thorough)
+    cmds:
+      - task: pre-release
