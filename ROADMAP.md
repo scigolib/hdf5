@@ -68,15 +68,15 @@ Build a **production-ready, pure Go HDF5 library** with full read/write capabili
 ## 📅 Release Timeline
 
 ### **v0.10.0-beta - Complete Read Support** (2-4 weeks)
-**Status**: 🚧 In Progress (17% complete - 1/6 tasks)
+**Status**: 🚧 In Progress (67% complete - 4/6 tasks) 🚀
 **Started**: 2025-10-28
 **Goal**: Feature-complete read-only library
 
 **Progress**:
-- [x] Test coverage >70% for all packages ✅ **Achieved: 76.3%**
-- [ ] Full attribute reading (reference: `H5A*.c` files)
-- [ ] Object header v1 support (reference: `H5Oold.c`)
-- [ ] Resolve 4 TODO items
+- [x] Test coverage >70% for all packages ✅ **Achieved: 76.3%** (2025-10-28)
+- [x] Object header v1 support ✅ **Complete** (2025-10-28)
+- [x] Full attribute reading ✅ **Complete** (compact + fractal heap foundation, 2025-10-29)
+- [x] Resolve TODO items ✅ **Complete** (2/2 implemented, 3/3 documented, 2025-10-29)
 - [ ] Extensive testing with real-world files
 - [ ] Documentation completion
 

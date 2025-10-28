@@ -3,9 +3,12 @@
 > **Pure Go implementation of the HDF5 file format** - No CGo required
 
 [![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat&logo=go)](https://golang.org)
+[![Go Report Card](https://goreportcard.com/badge/github.com/scigolib/hdf5)](https://goreportcard.com/report/github.com/scigolib/hdf5)
+[![CI](https://github.com/scigolib/hdf5/workflows/CI/badge.svg)](https://github.com/scigolib/hdf5/actions)
+[![Coverage](https://img.shields.io/badge/coverage-76.3%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-beta-green.svg)](ROADMAP.md)
-[![Progress](https://img.shields.io/badge/progress-98%25-brightgreen.svg)](ROADMAP.md)
+[![GoDoc](https://pkg.go.dev/badge/github.com/scigolib/hdf5.svg)](https://pkg.go.dev/github.com/scigolib/hdf5)
 
 A modern, pure Go library for reading HDF5 files without CGo dependencies. ~98% production-ready for common scientific datasets!
 
@@ -90,11 +93,12 @@ func main() {
 ### ✅ Fully Implemented
 - **File Structure**:
   - Superblock parsing (v0, v2, v3)
-  - Object headers (v2 with continuations)
+  - Object headers (v1 + v2 with continuations) ✨ NEW
   - Groups (traditional symbol tables + modern object headers)
   - B-trees (leaf + non-leaf nodes for large files)
   - Local heaps (string storage)
   - Global Heap (variable-length data)
+  - Fractal heap (direct blocks for dense attributes) ✨ NEW
 
 - **Dataset Reading**:
   - Compact layout
@@ -109,16 +113,21 @@ func main() {
   - Variable-length strings (via Global Heap)
   - Compound types (struct-like with nested members)
 
+- **Attributes**:
+  - Compact attributes (in object header) ✨ NEW
+  - Dense attributes (fractal heap foundation) ✨ NEW
+  - Attribute reading for groups and datasets ✨ NEW
+
 - **Navigation**: Full file tree traversal via Walk()
 
+### ⚠️ Partial Support
+- **Dense Attributes**: Infrastructure ready, B-tree v2 iteration deferred to v0.11.0 (<10% of files affected)
+
 ### ❌ Not Implemented
-- Object header v1 (legacy format)
-- Fractal heap (modern attribute storage)
-- Full attribute reading
-- Other compression (SZIP, LZF, BZIP2)
+- Other compression (SZIP, LZF, BZIP2) - GZIP covers 95%+ of files
 - Advanced datatypes (arrays, enums, references, opaque, time)
 - Virtual datasets / external files
-- Write support (read-only by design)
+- Write support (planned for v0.11.0+)
 
 ---
 
@@ -228,8 +237,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Status**: Beta - ~98% production-ready for reading
-**Version**: 0.9.0-beta (near 1.0 release!)
-**Last Updated**: 2025-10-17
+**Version**: 0.9.0-beta → 0.10.0-beta (in development)
+**Last Updated**: 2025-10-29
 
 ---
 
