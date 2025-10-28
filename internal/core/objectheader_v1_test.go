@@ -263,11 +263,11 @@ func TestParseV1Header_ChainedContinuations(t *testing.T) {
 
 	// Build continuation block 2 (contains Dataspace)
 	cont2Block := make([]byte, cont2Size)
-	binary.LittleEndian.PutUint16(cont2Block[0:2], 1)   // Type: Dataspace
-	binary.LittleEndian.PutUint16(cont2Block[2:4], 8)   // Size
-	cont2Block[4] = 0                                   // Flags
-	cont2Block[8] = 1                                   // Version
-	cont2Block[9] = 0                                   // Dimensionality
+	binary.LittleEndian.PutUint16(cont2Block[0:2], 1) // Type: Dataspace
+	binary.LittleEndian.PutUint16(cont2Block[2:4], 8) // Size
+	cont2Block[4] = 0                                 // Flags
+	cont2Block[8] = 1                                 // Version
+	cont2Block[9] = 0                                 // Dimensionality
 
 	// Combine all blocks into a single file
 	fullFile := make([]byte, cont2Addr+cont2Size)

@@ -152,7 +152,7 @@ func TestParseAttributeMessage_Basic(t *testing.T) {
 
 	// Dataspace message (scalar)
 	data[offset] = 1   // Version
-	data[offset+1] = 0 // Dimensionality: 0 = scalar
+	data[offset+1] = 0 // Dimensionality: scalar (0 value)
 	offset += 8
 
 	// Attribute value (int32: 42)

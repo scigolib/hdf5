@@ -57,10 +57,10 @@ func TestParseFractalHeapHeader(t *testing.T) {
 				binary.Write(buf, binary.LittleEndian, uint64(0xFFFFFFFFFFFFFFFF))
 
 				// Managed Objects Statistics (4 * 8 bytes)
-				binary.Write(buf, binary.LittleEndian, uint64(4096))  // Space size
-				binary.Write(buf, binary.LittleEndian, uint64(4096))  // Alloc size
-				binary.Write(buf, binary.LittleEndian, uint64(0))     // Iter offset
-				binary.Write(buf, binary.LittleEndian, uint64(5))     // Object count
+				binary.Write(buf, binary.LittleEndian, uint64(4096)) // Space size
+				binary.Write(buf, binary.LittleEndian, uint64(4096)) // Alloc size
+				binary.Write(buf, binary.LittleEndian, uint64(0))    // Iter offset
+				binary.Write(buf, binary.LittleEndian, uint64(5))    // Object count
 
 				// Huge Objects Statistics (2 * 8 bytes)
 				binary.Write(buf, binary.LittleEndian, uint64(0)) // Size
@@ -193,17 +193,17 @@ func TestParseHeapID(t *testing.T) {
 			wantErr:    false,
 		},
 		{
-			name:   "tiny object",
-			heapID: []byte{0x20, 0x01, 0x02, 0x03}, // Type Tiny + 3 bytes data
+			name:       "tiny object",
+			heapID:     []byte{0x20, 0x01, 0x02, 0x03}, // Type Tiny + 3 bytes data
 			wantType:   HeapIDTypeTiny,
 			wantLength: 3,
 			wantErr:    false,
 		},
 		{
-			name:        "huge object - not supported",
-			heapID:      []byte{0x10, 0x00, 0x00}, // Type Huge
-			wantType:    HeapIDTypeHuge,
-			wantErr:     false, // Parsing succeeds, but reading will fail
+			name:     "huge object - not supported",
+			heapID:   []byte{0x10, 0x00, 0x00}, // Type Huge
+			wantType: HeapIDTypeHuge,
+			wantErr:  false, // Parsing succeeds, but reading will fail
 		},
 		{
 			name:        "empty heap ID",
@@ -232,21 +232,24 @@ func TestParseHeapID(t *testing.T) {
 
 			id, err := heap.parseHeapID(tt.heapID)
 
+			// Check error cases
 			if tt.wantErr {
 				require.Error(t, err)
 				if tt.errContains != "" {
 					assert.Contains(t, err.Error(), tt.errContains)
 				}
-			} else {
-				require.NoError(t, err)
-				require.NotNil(t, id)
-				assert.Equal(t, tt.wantType, id.Type)
-				if tt.wantOffset > 0 {
-					assert.Equal(t, tt.wantOffset, id.Offset)
-				}
-				if tt.wantLength > 0 {
-					assert.Equal(t, tt.wantLength, id.Length)
-				}
+				return
+			}
+
+			// Check success cases
+			require.NoError(t, err)
+			require.NotNil(t, id)
+			assert.Equal(t, tt.wantType, id.Type)
+			if tt.wantOffset > 0 {
+				assert.Equal(t, tt.wantOffset, id.Offset)
+			}
+			if tt.wantLength > 0 {
+				assert.Equal(t, tt.wantLength, id.Length)
 			}
 		})
 	}

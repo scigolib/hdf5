@@ -19,102 +19,102 @@ import (
 // - Only direct blocks supported (no indirect blocks)
 // - No huge objects support (objects stored outside heap)
 // - No tiny objects optimization
-// - Objects must be < max_direct_size
+// - Objects must be < max_direct_size.
 type FractalHeap struct {
-	Header       *FractalHeapHeader
-	reader       io.ReaderAt
-	headerAddr   uint64
-	sizeofSize   uint8 // Size of size fields in file
-	sizeofAddr   uint8 // Size of address fields in file
-	endianness   binary.ByteOrder
+	Header     *FractalHeapHeader
+	reader     io.ReaderAt
+	headerAddr uint64
+	sizeofSize uint8 // Size of size fields in file
+	sizeofAddr uint8 // Size of address fields in file
+	endianness binary.ByteOrder
 }
 
 // FractalHeapHeader represents the fractal heap header structure.
 //
 // Reference: H5HFhdr.c, H5HFpkg.h (struct H5HF_hdr_t)
-// Format Spec: III.E.2 Disk Format: Level 0E - Fractal Heap
+// Format Spec: III.E.2 Disk Format: Level 0E - Fractal Heap.
 type FractalHeapHeader struct {
 	// Signature and version
 	Signature [4]byte // "FRHP" for fractal heap
 	Version   uint8   // Version number (currently 0)
 
 	// General heap information
-	HeapIDLen           uint16 // Length of heap IDs (in bytes)
-	IOFiltersLen        uint16 // Length of I/O filter information
-	Flags               uint8  // Status flags
+	HeapIDLen    uint16 // Length of heap IDs (in bytes)
+	IOFiltersLen uint16 // Length of I/O filter information
+	Flags        uint8  // Status flags
 
 	// Object size limits
-	MaxManagedObjSize   uint32 // Maximum size of managed objects
+	MaxManagedObjSize uint32 // Maximum size of managed objects
 
 	// Huge object support (not used in minimal implementation)
-	NextHugeObjID       uint64 // Next ID for huge objects
-	HugeObjBTreeAddr    uint64 // Address of v2 B-tree for huge objects
+	NextHugeObjID    uint64 // Next ID for huge objects
+	HugeObjBTreeAddr uint64 // Address of v2 B-tree for huge objects
 
 	// Free space management
-	FreeSpaceAmount     uint64 // Amount of managed free space in heap
+	FreeSpaceAmount      uint64 // Amount of managed free space in heap
 	FreeSpaceSectionAddr uint64 // Address of managed free space section
 
 	// Heap statistics
-	ManagedObjSpaceSize    uint64 // Total managed objects space
-	ManagedObjAllocSize    uint64 // Allocated managed objects space
-	ManagedObjIterOffset   uint64 // Offset of managed objects iterator
-	ManagedObjCount        uint64 // Number of managed objects
-	HugeObjSize            uint64 // Size of huge objects
-	HugeObjCount           uint64 // Number of huge objects
-	TinyObjSize            uint64 // Size of tiny objects
-	TinyObjCount           uint64 // Number of tiny objects
+	ManagedObjSpaceSize  uint64 // Total managed objects space
+	ManagedObjAllocSize  uint64 // Allocated managed objects space
+	ManagedObjIterOffset uint64 // Offset of managed objects iterator
+	ManagedObjCount      uint64 // Number of managed objects
+	HugeObjSize          uint64 // Size of huge objects
+	HugeObjCount         uint64 // Number of huge objects
+	TinyObjSize          uint64 // Size of tiny objects
+	TinyObjCount         uint64 // Number of tiny objects
 
 	// Doubling table parameters
-	TableWidth           uint16 // Width of doubling table
-	StartingBlockSize    uint64 // Starting block size
-	MaxDirectBlockSize   uint64 // Maximum direct block size
-	MaxHeapSize          uint16 // Log2 of maximum heap size
+	TableWidth            uint16 // Width of doubling table
+	StartingBlockSize     uint64 // Starting block size
+	MaxDirectBlockSize    uint64 // Maximum direct block size
+	MaxHeapSize           uint16 // Log2 of maximum heap size
 	StartRootIndirectRows uint16 // Starting rows in root indirect block
-	RootBlockAddr        uint64 // Address of root block
-	CurrentRowCount      uint16 // Current number of rows
+	RootBlockAddr         uint64 // Address of root block
+	CurrentRowCount       uint16 // Current number of rows
 
 	// Computed values (not stored on disk)
-	HeapOffsetSize       uint8  // Size of heap offsets (bytes)
-	HeapLengthSize       uint8  // Size of heap lengths (bytes)
-	ChecksumDirectBlocks bool   // Whether direct blocks are checksummed
+	HeapOffsetSize       uint8 // Size of heap offsets (bytes)
+	HeapLengthSize       uint8 // Size of heap lengths (bytes)
+	ChecksumDirectBlocks bool  // Whether direct blocks are checksummed
 }
 
 // HeapID represents a fractal heap object identifier.
 // Format (for managed objects):
 // - Byte 0: Version and type flags
 // - Bytes 1+: Offset (variable length)
-// - Bytes N+: Length (variable length)
+// - Bytes N+: Length (variable length).
 type HeapID struct {
-	Raw      []byte
-	Version  uint8
-	Type     HeapIDType
-	Offset   uint64 // Offset within heap
-	Length   uint64 // Length of object
+	Raw     []byte
+	Version uint8
+	Type    HeapIDType
+	Offset  uint64 // Offset within heap
+	Length  uint64 // Length of object
 }
 
 // HeapIDType identifies the type of heap object.
 type HeapIDType uint8
 
 const (
-	// HeapIDTypeManaged - Managed object stored in fractal heap blocks
+	// HeapIDTypeManaged - Managed object stored in fractal heap blocks.
 	HeapIDTypeManaged HeapIDType = 0x00
-	// HeapIDTypeHuge - Huge object stored in file directly
+	// HeapIDTypeHuge - Huge object stored in file directly.
 	HeapIDTypeHuge HeapIDType = 0x10
-	// HeapIDTypeTiny - Tiny object stored in heap ID directly
+	// HeapIDTypeTiny - Tiny object stored in heap ID directly.
 	HeapIDTypeTiny HeapIDType = 0x20
 )
 
 // DirectBlock represents a fractal heap direct block.
 // Direct blocks contain the actual object data.
 //
-// Reference: H5HFdblock.c, H5HFpkg.h (struct H5HF_direct_t)
+// Reference: H5HFdblock.c, H5HFpkg.h (struct H5HF_direct_t).
 type DirectBlock struct {
-	Signature    [4]byte // "FHDB" for fractal heap direct block
-	Version      uint8
-	HeapHeaderAddr uint64  // Address of heap header
-	BlockOffset  uint64  // Offset of block within heap
-	Checksum     uint32  // Optional checksum
-	Data         []byte  // Block data (after header)
+	Signature      [4]byte // "FHDB" for fractal heap direct block
+	Version        uint8
+	HeapHeaderAddr uint64 // Address of heap header
+	BlockOffset    uint64 // Offset of block within heap
+	Checksum       uint32 // Optional checksum
+	Data           []byte // Block data (after header)
 }
 
 // OpenFractalHeap opens and parses a fractal heap at the given address.
@@ -129,7 +129,7 @@ type DirectBlock struct {
 //
 // Returns:
 // - *FractalHeap: Parsed heap structure
-// - error: Any parsing errors
+// - error: Any parsing errors.
 func OpenFractalHeap(r io.ReaderAt, address uint64, sizeofSize, sizeofAddr uint8, endianness binary.ByteOrder) (*FractalHeap, error) {
 	if address == 0 || address == ^uint64(0) {
 		return nil, fmt.Errorf("invalid fractal heap address: 0x%X", address)
@@ -155,7 +155,9 @@ func OpenFractalHeap(r io.ReaderAt, address uint64, sizeofSize, sizeofAddr uint8
 // parseFractalHeapHeader reads and parses the fractal heap header.
 //
 // Reference: H5HFhdr.c - H5HF__hdr_deserialize()
-// Format: See HDF5 spec III.E.2 "Disk Format: Level 0E - Fractal Heap"
+// Format: See HDF5 spec III.E.2 "Disk Format: Level 0E - Fractal Heap".
+//
+//nolint:funlen // complex HDF5 format parsing, matches C library structure
 func parseFractalHeapHeader(r io.ReaderAt, address uint64, sizeofSize, sizeofAddr uint8, endianness binary.ByteOrder) (*FractalHeapHeader, error) {
 	// Calculate header size dynamically based on field sizes
 	// Fixed: 4 (sig) + 1 (ver) + 2 (heap ID len) + 2 (filter len) + 1 (flags) + 4 (max obj size) = 14
@@ -278,11 +280,12 @@ func parseFractalHeapHeader(r io.ReaderAt, address uint64, sizeofSize, sizeofAdd
 
 	// Current # of Rows in Root Indirect Block (2 bytes)
 	header.CurrentRowCount = endianness.Uint16(buf[offset : offset+2])
-	offset += 2
+	// Note: offset no longer used after this point
 
 	// Compute derived values
 	// Reference: H5HFhdr.c - H5HF__hdr_finish_init_phase1()
 	maxIndexBits := header.MaxHeapSize
+	//nolint:gosec // G115: safe conversion, maxIndexBits is uint16, result < 255
 	header.HeapOffsetSize = uint8((maxIndexBits + 7) / 8)
 
 	// Heap length size is minimum of max direct block offset size and encoded max managed size
@@ -311,7 +314,7 @@ func parseFractalHeapHeader(r io.ReaderAt, address uint64, sizeofSize, sizeofAdd
 //
 // Returns:
 // - []byte: Object data
-// - error: Any read errors or unsupported features
+// - error: Any read errors or unsupported features.
 func (fh *FractalHeap) ReadObject(heapID []byte) ([]byte, error) {
 	// Parse heap ID
 	id, err := fh.parseHeapID(heapID)
@@ -334,7 +337,7 @@ func (fh *FractalHeap) ReadObject(heapID []byte) ([]byte, error) {
 
 // parseHeapID parses a heap ID into its components.
 //
-// Reference: H5HFpkg.h - H5HF_MAN_ID_DECODE macro
+// Reference: H5HFpkg.h - H5HF_MAN_ID_DECODE macro.
 func (fh *FractalHeap) parseHeapID(heapID []byte) (*HeapID, error) {
 	if len(heapID) < 1 {
 		return nil, fmt.Errorf("heap ID too short: %d bytes", len(heapID))
@@ -346,7 +349,7 @@ func (fh *FractalHeap) parseHeapID(heapID []byte) (*HeapID, error) {
 
 	// First byte contains version and type
 	flags := heapID[0]
-	id.Version = (flags & 0xC0) >> 6 // Bits 6-7
+	id.Version = (flags & 0xC0) >> 6   // Bits 6-7
 	id.Type = HeapIDType(flags & 0x30) // Bits 4-5
 
 	if id.Version != 0 {
@@ -355,8 +358,10 @@ func (fh *FractalHeap) parseHeapID(heapID []byte) (*HeapID, error) {
 
 	offset := 1
 
-	// For managed objects, decode offset and length
-	if id.Type == HeapIDTypeManaged {
+	// Decode ID type-specific fields
+	switch id.Type {
+	case HeapIDTypeManaged:
+		// For managed objects, decode offset and length
 		offsetSize := int(fh.Header.HeapOffsetSize)
 		lengthSize := int(fh.Header.HeapLengthSize)
 
@@ -371,9 +376,11 @@ func (fh *FractalHeap) parseHeapID(heapID []byte) (*HeapID, error) {
 
 		// Decode length
 		id.Length = readUint(heapID[offset:offset+lengthSize], lengthSize, fh.endianness)
-	} else if id.Type == HeapIDTypeTiny {
+
+	case HeapIDTypeTiny:
 		// Tiny objects: length encoded in ID, data inline
 		// For now, return the rest of the ID as the object data
+		//nolint:gosec // G115: safe conversion, heap ID length bounded by format (max 64K)
 		id.Length = uint64(len(heapID) - 1)
 		id.Offset = 0
 	}
@@ -383,7 +390,7 @@ func (fh *FractalHeap) parseHeapID(heapID []byte) (*HeapID, error) {
 
 // readManagedObject reads a managed object from a direct block.
 //
-// Reference: H5HF.c - H5HF_read(), H5HFdblock.c
+// Reference: H5HF.c - H5HF_read(), H5HFdblock.c.
 func (fh *FractalHeap) readManagedObject(id *HeapID) ([]byte, error) {
 	// For minimal implementation, assume root block is a direct block
 	// (no indirect block support yet)
@@ -424,7 +431,7 @@ func (fh *FractalHeap) readManagedObject(id *HeapID) ([]byte, error) {
 
 // readTinyObject reads a tiny object (data stored inline in heap ID).
 //
-// Reference: H5HFtiny.c
+// Reference: H5HFtiny.c.
 func (fh *FractalHeap) readTinyObject(id *HeapID) ([]byte, error) {
 	// Tiny objects store data directly in the heap ID after the first byte
 	if len(id.Raw) < 2 {
@@ -440,20 +447,18 @@ func (fh *FractalHeap) readTinyObject(id *HeapID) ([]byte, error) {
 
 // readDirectBlock reads and parses a fractal heap direct block.
 //
-// Reference: H5HFdblock.c - H5HF__cache_dblock_deserialize()
+// Reference: H5HFdblock.c - H5HF__cache_dblock_deserialize().
 func (fh *FractalHeap) readDirectBlock(address, blockSize uint64) (*DirectBlock, error) {
 	if address == 0 || address == ^uint64(0) {
 		return nil, fmt.Errorf("invalid direct block address: 0x%X", address)
 	}
 
-	// Calculate header size
+	// Calculate header size (currently not used but kept for documentation)
 	// Signature (4) + Version (1) + Heap Header Address (sizeof_addr) + Block Offset (heap_off_size)
-	headerSize := 5 + int(fh.sizeofAddr) + int(fh.Header.HeapOffsetSize)
-	if fh.Header.ChecksumDirectBlocks {
-		headerSize += 4 // Add checksum
-	}
+	_ = 5 + int(fh.sizeofAddr) + int(fh.Header.HeapOffsetSize) // headerSize calculated but not used yet
 
 	// Read entire block (header + data)
+	//nolint:gosec // G115: safe conversion, blockSize from HDF5 header (max ~2GB per block)
 	totalSize := int(blockSize)
 	buf := make([]byte, totalSize)
 	//nolint:gosec // G115: uint64 to int64 conversion safe for file offsets
@@ -494,10 +499,8 @@ func (fh *FractalHeap) readDirectBlock(address, blockSize uint64) (*DirectBlock,
 	offset += int(fh.Header.HeapOffsetSize)
 
 	// Checksum (4 bytes) - if enabled, at end of block
-	if fh.Header.ChecksumDirectBlocks {
-		// Checksum is at the end of the block, skip for now
-		// dblock.Checksum = fh.endianness.Uint32(buf[totalSize-4 : totalSize])
-	}
+	// TODO: Validate checksum when enabled
+	// dblock.Checksum = fh.endianness.Uint32(buf[totalSize-4 : totalSize])
 
 	// Data (remaining bytes, excluding checksum if present)
 	dataEnd := totalSize
@@ -541,7 +544,7 @@ func readUint(data []byte, size int, endianness binary.ByteOrder) uint64 {
 }
 
 // computeOffsetSize computes the number of bytes needed to store a value.
-// Reference: H5HFpkg.h - H5HF_SIZEOF_OFFSET_LEN macro
+// Reference: H5HFpkg.h - H5HF_SIZEOF_OFFSET_LEN macro.
 func computeOffsetSize(value uint64) uint8 {
 	if value == 0 {
 		return 1
@@ -556,5 +559,6 @@ func computeOffsetSize(value uint64) uint8 {
 	}
 
 	// Round up to bytes
+	//nolint:gosec // G115: safe conversion, bits <= 64, result <= 8
 	return uint8((bits + 7) / 8)
 }
