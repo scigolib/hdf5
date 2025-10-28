@@ -344,7 +344,7 @@ python create_test.py
 - ✅ Chunked datasets
 
 ### Q: Can I write HDF5 files?
-**A**: Not yet in v0.9.0-beta. Write support is planned for v2.0 (4-5 months). See [ROADMAP.md](../../ROADMAP.md) for details.
+**A**: Not yet in v0.10.0-beta. Write support is planned for v0.11.0+ (2-3 months). See [ROADMAP.md](../../ROADMAP.md) for details.
 
 ### Q: Does it require CGo?
 **A**: **No!** This is a pure Go implementation with zero C dependencies. Works on all Go-supported platforms.
@@ -437,14 +437,27 @@ if err != nil {
 - Object header v2
 
 ⚠️ **Beta limitations**:
-- No write support yet (v2.0)
-- Limited attribute reading
-- Object header v1 not fully supported
-- Some advanced datatypes missing
+- No write support yet (v0.11.0+)
+- Dense attributes need B-tree v2 (<10% of files)
+- Some advanced datatypes missing (arrays, enums, references, opaque, time)
+- Soft links deferred to v0.11.0
 
 See [README.md](../../README.md) for full feature list.
 
 ---
 
-*Last Updated: 2025-10-17*
-*Version: 0.9.0-beta*
+### 📚 Next Steps
+
+After completing this quick start, explore:
+
+- **[Installation Guide](INSTALLATION.md)** - Detailed installation and platform support
+- **[Reading Data](READING_DATA.md)** - Complete guide to datasets, attributes, and datatypes
+- **[Datatypes Guide](DATATYPES.md)** - HDF5 to Go type mapping details
+- **[Troubleshooting](TROUBLESHOOTING.md)** - Solutions to common problems
+- **[FAQ](FAQ.md)** - Frequently asked questions
+- **[Examples](../../examples/)** - 5 comprehensive examples with detailed documentation
+
+---
+
+*Last Updated: 2025-10-29*
+*Version: 0.10.0-beta*
