@@ -1,0 +1,53 @@
+# CODEOWNERS for HDF5 Go Library
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# This file defines individuals or teams responsible for code in this repository.
+# Code owners are automatically requested for review when someone opens a pull request
+# that modifies code they own.
+
+# Default owner for everything in the repo
+* @kolkov
+
+# Core HDF5 implementation - Critical parsing and reading logic
+/internal/core/ @kolkov
+/internal/structures/ @kolkov
+/internal/utils/ @kolkov
+
+# Public API files - Breaking changes require careful review
+/file.go @kolkov
+/group.go @kolkov
+
+# Command-line utilities
+/cmd/ @kolkov
+
+# Examples - Reference implementations
+/examples/ @kolkov
+
+# Test data and generators - Validation and test file creation
+/testdata/ @kolkov
+
+# Documentation - Keep up to date with code changes
+*.md @kolkov
+/docs/ @kolkov
+
+# GitHub configuration and CI/CD
+/.github/ @kolkov
+
+# Code quality and linting configuration
+/.golangci.yml @kolkov
+/Makefile @kolkov
+
+# Tests - Ensure coverage and reliability
+*_test.go @kolkov
+/internal/testing/ @kolkov
+
+# Release management - Version control and changelog
+/CHANGELOG.md @kolkov
+/ROADMAP.md @kolkov
+
+# Contributing guidelines
+/CONTRIBUTING.md @kolkov
+
+# Go module files - Dependency management
+/go.mod @kolkov
+/go.sum @kolkov

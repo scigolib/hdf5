@@ -16,13 +16,14 @@ coverage.html
 # Dependency directories
 vendor/
 
-# AI agents
-.claude
+# AI agents and private configs
 .gode
 .goco
+.claude
 
-# Development scripts (not for release)
+# Development scripts and docs (not for release)
 /scripts/
+/docs/dev/
 
 # Go workspace file
 go.work

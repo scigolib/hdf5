@@ -4,8 +4,8 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat&logo=go)](https://golang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-beta-green.svg)](.claude/CLAUDE.md)
-[![Progress](https://img.shields.io/badge/progress-98%25-brightgreen.svg)](.claude/CLAUDE.md)
+[![Status](https://img.shields.io/badge/status-beta-green.svg)](ROADMAP.md)
+[![Progress](https://img.shields.io/badge/progress-98%25-brightgreen.svg)](ROADMAP.md)
 
 A modern, pure Go library for reading HDF5 files without CGo dependencies. ~98% production-ready for common scientific datasets!
 
@@ -212,6 +212,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - The HDF Group for the HDF5 format specification
 - gonum/hdf5 for inspiration
 - All contributors to this project
+
+### Special Thanks
+
+**Professor Ancha Baranova** - This project would not have been possible without her invaluable help and support. Her assistance was crucial in bringing this library to life.
 
 ---
 
