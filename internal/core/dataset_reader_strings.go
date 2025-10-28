@@ -85,8 +85,19 @@ func ReadDatasetStrings(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]
 
 	case layout.IsChunked():
 		// Data is stored in chunks indexed by B-tree.
-		// TODO: Add filter pipeline support for string datasets.
-		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, nil)
+		// Extract filter pipeline if present.
+		var filterPipeline *FilterPipelineMessage
+		for _, msg := range header.Messages {
+			if msg.Type == MsgFilterPipeline {
+				filterPipeline, err = ParseFilterPipelineMessage(msg.Data)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse filter pipeline: %w", err)
+				}
+				break
+			}
+		}
+
+		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read chunked data: %w", err)
 		}

@@ -106,6 +106,7 @@ func (d *Dataset) Info() (string, error) {
 type Group struct {
 	file        *File
 	name        string
+	address     uint64 // Address of object header (0 if traditional/SNOD format)
 	children    []Object
 	symbolTable *structures.SymbolTable
 	localHeap   *structures.LocalHeap
@@ -122,14 +123,26 @@ func (g *Group) Children() []Object {
 }
 
 // Attributes returns all attributes attached to this group.
-// Note: For groups loaded via traditional format (SNOD), this requires re-reading the object header.
+// Note: For groups loaded via traditional format (SNOD), the address may be 0,
+// and attributes cannot be retrieved (traditional format doesn't have attributes).
 func (g *Group) Attributes() ([]*core.Attribute, error) {
-	// For modern groups, we need to find the group's address.
-	// For root group, we can use file.sb.RootGroup.
-	// For other groups, we would need to store the address.
-	// For now, return empty slice for groups without stored address.
-	// TODO: Store group address during loading.
-	return nil, fmt.Errorf("group attributes not yet fully supported")
+	// Traditional format groups (SNOD) don't support attributes.
+	if g.address == 0 {
+		return []*core.Attribute{}, nil
+	}
+
+	// Read object header to get attributes.
+	header, err := core.ReadObjectHeader(g.file.osFile, g.address, g.file.sb)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read object header: %w", err)
+	}
+
+	// Ensure we return an empty slice instead of nil if no attributes exist.
+	if header.Attributes == nil {
+		return []*core.Attribute{}, nil
+	}
+
+	return header.Attributes, nil
 }
 
 func loadGroup(file *File, address uint64) (*Group, error) {
@@ -160,8 +173,9 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 	}
 
 	group := &Group{
-		file: file,
-		name: header.Name,
+		file:    file,
+		name:    header.Name,
+		address: address, // Store address for later Attributes() access
 	}
 
 	// Load children only for groups.
@@ -189,8 +203,10 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 					}
 					group.children = append(group.children, child)
 				} else if linkMsg.IsSoftLink() {
-					// TODO: Support soft links.
-					// For now, skip them.
+					// Soft link support deferred to v0.11.0-beta.
+					// Soft links are symbolic links within HDF5 file pointing to paths.
+					// Current implementation focuses on hard links (direct object references).
+					// Target version: v0.11.0-beta (write support phase)
 					continue
 				}
 			}
@@ -432,7 +448,7 @@ func loadObject(file *File, address uint64, name string) (Object, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Override name if provided.
+		// Override name if provided (but keep stored address).
 		if name != "" {
 			group.name = name
 		}
