@@ -156,17 +156,27 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		// Offset 48-55: Driver info block
 		// Offset 56-95: Root group symbol table entry (32 bytes total):
 		//   56-63: Link name offset (8 bytes)
-		//   64-71: Object header address (8 bytes) <-- This is what we want!
+		//   64-71: Object header address (8 bytes) <-- Modern format uses this
 		//   72-75: Cache type (4 bytes)
 		//   76-79: Reserved (4 bytes)
-		//   80-95: Scratch-pad (16 bytes)
+		//   80-87: B-tree address (8 bytes) <-- Symbol table format uses this
+		//   88-95: Local heap address (8 bytes)
 
-		// The root group object header address is embedded in the superblock at offset 64
-		// NOT at a separate file location - it's the second field of the embedded entry
+		// First, try reading the object header address at offset 64
 		rootGroupOffset := 64
 		sb.RootGroup, err = readValue(rootGroupOffset, offsetSize)
 		if err != nil {
 			return nil, utils.WrapError("root group address read failed", err)
+		}
+
+		// If object header address is 0, this file uses symbol table format
+		// In this case, read the B-tree address from the scratch-pad at offset 80
+		if sb.RootGroup == 0 {
+			btreeOffset := 80
+			sb.RootGroup, err = readValue(btreeOffset, offsetSize)
+			if err != nil {
+				return nil, utils.WrapError("b-tree address read failed", err)
+			}
 		}
 	} else {
 		// For v2 and v3, fields start at byte 12
