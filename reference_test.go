@@ -83,17 +83,8 @@ func TestReference_AllFiles(t *testing.T) {
 		}
 	}
 
-	// For now, we allow some failures as we're still implementing features
-	// But we track progress and aim for 100% pass rate
-	if failed > 0 {
-		t.Logf("\n%s", separator)
-		t.Logf("NOTE: %d files still need work. Target: 100%% pass rate", failed)
-		t.Logf("%s", separator)
-	}
-
-	// Don't fail the test yet - we're documenting current state
-	// TODO: Enable this assertion when we're ready for 100% pass rate
-	// require.Equal(t, 0, failed, "All reference files must pass")
+	// All reference files must pass for production release
+	require.Equal(t, 0, failed, "All reference files must pass")
 }
 
 // testResult holds the result of testing a single file.

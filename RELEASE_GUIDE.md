@@ -135,7 +135,28 @@ Examples:
 
 ### 1. Automated Quality Checks
 
-**Run quality checks**:
+**Run our pre-release validation script**:
+
+```bash
+# ONE COMMAND runs ALL checks (matches CI exactly)
+bash scripts/pre-release-check.sh
+```
+
+This script validates:
+- ✅ Go version (1.25+)
+- ✅ Code formatting (gofmt)
+- ✅ Static analysis (go vet)
+- ✅ All tests passing
+- ✅ Race detector
+- ✅ Coverage >70% (internal packages)
+- ✅ golangci-lint (0 issues required)
+- ✅ go.mod integrity
+- ✅ Reference tests (57 files)
+- ✅ No TODO/FIXME comments (requirement: 0)
+- ✅ All documentation present
+- ✅ Sprint completion status
+
+**Manual checks** (if script not available):
 
 ```bash
 # Format code
@@ -228,13 +249,10 @@ git pull origin develop
 git status
 # Should show: "nothing to commit, working tree clean"
 
-# Run ALL pre-release checks
-go fmt ./...
-go vet ./...
-golangci-lint run ./...
-go test ./...
-go test -race ./...
-go mod verify
+# Run ALL pre-release checks (CRITICAL!)
+bash scripts/pre-release-check.sh
+# Script must exit with: "All checks passed! Ready for release."
+# If errors: FIX THEM before proceeding!
 
 # Create release branch (example: v0.10.0-beta)
 git checkout -b release/v0.10.0-beta
@@ -514,7 +532,10 @@ git push
 
 ✅ **ALWAYS run checks before commit**
 ```bash
-# Correct workflow (EVERY TIME):
+# Recommended: Use our pre-release script
+bash scripts/pre-release-check.sh
+
+# Or manual workflow:
 go fmt ./...
 golangci-lint run ./...
 go test ./...
