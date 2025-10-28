@@ -151,11 +151,11 @@ func testReferenceFile(t *testing.T, path, name string, expectError, requiresDri
 
 	// Step 3: Walk entire tree and validate structure
 	var (
-		objects     int
-		datasets    int
-		groups      int
-		walkErrors  []string
-		seenPaths   = make(map[string]bool)
+		objects    int
+		datasets   int
+		groups     int
+		walkErrors []string
+		seenPaths  = make(map[string]bool)
 	)
 
 	f.Walk(func(path string, obj hdf5.Object) {
