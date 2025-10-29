@@ -4,7 +4,7 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat&logo=go)](https://golang.org)
 [![Go Report Card](https://goreportcard.com/badge/github.com/scigolib/hdf5)](https://goreportcard.com/report/github.com/scigolib/hdf5)
-[![CI](https://github.com/scigolib/hdf5/workflows/CI/badge.svg)](https://github.com/scigolib/hdf5/actions)
+[![CI](https://github.com/scigolib/hdf5/actions/workflows/test.yml/badge.svg)](https://github.com/scigolib/hdf5/actions)
 [![Coverage](https://img.shields.io/badge/coverage-76.3%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-beta-green.svg)](ROADMAP.md)
