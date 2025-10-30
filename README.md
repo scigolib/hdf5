@@ -23,7 +23,7 @@ A modern, pure Go library for reading HDF5 files without CGo dependencies. ~98% 
 - ✅ **Rich Datatypes** - Integers, floats, strings (fixed/variable), compounds
 - ✅ **Memory Efficient** - Buffer pooling and smart memory management
 - ✅ **Production Ready** - ~98% complete for common scientific HDF5 files
-- 📖 **Read-Only** - Write support planned for future versions
+- ✍️ **Read + Write (MVP)** - v0.11.0-beta: Basic write support (contiguous datasets, groups, all datatypes)
 
 ---
 
@@ -98,9 +98,9 @@ func main() {
 
 ## 🎯 Current Status
 
-**Version**: v0.10.0-beta (RELEASED 2025-10-29 - 100% complete - 6/6 tasks) ✅
+**Version**: v0.11.0-beta (RELEASED 2025-10-30 - 100% complete - 5/5 components) ✅
 
-**Production Readiness: Feature-complete for reading HDF5 files!** 🎉
+**Production Readiness: Read support feature-complete! Write support MVP ready!** 🎉
 
 ### ✅ Fully Implemented
 - **File Structure**:
