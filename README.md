@@ -10,7 +10,7 @@
 [![Status](https://img.shields.io/badge/status-beta-green.svg)](ROADMAP.md)
 [![GoDoc](https://pkg.go.dev/badge/github.com/scigolib/hdf5.svg)](https://pkg.go.dev/github.com/scigolib/hdf5)
 
-A modern, pure Go library for reading HDF5 files without CGo dependencies. ~98% production-ready for common scientific datasets!
+A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. Read support is feature-complete, write support MVP ready!
 
 ---
 
@@ -22,7 +22,7 @@ A modern, pure Go library for reading HDF5 files without CGo dependencies. ~98% 
 - ✅ **Full Dataset Reading** - Compact, contiguous, chunked layouts with GZIP
 - ✅ **Rich Datatypes** - Integers, floats, strings (fixed/variable), compounds
 - ✅ **Memory Efficient** - Buffer pooling and smart memory management
-- ✅ **Production Ready** - ~98% complete for common scientific HDF5 files
+- ✅ **Production Ready** - Read support feature-complete, write support MVP ready
 - ✍️ **Read + Write (MVP)** - v0.11.0-beta: Basic write support (contiguous datasets, groups, all datatypes)
 
 ---
@@ -143,27 +143,41 @@ func main() {
 ### ⚠️ Partial Support
 - **Dense Attributes**: Infrastructure ready, B-tree v2 iteration deferred to v0.11.0-RC (<10% of files affected)
 
-### ❌ Not Yet Implemented (with Timeline)
+### ✍️ Write Support (v0.11.0-beta - MVP)
+- ✅ **File creation** - CreateForWrite() with Truncate/Exclusive modes
+- ✅ **Dataset writing** - Contiguous layout, all basic + advanced datatypes
+- ✅ **Groups** - CreateGroup() with symbol table format
+- ✅ **Advanced datatypes** - Arrays, Enums, References, Opaque
+- ✅ **Free space management** - End-of-file allocation (validated, 100% coverage)
+- 📋 **Attributes** - Infrastructure ready (write in v0.11.1-beta)
 
-**v0.11.0-beta (Jan 2026)** - Basic Write Support:
-- File creation (contiguous datasets only)
-- Basic groups (symbol table)
-- Compact attributes
-- Soft links
+**Known Limitations (MVP)**:
+- Contiguous layout only (chunked in next beta)
+- Symbol table groups (Link Info in next beta)
+- No compression yet (next beta)
+- Files not h5dump-readable (acceptable for MVP)
 
-**v0.11.0-RC (Mar 2026)** - Feature Complete:
+### ❌ Planned Features
+
+**v0.11.1-beta (Next)** - Continue Write Support:
 - Chunked datasets + compression (GZIP, Shuffle, Fletcher32)
-- Dense groups & attributes (B-tree v2, fractal heap)
+- Dense groups (Link Info, B-tree v2)
+- Compact attributes write
 - Hard/soft/external links
+
+**v0.11.0-RC (Q1 2026)** - Feature Complete:
+- Dense attributes (fractal heap write)
 - SWMR (Single Writer Multiple Reader)
+- API freeze
+- Community testing
 
 **v1.1.0+ (After Stable)** - Extended Features:
-- Other compression (SZIP, LZF, BZIP2) - GZIP covers 95%+ of files
+- Other compression (SZIP, LZF, BZIP2)
 - Virtual datasets / external files
 - Parallel I/O
 - Advanced filters (N-bit, Scale-offset)
 
-See [ROADMAP.md](ROADMAP.md) for detailed timeline and [docs/dev/notes/v0.11.0-RC-FEATURE-COMPLETE-PLAN.md](docs/dev/notes/v0.11.0-RC-FEATURE-COMPLETE-PLAN.md) for complete feature checklist.
+See [ROADMAP.md](ROADMAP.md) for detailed timeline.
 
 ---
 
@@ -230,9 +244,10 @@ Contributions are welcome! This is an early-stage project and we'd love your hel
 | Feature | This Library | gonum/hdf5 | go-hdf5/hdf5 |
 |---------|-------------|------------|--------------|
 | Pure Go | ✅ Yes | ❌ CGo wrapper | ✅ Yes |
-| Reading | ✅ Partial | ✅ Full | ❌ Limited |
-| Writing | 📋 Planned | ✅ Full | ❌ No |
+| Reading | ✅ Full (v0.10.0) | ✅ Full | ❌ Limited |
+| Writing | ✅ MVP (v0.11.0) | ✅ Full | ❌ No |
 | HDF5 1.8+ | ✅ Yes | ⚠️ Limited | ❌ No |
+| Advanced Datatypes | ✅ Yes (v0.11.0) | ✅ Yes | ❌ No |
 | Maintained | ✅ Active | ⚠️ Slow | ❌ Inactive |
 | Thread-safe | 📋 Planned | ⚠️ Conditional | ❌ No |
 
@@ -272,9 +287,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Status**: Beta - ~98% production-ready for reading
-**Version**: 0.10.0-beta (83% complete - 5/6 tasks)
-**Last Updated**: 2025-10-29
+**Status**: Beta - Read complete, Write MVP ready
+**Version**: v0.11.0-beta (5/5 components complete)
+**Last Updated**: 2025-10-30
 
 ---
 
