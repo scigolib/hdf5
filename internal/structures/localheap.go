@@ -140,7 +140,7 @@ func (h *LocalHeap) AddString(s string) (offset uint64, err error) {
 
 	// Check if we have space
 	currentSize := uint64(len(h.strings))
-	if currentSize+uint64(needed) > h.DataSegmentSize {
+	if currentSize+uint64(needed) > h.DataSegmentSize { //nolint:gosec // Safe: size calculation
 		return 0, errors.New("local heap is full")
 	}
 

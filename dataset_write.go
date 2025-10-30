@@ -224,6 +224,39 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 	}, nil
 }
 
+// validateDatasetName validates that dataset name is not empty and starts with '/'.
+func validateDatasetName(name string) error {
+	if name == "" {
+		return fmt.Errorf("dataset name cannot be empty")
+	}
+	if name[0] != '/' {
+		return fmt.Errorf("dataset name must start with '/' (got %q)", name)
+	}
+	return nil
+}
+
+// validateDimensions validates that dimensions is not empty and no dimension is zero.
+func validateDimensions(dims []uint64) error {
+	if len(dims) == 0 {
+		return fmt.Errorf("dimensions cannot be empty (use []uint64{1} for scalar)")
+	}
+	for i, dim := range dims {
+		if dim == 0 {
+			return fmt.Errorf("dimension %d cannot be 0", i)
+		}
+	}
+	return nil
+}
+
+// calculateTotalElements calculates total number of elements from dimensions.
+func calculateTotalElements(dims []uint64) uint64 {
+	totalElements := uint64(1)
+	for _, dim := range dims {
+		totalElements *= dim
+	}
+	return totalElements
+}
+
 // CreateDataset creates a new dataset in the HDF5 file.
 // The dataset will use contiguous storage layout.
 //
@@ -257,17 +290,11 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 //   - No resizable datasets (maxDims not supported)
 func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, opts ...DatasetOption) (*DatasetWriter, error) {
 	// Validate inputs
-	if name == "" {
-		return nil, fmt.Errorf("dataset name cannot be empty")
+	if err := validateDatasetName(name); err != nil {
+		return nil, err
 	}
-
-	if len(dims) == 0 {
-		return nil, fmt.Errorf("dimensions cannot be empty (use []uint64{1} for scalar)")
-	}
-
-	// For MVP, only support root-level datasets
-	if name != "" && name[0] != '/' {
-		return nil, fmt.Errorf("dataset name must start with '/' (got %q)", name)
+	if err := validateDimensions(dims); err != nil {
+		return nil, err
 	}
 
 	// Apply options
@@ -285,13 +312,7 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 	}
 
 	// Calculate total data size
-	totalElements := uint64(1)
-	for _, dim := range dims {
-		if dim == 0 {
-			return nil, fmt.Errorf("dimension cannot be 0")
-		}
-		totalElements *= dim
-	}
+	totalElements := calculateTotalElements(dims)
 	dataSize := totalElements * uint64(dtInfo.size)
 
 	// Allocate space for dataset data
@@ -608,7 +629,7 @@ func encodeFloatData(data interface{}, elemSize uint32, expectedSize uint64) ([]
 		return nil, fmt.Errorf("expected []float32 or []float64, got %T", data)
 	}
 
-	actualSize := uint64(dataLen) * uint64(elemSize)
+	actualSize := uint64(dataLen) * uint64(elemSize) //nolint:gosec // Safe: slice length conversion
 	if actualSize != expectedSize {
 		return nil, fmt.Errorf("data size mismatch: expected %d bytes, got %d bytes", expectedSize, actualSize)
 	}
@@ -623,7 +644,7 @@ func encodeFloatData(data interface{}, elemSize uint32, expectedSize uint64) ([]
 			return nil, fmt.Errorf("expected []float32, got %T", data)
 		}
 		for i, val := range v {
-			bits := binary.LittleEndian.Uint32((*(*[4]byte)(unsafe.Pointer(&val)))[:])
+			bits := binary.LittleEndian.Uint32((*(*[4]byte)(unsafe.Pointer(&val)))[:]) //nolint:gosec // Safe: float32 to bits conversion
 			binary.LittleEndian.PutUint32(buf[i*4:], bits)
 		}
 
@@ -634,7 +655,7 @@ func encodeFloatData(data interface{}, elemSize uint32, expectedSize uint64) ([]
 			return nil, fmt.Errorf("expected []float64, got %T", data)
 		}
 		for i, val := range v {
-			bits := binary.LittleEndian.Uint64((*(*[8]byte)(unsafe.Pointer(&val)))[:])
+			bits := binary.LittleEndian.Uint64((*(*[8]byte)(unsafe.Pointer(&val)))[:]) //nolint:gosec // Safe: float64 to bits conversion
 			binary.LittleEndian.PutUint64(buf[i*8:], bits)
 		}
 

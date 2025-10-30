@@ -232,7 +232,7 @@ func TestDatasetWrite_SequentialWrites(t *testing.T) {
 	assert.Greater(t, info.Size(), int64(500))
 }
 
-// TestDatasetWrite_VerifyBinaryFormat verifies the binary format of written data
+// TestDatasetWrite_VerifyBinaryFormat verifies the binary format of written data.
 func TestDatasetWrite_VerifyBinaryFormat(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_binary.h5")
@@ -275,7 +275,7 @@ func TestDatasetWrite_VerifyBinaryFormat(t *testing.T) {
 	assert.Equal(t, uint32(0x11223344), val2)
 }
 
-// TestDatasetWrite_Float64Encoding verifies float64 encoding
+// TestDatasetWrite_Float64Encoding verifies float64 encoding.
 func TestDatasetWrite_Float64Encoding(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_float.h5")

@@ -618,7 +618,7 @@ func TestLocalHeap_WriteTo(t *testing.T) {
 				return NewLocalHeap(64), []string{}
 			},
 			address: 0,
-			verify: func(t *testing.T, data []byte, heap *LocalHeap) {
+			verify: func(t *testing.T, data []byte, _ *LocalHeap) {
 				// Verify header
 				require.Equal(t, "HEAP", string(data[0:4]))
 				require.Equal(t, byte(0), data[4]) // Version
@@ -647,7 +647,7 @@ func TestLocalHeap_WriteTo(t *testing.T) {
 				return heap, []string{"hello"}
 			},
 			address: 0,
-			verify: func(t *testing.T, data []byte, heap *LocalHeap) {
+			verify: func(t *testing.T, data []byte, _ *LocalHeap) {
 				// Verify header
 				require.Equal(t, "HEAP", string(data[0:4]))
 
@@ -667,7 +667,7 @@ func TestLocalHeap_WriteTo(t *testing.T) {
 				return heap, []string{"first", "second", "third"}
 			},
 			address: 0,
-			verify: func(t *testing.T, data []byte, heap *LocalHeap) {
+			verify: func(t *testing.T, data []byte, _ *LocalHeap) {
 				// Verify all strings are present
 				dataStart := 32
 				offset := dataStart
@@ -695,7 +695,7 @@ func TestLocalHeap_WriteTo(t *testing.T) {
 				return heap, []string{"test"}
 			},
 			address: 1000,
-			verify: func(t *testing.T, data []byte, heap *LocalHeap) {
+			verify: func(t *testing.T, data []byte, _ *LocalHeap) {
 				// Verify data segment address accounts for heap address
 				dataSegAddr := binary.LittleEndian.Uint64(data[1024:1032])
 				require.Equal(t, uint64(1032), dataSegAddr) // 1000 + 32

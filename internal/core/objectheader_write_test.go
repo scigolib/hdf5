@@ -138,7 +138,8 @@ func TestObjectHeaderWriter_WriteTo(t *testing.T) {
 				Messages: []MessageWriter{
 					{
 						Type: MsgLinkInfo,
-						Data: make([]byte, 300), // 1+2+1+300 = 304 > 255
+						// Test data size: 1 (type) + 2 (size) + 1 (flags) + 300 (data) = 304 bytes (exceeds 255 limit).
+						Data: make([]byte, 300),
 					},
 				},
 			},

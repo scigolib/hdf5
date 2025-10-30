@@ -8,6 +8,69 @@ import (
 	"github.com/scigolib/hdf5/internal/structures"
 )
 
+// validateGroupPath validates group path is not empty, starts with '/', and is not root.
+func validateGroupPath(path string) error {
+	if path == "" {
+		return fmt.Errorf("group path cannot be empty")
+	}
+	if path[0] != '/' {
+		return fmt.Errorf("group path must start with '/' (got %q)", path)
+	}
+	if path == "/" {
+		return fmt.Errorf("root group already exists")
+	}
+	return nil
+}
+
+// createGroupStructures creates and writes the local heap, symbol table node, and B-tree for a group.
+// Returns (heapAddr, btreeAddr, error).
+func (fw *FileWriter) createGroupStructures() (uint64, uint64, error) {
+	offsetSize := int(fw.file.sb.OffsetSize)
+	
+	// Create local heap
+	heap := structures.NewLocalHeap(256)
+	heapAddr, err := fw.writer.Allocate(heap.Size())
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to allocate heap: %w", err)
+	}
+	
+	// Create symbol table node
+	stNode := structures.NewSymbolTableNode(32)
+	entrySize := 2*offsetSize + 4 + 4 + 16
+	stNodeSize := uint64(8 + 32*entrySize) //nolint:gosec // Safe: small constant calculation
+	stNodeAddr, err := fw.writer.Allocate(stNodeSize)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to allocate symbol table node: %w", err)
+	}
+	
+	if err := stNode.WriteAt(fw.writer, stNodeAddr, uint8(offsetSize), 32, fw.file.sb.Endianness); err != nil { //nolint:gosec // Safe: offsetSize is 8
+		return 0, 0, fmt.Errorf("failed to write symbol table node: %w", err)
+	}
+	
+	// Create B-tree
+	btree := structures.NewBTreeNodeV1(0, 16)
+	if err := btree.AddKey(0, stNodeAddr); err != nil {
+		return 0, 0, fmt.Errorf("failed to add B-tree key: %w", err)
+	}
+	
+	btreeSize := uint64(24 + (2*16+1)*offsetSize + 2*16*offsetSize) //nolint:gosec // Safe: small constant calculation
+	btreeAddr, err := fw.writer.Allocate(btreeSize)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to allocate B-tree: %w", err)
+	}
+	
+	if err := btree.WriteAt(fw.writer, btreeAddr, uint8(offsetSize), 16, fw.file.sb.Endianness); err != nil { //nolint:gosec // Safe: offsetSize is 8
+		return 0, 0, fmt.Errorf("failed to write B-tree: %w", err)
+	}
+	
+	// Write heap
+	if err := heap.WriteTo(fw.writer, heapAddr); err != nil {
+		return 0, 0, fmt.Errorf("failed to write local heap: %w", err)
+	}
+	
+	return heapAddr, btreeAddr, nil
+}
+
 // CreateGroup creates a new group in the HDF5 file.
 // Groups organize datasets and other groups in a hierarchical structure.
 //
@@ -35,14 +98,8 @@ import (
 //   - Parent group must exist (create parents first)
 func (fw *FileWriter) CreateGroup(path string) error {
 	// Validate path
-	if path == "" {
-		return fmt.Errorf("group path cannot be empty")
-	}
-	if path[0] != '/' {
-		return fmt.Errorf("group path must start with '/' (got %q)", path)
-	}
-	if path == "/" {
-		return fmt.Errorf("root group already exists")
+	if err := validateGroupPath(path); err != nil {
+		return err
 	}
 
 	// Parse path into parent and name
@@ -53,64 +110,10 @@ func (fw *FileWriter) CreateGroup(path string) error {
 		return fmt.Errorf("nested groups not yet supported in MVP, parent must be root (got parent %q)", parent)
 	}
 
-	// Create local heap (initial size 256 bytes, sufficient for ~10-20 names)
-	heap := structures.NewLocalHeap(256)
-	heapAddr, err := fw.writer.Allocate(heap.Size())
+	// Create group structures (heap, symbol table, B-tree)
+	heapAddr, btreeAddr, err := fw.createGroupStructures()
 	if err != nil {
-		return fmt.Errorf("failed to allocate heap: %w", err)
-	}
-
-	// Create empty symbol table node (capacity 32 entries, typical for B-tree order 16)
-	stNode := structures.NewSymbolTableNode(32)
-
-	// Calculate symbol table node size
-	// Format: 8-byte header + 32 * entrySize
-	// entrySize = 2*offsetSize + 4 + 4 + 16 = 2*8 + 24 = 40 bytes
-	offsetSize := int(fw.file.sb.OffsetSize)
-	entrySize := 2*offsetSize + 4 + 4 + 16
-	stNodeSize := uint64(8 + 32*entrySize)
-
-	stNodeAddr, err := fw.writer.Allocate(stNodeSize)
-	if err != nil {
-		return fmt.Errorf("failed to allocate symbol table node: %w", err)
-	}
-
-	// Write symbol table node
-	if err := stNode.WriteAt(fw.writer, stNodeAddr, uint8(offsetSize), 32, fw.file.sb.Endianness); err != nil {
-		return fmt.Errorf("failed to write symbol table node: %w", err)
-	}
-
-	// Create B-tree v1 node (order K=16, so 2K+1=33 keys, 2K=32 children)
-	// For a single-node B-tree, we use 1 key (minimum) and 1 child
-	btree := structures.NewBTreeNodeV1(0, 16) // Type 0 = group symbol table
-
-	// Add symbol table node address as child (with dummy key 0)
-	// In a real B-tree, the key would be the first link name offset in the symbol table node
-	// For an empty group, we use 0 as the key
-	if err := btree.AddKey(0, stNodeAddr); err != nil {
-		return fmt.Errorf("failed to add B-tree key: %w", err)
-	}
-
-	// Calculate B-tree size
-	// Header: 4 (sig) + 1 (type) + 1 (level) + 2 (entries) + 2*8 (siblings) = 24 bytes
-	// Keys: (2K+1) * 8 = 33 * 8 = 264 bytes
-	// Children: 2K * 8 = 32 * 8 = 256 bytes
-	// Total: 24 + 264 + 256 = 544 bytes
-	btreeSize := uint64(24 + (2*16+1)*offsetSize + 2*16*offsetSize)
-
-	btreeAddr, err := fw.writer.Allocate(btreeSize)
-	if err != nil {
-		return fmt.Errorf("failed to allocate B-tree: %w", err)
-	}
-
-	// Write B-tree
-	if err := btree.WriteAt(fw.writer, btreeAddr, uint8(offsetSize), 16, fw.file.sb.Endianness); err != nil {
-		return fmt.Errorf("failed to write B-tree: %w", err)
-	}
-
-	// Write local heap (must be done after B-tree and symbol table to get proper addresses)
-	if err := heap.WriteTo(fw.writer, heapAddr); err != nil {
-		return fmt.Errorf("failed to write local heap: %w", err)
+		return err
 	}
 
 	// Create object header for the group

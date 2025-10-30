@@ -218,7 +218,7 @@ func TestCreate_ReadOnlyAfterCreate(t *testing.T) {
 
 	// Verify we can walk (even though empty)
 	walkCount := 0
-	f.Walk(func(path string, obj Object) {
+	f.Walk(func(_ string, _ Object) {
 		walkCount++
 	})
 	assert.Equal(t, 1, walkCount, "Should walk only root group")

@@ -61,7 +61,7 @@ func (ds *DatasetWriter) WriteAttribute(name string, value interface{}) error {
 // - In v0.11.0-RC, we'll implement proper object header modification with continuation blocks
 //
 // NOTE: Object header modification with continuation blocks planned for v0.11.0-RC.
-func writeAttribute(_ *FileWriter, objectHeaderAddr uint64, name string, value interface{}) error {
+func writeAttribute(_ *FileWriter, _ uint64, _ string, _ interface{}) error {
 	// For MVP, attributes are not yet supported
 	// This requires:
 	// 1. Reading existing object header from disk
@@ -188,7 +188,7 @@ func inferFloat(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage,
 // inferString infers datatype for strings.
 func inferString(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage, error) {
 	str := v.String()
-	size := uint32(len(str) + 1) // Include null terminator
+	size := uint32(len(str) + 1) //nolint:gosec // Safe: string length fits in uint32
 
 	dt := &core.DatatypeMessage{
 		Class:         core.DatatypeString,
@@ -211,7 +211,7 @@ func inferSlice(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage,
 	}
 
 	elemKind := v.Type().Elem().Kind()
-	length := uint64(v.Len())
+	length := uint64(v.Len()) //nolint:gosec // Safe: slice length conversion
 
 	var dt *core.DatatypeMessage
 
@@ -261,25 +261,25 @@ func encodeAttributeValue(value interface{}) ([]byte, error) {
 		return []byte{byte(v.Int())}, nil
 	case reflect.Int16:
 		buf := make([]byte, 2)
-		binary.LittleEndian.PutUint16(buf, uint16(v.Int()))
+		binary.LittleEndian.PutUint16(buf, uint16(v.Int())) //nolint:gosec // Safe: validated data type
 		return buf, nil
 	case reflect.Int32:
 		buf := make([]byte, 4)
-		binary.LittleEndian.PutUint32(buf, uint32(v.Int()))
+		binary.LittleEndian.PutUint32(buf, uint32(v.Int())) //nolint:gosec // Safe: validated data type
 		return buf, nil
 	case reflect.Int64:
 		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, uint64(v.Int()))
+		binary.LittleEndian.PutUint64(buf, uint64(v.Int())) //nolint:gosec // Safe: validated data type
 		return buf, nil
 	case reflect.Uint8:
 		return []byte{byte(v.Uint())}, nil
 	case reflect.Uint16:
 		buf := make([]byte, 2)
-		binary.LittleEndian.PutUint16(buf, uint16(v.Uint()))
+		binary.LittleEndian.PutUint16(buf, uint16(v.Uint())) //nolint:gosec // Safe: validated data type
 		return buf, nil
 	case reflect.Uint32:
 		buf := make([]byte, 4)
-		binary.LittleEndian.PutUint32(buf, uint32(v.Uint()))
+		binary.LittleEndian.PutUint32(buf, uint32(v.Uint())) //nolint:gosec // Safe: validated data type
 		return buf, nil
 	case reflect.Uint64:
 		buf := make([]byte, 8)
@@ -318,14 +318,14 @@ func encodeSliceValue(v reflect.Value) ([]byte, error) {
 		buf := make([]byte, length*4)
 		for i := 0; i < length; i++ {
 			val := v.Index(i).Int()
-			binary.LittleEndian.PutUint32(buf[i*4:], uint32(val))
+			binary.LittleEndian.PutUint32(buf[i*4:], uint32(val)) //nolint:gosec // Safe: validated data type
 		}
 		return buf, nil
 	case reflect.Int64:
 		buf := make([]byte, length*8)
 		for i := 0; i < length; i++ {
 			val := v.Index(i).Int()
-			binary.LittleEndian.PutUint64(buf[i*8:], uint64(val))
+			binary.LittleEndian.PutUint64(buf[i*8:], uint64(val)) //nolint:gosec // Safe: validated data type
 		}
 		return buf, nil
 	case reflect.Float32:

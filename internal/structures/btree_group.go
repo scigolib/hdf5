@@ -165,7 +165,7 @@ type BTreeNodeV1 struct {
 
 // NewBTreeNodeV1 creates a new B-tree v1 node for group symbol tables.
 // For MVP, this is always a leaf node pointing to a single symbol table node.
-func NewBTreeNodeV1(nodeType uint8, K uint16) *BTreeNodeV1 {
+func NewBTreeNodeV1(nodeType uint8, k uint16) *BTreeNodeV1 {
 	return &BTreeNodeV1{
 		Signature:     [4]byte{'T', 'R', 'E', 'E'},
 		NodeType:      nodeType,
@@ -173,8 +173,8 @@ func NewBTreeNodeV1(nodeType uint8, K uint16) *BTreeNodeV1 {
 		EntriesUsed:   0,
 		LeftSibling:   0xFFFFFFFFFFFFFFFF,            // Undefined
 		RightSibling:  0xFFFFFFFFFFFFFFFF,            // Undefined
-		Keys:          make([]uint64, 0, 2*int(K)+1), // 2K+1 keys
-		ChildPointers: make([]uint64, 0, 2*int(K)),   // 2K children
+		Keys:          make([]uint64, 0, 2*int(k)+1), // 2K+1 keys
+		ChildPointers: make([]uint64, 0, 2*int(k)),   // 2K children
 	}
 }
 
@@ -198,10 +198,10 @@ func (btn *BTreeNodeV1) AddKey(key, childAddr uint64) error {
 // WriteAt writes the B-tree node to w at the specified address.
 // offsetSize determines the size of addresses in the file (typically 8).
 // K is the B-tree order (default 16, so 2K+1 = 33 keys).
-func (btn *BTreeNodeV1) WriteAt(w io.WriterAt, address uint64, offsetSize uint8, K uint16, endianness binary.ByteOrder) error {
+func (btn *BTreeNodeV1) WriteAt(w io.WriterAt, address uint64, offsetSize uint8, k uint16, endianness binary.ByteOrder) error {
 	// Calculate sizes
-	maxKeys := 2*int(K) + 1
-	maxChildren := 2 * int(K)
+	maxKeys := 2*int(k) + 1
+	maxChildren := 2 * int(k)
 
 	// Header size: 4 (sig) + 1 (type) + 1 (level) + 2 (entries) + 2*offsetSize (siblings)
 	headerSize := 8 + 2*int(offsetSize)
@@ -273,9 +273,9 @@ func writeAddr(data []byte, addr uint64, size int, endianness binary.ByteOrder) 
 	case 1:
 		data[0] = byte(addr)
 	case 2:
-		endianness.PutUint16(data[:2], uint16(addr))
+		endianness.PutUint16(data[:2], uint16(addr)) //nolint:gosec // Safe: address size matches offset size
 	case 4:
-		endianness.PutUint32(data[:4], uint32(addr))
+		endianness.PutUint32(data[:4], uint32(addr)) //nolint:gosec // Safe: address size matches offset size
 	case 8:
 		endianness.PutUint64(data[:8], addr)
 	default:

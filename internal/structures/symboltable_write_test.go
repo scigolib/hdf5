@@ -247,7 +247,7 @@ func TestWriteAddressToBytes(t *testing.T) {
 	}
 }
 
-// bytesWriterAt wraps a bytes.Buffer to implement io.WriterAt
+// bytesWriterAt wraps a bytes.Buffer to implement io.WriterAt.
 type bytesWriterAt struct {
 	buf *bytes.Buffer
 }
