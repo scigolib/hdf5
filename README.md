@@ -142,14 +142,30 @@ func main() {
   - 57 reference HDF5 test files ✅
 
 ### ⚠️ Partial Support
-- **Dense Attributes**: Infrastructure ready, B-tree v2 iteration deferred to v0.11.0 (<10% of files affected)
+- **Dense Attributes**: Infrastructure ready, B-tree v2 iteration deferred to v0.11.0-RC (<10% of files affected)
 
-### ❌ Not Implemented
+### ❌ Not Yet Implemented (with Timeline)
+
+**v0.11.0-beta (Jan 2026)** - Basic Write Support:
+- File creation (contiguous datasets only)
+- Basic groups (symbol table)
+- Compact attributes
+- Soft links
+
+**v0.11.0-RC (Mar 2026)** - Feature Complete:
+- Chunked datasets + compression (GZIP, Shuffle, Fletcher32)
+- Dense groups & attributes (B-tree v2, fractal heap)
+- Advanced datatypes (arrays, enums, references, opaque)
+- Hard/soft/external links
+- SWMR (Single Writer Multiple Reader)
+
+**v1.1.0+ (After Stable)** - Extended Features:
 - Other compression (SZIP, LZF, BZIP2) - GZIP covers 95%+ of files
-- Advanced datatypes (arrays, enums, references, opaque, time)
 - Virtual datasets / external files
-- Soft links (deferred to v0.11.0)
-- Write support (planned for v0.11.0+)
+- Parallel I/O
+- Advanced filters (N-bit, Scale-offset)
+
+See [ROADMAP.md](ROADMAP.md) for detailed timeline and [docs/dev/notes/v0.11.0-RC-FEATURE-COMPLETE-PLAN.md](docs/dev/notes/v0.11.0-RC-FEATURE-COMPLETE-PLAN.md) for complete feature checklist.
 
 ---
 
