@@ -354,7 +354,8 @@ func TestGetDatatypeInfo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			info, err := getDatatypeInfo(tt.dtype, tt.stringSize)
+			config := &datasetConfig{stringSize: tt.stringSize}
+			info, err := getDatatypeInfo(tt.dtype, config)
 
 			if tt.wantErr {
 				assert.Error(t, err)

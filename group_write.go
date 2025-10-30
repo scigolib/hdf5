@@ -26,14 +26,14 @@ func validateGroupPath(path string) error {
 // Returns (heapAddr, btreeAddr, error).
 func (fw *FileWriter) createGroupStructures() (uint64, uint64, error) {
 	offsetSize := int(fw.file.sb.OffsetSize)
-	
+
 	// Create local heap
 	heap := structures.NewLocalHeap(256)
 	heapAddr, err := fw.writer.Allocate(heap.Size())
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to allocate heap: %w", err)
 	}
-	
+
 	// Create symbol table node
 	stNode := structures.NewSymbolTableNode(32)
 	entrySize := 2*offsetSize + 4 + 4 + 16
@@ -42,32 +42,32 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, error) {
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to allocate symbol table node: %w", err)
 	}
-	
+
 	if err := stNode.WriteAt(fw.writer, stNodeAddr, uint8(offsetSize), 32, fw.file.sb.Endianness); err != nil { //nolint:gosec // Safe: offsetSize is 8
 		return 0, 0, fmt.Errorf("failed to write symbol table node: %w", err)
 	}
-	
+
 	// Create B-tree
 	btree := structures.NewBTreeNodeV1(0, 16)
 	if err := btree.AddKey(0, stNodeAddr); err != nil {
 		return 0, 0, fmt.Errorf("failed to add B-tree key: %w", err)
 	}
-	
+
 	btreeSize := uint64(24 + (2*16+1)*offsetSize + 2*16*offsetSize) //nolint:gosec // Safe: small constant calculation
 	btreeAddr, err := fw.writer.Allocate(btreeSize)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to allocate B-tree: %w", err)
 	}
-	
+
 	if err := btree.WriteAt(fw.writer, btreeAddr, uint8(offsetSize), 16, fw.file.sb.Endianness); err != nil { //nolint:gosec // Safe: offsetSize is 8
 		return 0, 0, fmt.Errorf("failed to write B-tree: %w", err)
 	}
-	
+
 	// Write heap
 	if err := heap.WriteTo(fw.writer, heapAddr); err != nil {
 		return 0, 0, fmt.Errorf("failed to write local heap: %w", err)
 	}
-	
+
 	return heapAddr, btreeAddr, nil
 }
 

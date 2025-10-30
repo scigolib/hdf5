@@ -36,6 +36,68 @@ const (
 	Float64
 	// String represents fixed-length string type (use with WithStringSize option).
 	String
+
+	// Array datatypes - fixed-size homogeneous collections.
+	// Use with WithArrayDims option to specify dimensions.
+	// Example: [3]int32 = ArrayInt32 with dims=[3].
+
+	// ArrayInt8 represents array of 8-bit signed integers.
+	ArrayInt8 Datatype = 100 + iota
+	// ArrayInt16 represents array of 16-bit signed integers.
+	ArrayInt16
+	// ArrayInt32 represents array of 32-bit signed integers.
+	ArrayInt32
+	// ArrayInt64 represents array of 64-bit signed integers.
+	ArrayInt64
+	// ArrayUint8 represents array of 8-bit unsigned integers.
+	ArrayUint8
+	// ArrayUint16 represents array of 16-bit unsigned integers.
+	ArrayUint16
+	// ArrayUint32 represents array of 32-bit unsigned integers.
+	ArrayUint32
+	// ArrayUint64 represents array of 64-bit unsigned integers.
+	ArrayUint64
+	// ArrayFloat32 represents array of 32-bit floating point values.
+	ArrayFloat32
+	// ArrayFloat64 represents array of 64-bit floating point values.
+	ArrayFloat64
+
+	// Enum datatypes - named integer constants.
+	// Use with WithEnumValues option to specify name-value mappings.
+
+	// EnumInt8 represents enumeration based on 8-bit signed integer.
+	EnumInt8 Datatype = 200 + iota
+	// EnumInt16 represents enumeration based on 16-bit signed integer.
+	EnumInt16
+	// EnumInt32 represents enumeration based on 32-bit signed integer.
+	EnumInt32
+	// EnumInt64 represents enumeration based on 64-bit signed integer.
+	EnumInt64
+	// EnumUint8 represents enumeration based on 8-bit unsigned integer.
+	EnumUint8
+	// EnumUint16 represents enumeration based on 16-bit unsigned integer.
+	EnumUint16
+	// EnumUint32 represents enumeration based on 32-bit unsigned integer.
+	EnumUint32
+	// EnumUint64 represents enumeration based on 64-bit unsigned integer.
+	EnumUint64
+
+	// Reference datatypes - point to objects or dataset regions.
+
+	// ObjectReference represents reference to an object (group/dataset).
+	// Value type: ObjectRef (uint64 - 8-byte object address).
+	ObjectReference Datatype = 300
+
+	// RegionReference represents reference to a dataset region.
+	// Value type: RegionRef ([12]byte - 8-byte object addr + 4-byte region info).
+	RegionReference Datatype = 301
+
+	// Opaque datatype - uninterpreted byte sequences with descriptive tag.
+	// Use with WithOpaqueTag option to specify tag and size.
+
+	// Opaque represents opaque datatype (uninterpreted bytes with tag).
+	// Example: JPEG image, binary blob, etc.
+	Opaque Datatype = 400
 )
 
 // datatypeInfo contains metadata about a datatype.
@@ -43,83 +105,178 @@ type datatypeInfo struct {
 	class         core.DatatypeClass
 	size          uint32
 	classBitField uint32
+	// For advanced datatypes
+	baseType   *datatypeInfo // Base type for arrays, enums
+	arrayDims  []uint64      // Array dimensions
+	enumNames  []string      // Enum names
+	enumValues []int64       // Enum values
+	opaqueTag  string        // Opaque tag
 }
 
 // getDatatypeInfo returns HDF5 datatype information for a Go datatype.
-func getDatatypeInfo(dt Datatype, stringSize uint32) (*datatypeInfo, error) {
-	switch dt {
-	case Int8:
-		return &datatypeInfo{
-			class:         core.DatatypeFixed,
-			size:          1,
-			classBitField: 0x00, // Little-endian, signed
-		}, nil
-	case Int16:
-		return &datatypeInfo{
-			class:         core.DatatypeFixed,
-			size:          2,
-			classBitField: 0x00,
-		}, nil
-	case Int32:
-		return &datatypeInfo{
-			class:         core.DatatypeFixed,
-			size:          4,
-			classBitField: 0x00,
-		}, nil
-	case Int64:
-		return &datatypeInfo{
-			class:         core.DatatypeFixed,
-			size:          8,
-			classBitField: 0x00,
-		}, nil
-	case Uint8:
-		return &datatypeInfo{
-			class:         core.DatatypeFixed,
-			size:          1,
-			classBitField: 0x00, // Unsigned will be handled in encoding
-		}, nil
-	case Uint16:
-		return &datatypeInfo{
-			class:         core.DatatypeFixed,
-			size:          2,
-			classBitField: 0x00,
-		}, nil
-	case Uint32:
-		return &datatypeInfo{
-			class:         core.DatatypeFixed,
-			size:          4,
-			classBitField: 0x00,
-		}, nil
-	case Uint64:
-		return &datatypeInfo{
-			class:         core.DatatypeFixed,
-			size:          8,
-			classBitField: 0x00,
-		}, nil
-	case Float32:
-		return &datatypeInfo{
-			class:         core.DatatypeFloat,
-			size:          4,
-			classBitField: 0x00, // Little-endian
-		}, nil
-	case Float64:
-		return &datatypeInfo{
-			class:         core.DatatypeFloat,
-			size:          8,
-			classBitField: 0x00,
-		}, nil
-	case String:
-		if stringSize == 0 {
+func getDatatypeInfo(dt Datatype, config *datasetConfig) (*datatypeInfo, error) {
+	switch {
+	// Basic integer types
+	case dt == Int8:
+		return &datatypeInfo{class: core.DatatypeFixed, size: 1, classBitField: 0x00}, nil
+	case dt == Int16:
+		return &datatypeInfo{class: core.DatatypeFixed, size: 2, classBitField: 0x00}, nil
+	case dt == Int32:
+		return &datatypeInfo{class: core.DatatypeFixed, size: 4, classBitField: 0x00}, nil
+	case dt == Int64:
+		return &datatypeInfo{class: core.DatatypeFixed, size: 8, classBitField: 0x00}, nil
+	case dt == Uint8:
+		return &datatypeInfo{class: core.DatatypeFixed, size: 1, classBitField: 0x00}, nil
+	case dt == Uint16:
+		return &datatypeInfo{class: core.DatatypeFixed, size: 2, classBitField: 0x00}, nil
+	case dt == Uint32:
+		return &datatypeInfo{class: core.DatatypeFixed, size: 4, classBitField: 0x00}, nil
+	case dt == Uint64:
+		return &datatypeInfo{class: core.DatatypeFixed, size: 8, classBitField: 0x00}, nil
+
+	// Float types
+	case dt == Float32:
+		return &datatypeInfo{class: core.DatatypeFloat, size: 4, classBitField: 0x00}, nil
+	case dt == Float64:
+		return &datatypeInfo{class: core.DatatypeFloat, size: 8, classBitField: 0x00}, nil
+
+	// String type
+	case dt == String:
+		if config.stringSize == 0 {
 			return nil, fmt.Errorf("string datatype requires size > 0 (use WithStringSize option)")
 		}
+		return &datatypeInfo{class: core.DatatypeString, size: config.stringSize, classBitField: 0x00}, nil
+
+	// Array types
+	case dt >= ArrayInt8 && dt <= ArrayFloat64:
+		return getArrayDatatypeInfo(dt, config)
+
+	// Enum types
+	case dt >= EnumInt8 && dt <= EnumUint64:
+		return getEnumDatatypeInfo(dt, config)
+
+	// Reference types
+	case dt == ObjectReference:
+		return &datatypeInfo{class: core.DatatypeReference, size: 8, classBitField: 0x00}, nil
+	case dt == RegionReference:
+		return &datatypeInfo{class: core.DatatypeReference, size: 12, classBitField: 0x01}, nil
+
+	// Opaque type
+	case dt == Opaque:
+		if config.opaqueTag == "" || config.opaqueSize == 0 {
+			return nil, fmt.Errorf("opaque datatype requires tag and size > 0 (use WithOpaqueTag option)")
+		}
 		return &datatypeInfo{
-			class:         core.DatatypeString,
-			size:          stringSize,
-			classBitField: 0x00, // Null-terminated ASCII
+			class:     core.DatatypeOpaque,
+			size:      config.opaqueSize,
+			opaqueTag: config.opaqueTag,
 		}, nil
+
 	default:
 		return nil, fmt.Errorf("unsupported datatype: %d", dt)
 	}
+}
+
+// getArrayDatatypeInfo returns datatype info for array types.
+func getArrayDatatypeInfo(dt Datatype, config *datasetConfig) (*datatypeInfo, error) {
+	if len(config.arrayDims) == 0 {
+		return nil, fmt.Errorf("array datatype requires dimensions (use WithArrayDims option)")
+	}
+
+	// Map array type to base type
+	var baseType Datatype
+	switch dt {
+	case ArrayInt8:
+		baseType = Int8
+	case ArrayInt16:
+		baseType = Int16
+	case ArrayInt32:
+		baseType = Int32
+	case ArrayInt64:
+		baseType = Int64
+	case ArrayUint8:
+		baseType = Uint8
+	case ArrayUint16:
+		baseType = Uint16
+	case ArrayUint32:
+		baseType = Uint32
+	case ArrayUint64:
+		baseType = Uint64
+	case ArrayFloat32:
+		baseType = Float32
+	case ArrayFloat64:
+		baseType = Float64
+	default:
+		return nil, fmt.Errorf("invalid array datatype: %d", dt)
+	}
+
+	// Get base type info (recursively)
+	baseInfo, err := getDatatypeInfo(baseType, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get array base type: %w", err)
+	}
+
+	// Calculate total array size (product of all dimensions * element size)
+	arraySize := uint32(1)
+	for _, dim := range config.arrayDims {
+		arraySize *= uint32(dim) //nolint:gosec // Safe: dimension size limited
+	}
+	arraySize *= baseInfo.size
+
+	return &datatypeInfo{
+		class:     core.DatatypeArray,
+		size:      arraySize,
+		baseType:  baseInfo,
+		arrayDims: config.arrayDims,
+	}, nil
+}
+
+// getEnumDatatypeInfo returns datatype info for enum types.
+func getEnumDatatypeInfo(dt Datatype, config *datasetConfig) (*datatypeInfo, error) {
+	if len(config.enumNames) == 0 || len(config.enumValues) == 0 {
+		return nil, fmt.Errorf("enum datatype requires names and values (use WithEnumValues option)")
+	}
+	if len(config.enumNames) != len(config.enumValues) {
+		return nil, fmt.Errorf("enum names and values must have same length (got %d names, %d values)",
+			len(config.enumNames), len(config.enumValues))
+	}
+
+	// Map enum type to base integer type
+	var baseType Datatype
+	switch dt {
+	case EnumInt8:
+		baseType = Int8
+	case EnumInt16:
+		baseType = Int16
+	case EnumInt32:
+		baseType = Int32
+	case EnumInt64:
+		baseType = Int64
+	case EnumUint8:
+		baseType = Uint8
+	case EnumUint16:
+		baseType = Uint16
+	case EnumUint32:
+		baseType = Uint32
+	case EnumUint64:
+		baseType = Uint64
+	default:
+		return nil, fmt.Errorf("invalid enum datatype: %d", dt)
+	}
+
+	// Get base type info
+	baseInfo, err := getDatatypeInfo(baseType, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get enum base type: %w", err)
+	}
+
+	return &datatypeInfo{
+		class:      core.DatatypeEnum,
+		size:       baseInfo.size, // Enum size = base type size
+		baseType:   baseInfo,
+		enumNames:  config.enumNames,
+		enumValues: config.enumValues,
+	}, nil
 }
 
 // FileWriter represents an HDF5 file opened for writing.
@@ -298,15 +455,13 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 	}
 
 	// Apply options
-	config := &datasetConfig{
-		stringSize: 0,
-	}
+	config := &datasetConfig{}
 	for _, opt := range opts {
 		opt(config)
 	}
 
 	// Get datatype info
-	dtInfo, err := getDatatypeInfo(dtype, config.stringSize)
+	dtInfo, err := getDatatypeInfo(dtype, config)
 	if err != nil {
 		return nil, fmt.Errorf("invalid datatype: %w", err)
 	}
@@ -321,16 +476,86 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 		return nil, fmt.Errorf("failed to allocate space for data: %w", err)
 	}
 
-	// Create datatype message
-	datatypeMsg := &core.DatatypeMessage{
-		Class:         dtInfo.class,
-		Version:       1,
-		Size:          dtInfo.size,
-		ClassBitField: dtInfo.classBitField,
-	}
-	datatypeData, err := core.EncodeDatatypeMessage(datatypeMsg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode datatype: %w", err)
+	// Create datatype message (handle advanced types specially)
+	var datatypeData []byte
+	switch dtInfo.class {
+	case core.DatatypeArray:
+		// Array datatype: encode base type + array dimensions
+		baseMsg := &core.DatatypeMessage{
+			Class:         dtInfo.baseType.class,
+			Version:       1,
+			Size:          dtInfo.baseType.size,
+			ClassBitField: dtInfo.baseType.classBitField,
+		}
+		baseData, err := core.EncodeDatatypeMessage(baseMsg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode array base type: %w", err)
+		}
+		datatypeData, err = core.EncodeArrayDatatypeMessage(baseData, dtInfo.arrayDims, dtInfo.size)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode array datatype: %w", err)
+		}
+
+	case core.DatatypeEnum:
+		// Enum datatype: encode base type + enum members
+		baseMsg := &core.DatatypeMessage{
+			Class:         dtInfo.baseType.class,
+			Version:       1,
+			Size:          dtInfo.baseType.size,
+			ClassBitField: dtInfo.baseType.classBitField,
+		}
+		baseData, err := core.EncodeDatatypeMessage(baseMsg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode enum base type: %w", err)
+		}
+
+		// Convert enum values to bytes
+		valueBytes := make([]byte, len(dtInfo.enumValues)*int(dtInfo.baseType.size))
+		for i, val := range dtInfo.enumValues {
+			offset := i * int(dtInfo.baseType.size)
+			switch dtInfo.baseType.size {
+			case 1:
+				valueBytes[offset] = byte(val)
+			case 2:
+				binary.LittleEndian.PutUint16(valueBytes[offset:], uint16(val)) //nolint:gosec // Safe: validated size
+			case 4:
+				binary.LittleEndian.PutUint32(valueBytes[offset:], uint32(val)) //nolint:gosec // Safe: validated size
+			case 8:
+				binary.LittleEndian.PutUint64(valueBytes[offset:], uint64(val)) //nolint:gosec // Safe: validated size
+			}
+		}
+
+		datatypeData, err = core.EncodeEnumDatatypeMessage(baseData, dtInfo.enumNames, valueBytes, dtInfo.size)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode enum datatype: %w", err)
+		}
+
+	case core.DatatypeOpaque:
+		// Opaque datatype: encode with tag
+		datatypeMsg := &core.DatatypeMessage{
+			Class:         dtInfo.class,
+			Version:       1,
+			Size:          dtInfo.size,
+			ClassBitField: 0,
+			Properties:    []byte(dtInfo.opaqueTag),
+		}
+		datatypeData, err = core.EncodeDatatypeMessage(datatypeMsg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode opaque datatype: %w", err)
+		}
+
+	default:
+		// Simple datatypes (fixed, float, string, reference)
+		datatypeMsg := &core.DatatypeMessage{
+			Class:         dtInfo.class,
+			Version:       1,
+			Size:          dtInfo.size,
+			ClassBitField: dtInfo.classBitField,
+		}
+		datatypeData, err = core.EncodeDatatypeMessage(datatypeMsg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode datatype: %w", err)
+		}
 	}
 
 	// Create dataspace message
@@ -391,13 +616,32 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 	}
 
 	// Create DatasetWriter
+	// For DatasetWriter, we need a simple DatatypeMessage for Write() operations
+	// Advanced types will use the base type for data encoding
+	var dsMsgForWriter *core.DatatypeMessage
+	if dtInfo.baseType != nil {
+		// For array/enum, use base type for data writing
+		dsMsgForWriter = &core.DatatypeMessage{
+			Class:   dtInfo.baseType.class,
+			Version: 1,
+			Size:    dtInfo.baseType.size,
+		}
+	} else {
+		// For simple types, use the datatype itself
+		dsMsgForWriter = &core.DatatypeMessage{
+			Class:   dtInfo.class,
+			Version: 1,
+			Size:    dtInfo.size,
+		}
+	}
+
 	dsw := &DatasetWriter{
 		fileWriter:  fw,
 		name:        name,
 		address:     headerAddress,
 		dataAddress: dataAddress,
 		dataSize:    dataSize,
-		dtype:       datatypeMsg,
+		dtype:       dsMsgForWriter,
 		dims:        dims,
 	}
 
@@ -476,6 +720,12 @@ func (dw *DatasetWriter) Write(data interface{}) error {
 		buf, err = encodeFloatData(data, dw.dtype.Size, dw.dataSize)
 	case core.DatatypeString:
 		buf, err = encodeStringData(data, dw.dtype.Size, dw.dataSize)
+	case core.DatatypeReference:
+		// References are fixed-size types (8 or 12 bytes)
+		buf, err = encodeFixedPointData(data, dw.dtype.Size, dw.dataSize)
+	case core.DatatypeOpaque:
+		// Opaque data is raw bytes
+		buf, err = encodeOpaqueData(data, dw.dataSize)
 	default:
 		return fmt.Errorf("unsupported datatype class for writing: %d", dw.dtype.Class)
 	}
@@ -700,6 +950,23 @@ func encodeStringData(data interface{}, elemSize uint32, expectedSize uint64) ([
 	return buf, nil
 }
 
+// encodeOpaqueData encodes opaque data (raw bytes).
+func encodeOpaqueData(data interface{}, expectedSize uint64) ([]byte, error) {
+	// Opaque data must be []byte
+	v, ok := data.([]byte)
+	if !ok {
+		return nil, fmt.Errorf("opaque data must be []byte, got %T", data)
+	}
+
+	// Validate size
+	if uint64(len(v)) != expectedSize {
+		return nil, fmt.Errorf("data size mismatch: expected %d bytes, got %d bytes", expectedSize, len(v))
+	}
+
+	// Return as-is (raw bytes)
+	return v, nil
+}
+
 // Close closes the dataset writer.
 // For MVP, this is a no-op (no per-dataset resources to release).
 func (dw *DatasetWriter) Close() error {
@@ -713,6 +980,11 @@ type DatasetOption func(*datasetConfig)
 // datasetConfig holds dataset creation options.
 type datasetConfig struct {
 	stringSize uint32
+	arrayDims  []uint64 // For array datatypes
+	enumNames  []string // For enum datatypes
+	enumValues []int64  // For enum datatypes
+	opaqueTag  string   // For opaque datatypes
+	opaqueSize uint32   // For opaque datatypes
 }
 
 // WithStringSize sets the fixed string size for String datasets.
@@ -724,6 +996,62 @@ type datasetConfig struct {
 func WithStringSize(size uint32) DatasetOption {
 	return func(cfg *datasetConfig) {
 		cfg.stringSize = size
+	}
+}
+
+// WithArrayDims sets the dimensions for Array datatypes.
+// This is required when creating an Array dataset.
+//
+// Array datatypes are fixed-size collections of a base type.
+// The dimensions specify the shape of each array element.
+//
+// Example:
+//
+//	// Dataset of shape [10] where each element is [3]int32
+//	ds, _ := fw.CreateDataset("/vectors", hdf5.ArrayInt32, []uint64{10}, hdf5.WithArrayDims([]uint64{3}))
+//
+//	// Dataset of shape [5] where each element is [2][3]float64 (2D array)
+//	ds, _ := fw.CreateDataset("/matrices", hdf5.ArrayFloat64, []uint64{5}, hdf5.WithArrayDims([]uint64{2, 3}))
+func WithArrayDims(dims []uint64) DatasetOption {
+	return func(cfg *datasetConfig) {
+		cfg.arrayDims = dims
+	}
+}
+
+// WithEnumValues sets the name-value mappings for Enum datatypes.
+// This is required when creating an Enum dataset.
+//
+// Enum datatypes map integer values to symbolic names.
+// Both names and values slices must have the same length.
+//
+// Example:
+//
+//	// Create enum for days of week (0=Monday, 1=Tuesday, etc.)
+//	names := []string{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
+//	values := []int64{0, 1, 2, 3, 4, 5, 6}
+//	ds, _ := fw.CreateDataset("/days", hdf5.EnumInt8, []uint64{100}, hdf5.WithEnumValues(names, values))
+func WithEnumValues(names []string, values []int64) DatasetOption {
+	return func(cfg *datasetConfig) {
+		cfg.enumNames = names
+		cfg.enumValues = values
+	}
+}
+
+// WithOpaqueTag sets the tag and size for Opaque datatypes.
+// This is required when creating an Opaque dataset.
+//
+// Opaque datatypes are uninterpreted byte sequences with a descriptive tag.
+// The tag describes the content (e.g., "JPEG image", "binary blob").
+// The size specifies the number of bytes per element.
+//
+// Example:
+//
+//	// Dataset of 10 JPEG images, each 1MB
+//	ds, _ := fw.CreateDataset("/images", hdf5.Opaque, []uint64{10}, hdf5.WithOpaqueTag("JPEG image", 1024*1024))
+func WithOpaqueTag(tag string, size uint32) DatasetOption {
+	return func(cfg *datasetConfig) {
+		cfg.opaqueTag = tag
+		cfg.opaqueSize = size
 	}
 }
 
