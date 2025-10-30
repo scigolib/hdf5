@@ -13,16 +13,17 @@ import (
 // Used by symbol tables to store object names.
 //
 // Format (HDF5 specification):
-//   Header (32 bytes for 8-byte addressing):
-//     - Signature: "HEAP" (4 bytes)
-//     - Version: 0 (1 byte)
-//     - Reserved: 0 (3 bytes)
-//     - Data segment size (size_t - 8 bytes)
-//     - Offset to head of free list (size_t - 8 bytes)
-//     - Data segment address (address_t - 8 bytes)
-//   Data segment:
-//     - Null-terminated strings, stored sequentially
-//     - Free blocks tracked by free list (not used in MVP)
+//
+//	Header (32 bytes for 8-byte addressing):
+//	  - Signature: "HEAP" (4 bytes)
+//	  - Version: 0 (1 byte)
+//	  - Reserved: 0 (3 bytes)
+//	  - Data segment size (size_t - 8 bytes)
+//	  - Offset to head of free list (size_t - 8 bytes)
+//	  - Data segment address (address_t - 8 bytes)
+//	Data segment:
+//	  - Null-terminated strings, stored sequentially
+//	  - Free blocks tracked by free list (not used in MVP)
 type LocalHeap struct {
 	// Reading fields
 	Data       []byte
@@ -30,7 +31,7 @@ type LocalHeap struct {
 	HeaderSize uint64
 
 	// Writing fields
-	DataSegmentSize     uint64 // Size of data segment
+	DataSegmentSize      uint64 // Size of data segment
 	OffsetToHeadFreeList uint64 // Offset to head of free list (MVP: always 1 = null)
 	DataSegmentAddress   uint64 // Address where data segment will be written
 	strings              []byte // Buffer for storing strings during construction
@@ -114,7 +115,7 @@ func NewLocalHeap(initialSize uint64) *LocalHeap {
 	}
 
 	return &LocalHeap{
-		DataSegmentSize:     initialSize,
+		DataSegmentSize:      initialSize,
 		OffsetToHeadFreeList: 1, // 1 = H5HL_FREE_NULL (no free list in MVP)
 		DataSegmentAddress:   0, // Will be set when heap is written
 		strings:              make([]byte, 0, initialSize),

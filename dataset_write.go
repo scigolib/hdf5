@@ -181,11 +181,24 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 	// Step 2: Create minimal root group
 	rootGroupHeader := core.NewMinimalRootGroupHeader()
 
-	// Allocate space for root group at offset 48 (after superblock)
-	rootGroupAddr := uint64(48)
-	rootGroupSize, err := rootGroupHeader.WriteTo(fw, rootGroupAddr)
+	// Calculate root group size (need to know before allocating)
+	// Minimal root group header size is fixed (see NewMinimalRootGroupHeader)
+	rootGroupSize := rootGroupHeader.Size()
+
+	// Allocate space for root group (this updates allocator's nextOffset)
+	rootGroupAddr, err := fw.Allocate(rootGroupSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate root group: %w", err)
+	}
+
+	// Write root group to allocated address
+	writtenSize, err := rootGroupHeader.WriteTo(fw, rootGroupAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to write root group: %w", err)
+	}
+
+	if writtenSize != rootGroupSize {
+		return nil, fmt.Errorf("root group size mismatch: expected %d, wrote %d", rootGroupSize, writtenSize)
 	}
 
 	// Step 3: Create Superblock v2

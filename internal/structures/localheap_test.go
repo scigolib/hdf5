@@ -794,10 +794,10 @@ func TestLocalHeap_WriteToAndRead(t *testing.T) {
 
 func TestLocalHeap_AddString_Errors(t *testing.T) {
 	tests := []struct {
-		name        string
-		heapSize    uint64
+		name         string
+		heapSize     uint64
 		stringsToAdd []string
-		expectError bool
+		expectError  bool
 	}{
 		{
 			name:         "exact fit",
