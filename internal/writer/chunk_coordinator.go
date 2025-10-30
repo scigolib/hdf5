@@ -10,11 +10,11 @@ import "fmt"
 // - Dataset data layout and chunk data extraction
 //
 // Key Concepts:
-// - Dataset dimensions: Total size of dataset in each dimension
-// - Chunk dimensions: Size of each chunk in each dimension
-// - Chunk coordinates: Scaled indices [dim0, dim1, ..., dimN]
-//   where coordinate[i] = element_index[i] / chunk_dim[i]
-// - Edge chunks: Partial chunks at dataset boundaries
+//   - Dataset dimensions: Total size of dataset in each dimension
+//   - Chunk dimensions: Size of each chunk in each dimension
+//   - Chunk coordinates: Scaled indices [dim0, dim1, ..., dimN]
+//     where coordinate[i] = element_index[i] / chunk_dim[i]
+//   - Edge chunks: Partial chunks at dataset boundaries
 //
 // Example (2D dataset):
 //

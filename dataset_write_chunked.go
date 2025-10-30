@@ -81,7 +81,22 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 		return nil, fmt.Errorf("failed to encode chunked layout: %w", err)
 	}
 
-	// 8. Create object header
+	// 8. Setup filter pipeline if configured
+	if config.pipeline != nil || config.enableShuffle {
+		// Create pipeline if needed
+		if config.pipeline == nil {
+			config.pipeline = writer.NewFilterPipeline()
+		}
+
+		// Add shuffle filter at beginning if requested
+		if config.enableShuffle {
+			// Element size from datatype
+			shuffleFilter := writer.NewShuffleFilter(dtInfo.size)
+			config.pipeline.AddFilterAtStart(shuffleFilter)
+		}
+	}
+
+	// 9. Create object header with optional filter pipeline
 	ohw := &core.ObjectHeaderWriter{
 		Version: 2,
 		Flags:   0, // Minimal flags
@@ -90,6 +105,19 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 			{Type: core.MsgDataspace, Data: dataspaceData},
 			{Type: core.MsgDataLayout, Data: layoutData},
 		},
+	}
+
+	// Add filter pipeline message if present
+	if config.pipeline != nil && !config.pipeline.IsEmpty() {
+		pipelineData, err := config.pipeline.EncodePipelineMessage()
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode filter pipeline: %w", err)
+		}
+
+		ohw.Messages = append(ohw.Messages, core.MessageWriter{
+			Type: core.MsgFilterPipeline,
+			Data: pipelineData,
+		})
 	}
 
 	// Calculate header size
@@ -151,6 +179,7 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 		isChunked:        true,
 		chunkCoordinator: chunkCoordinator,
 		chunkDims:        config.chunkDims,
+		pipeline:         config.pipeline, // Filter pipeline
 	}, nil
 }
 
@@ -192,13 +221,22 @@ func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 		// Extract chunk data
 		chunkData := dw.chunkCoordinator.ExtractChunkData(buf, coord, elemSize)
 
-		// Allocate space for chunk
+		// Apply filters to chunk (if pipeline configured)
+		if dw.pipeline != nil && !dw.pipeline.IsEmpty() {
+			filtered, err := dw.pipeline.Apply(chunkData)
+			if err != nil {
+				return fmt.Errorf("filter application failed for chunk %v: %w", coord, err)
+			}
+			chunkData = filtered
+		}
+
+		// Allocate space for chunk (filtered size may differ from original)
 		chunkAddr, err := dw.fileWriter.writer.Allocate(uint64(len(chunkData)))
 		if err != nil {
 			return fmt.Errorf("failed to allocate chunk %v: %w", coord, err)
 		}
 
-		// Write chunk data
+		// Write chunk data (filtered)
 		if err := dw.fileWriter.writer.WriteAtAddress(chunkData, chunkAddr); err != nil {
 			return fmt.Errorf("failed to write chunk %v: %w", coord, err)
 		}

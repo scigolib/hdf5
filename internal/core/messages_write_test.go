@@ -844,6 +844,7 @@ func TestEncodeAttributeMessage_RoundTrip(t *testing.T) {
 		})
 	}
 }
+
 // TestEncodeChunkedLayout tests encoding of chunked layout messages.
 func TestEncodeChunkedLayout(t *testing.T) {
 	sb := &Superblock{

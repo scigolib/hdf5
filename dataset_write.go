@@ -740,9 +740,10 @@ type DatasetWriter struct {
 	dataSize         uint64 // Total data size in bytes
 	dtype            *core.DatatypeMessage
 	dims             []uint64
-	isChunked        bool              // True if using chunked layout
+	isChunked        bool                     // True if using chunked layout
 	chunkCoordinator *writer.ChunkCoordinator // For chunked datasets
-	chunkDims        []uint64          // Chunk dimensions
+	chunkDims        []uint64                 // Chunk dimensions
+	pipeline         *writer.FilterPipeline   // Filter pipeline for chunked datasets
 }
 
 // Write writes data to the dataset.
@@ -1045,13 +1046,15 @@ type DatasetOption func(*datasetConfig)
 
 // datasetConfig holds dataset creation options.
 type datasetConfig struct {
-	stringSize uint32
-	arrayDims  []uint64 // For array datatypes
-	enumNames  []string // For enum datatypes
-	enumValues []int64  // For enum datatypes
-	opaqueTag  string   // For opaque datatypes
-	opaqueSize uint32   // For opaque datatypes
-	chunkDims  []uint64 // For chunked layout
+	stringSize    uint32
+	arrayDims     []uint64               // For array datatypes
+	enumNames     []string               // For enum datatypes
+	enumValues    []int64                // For enum datatypes
+	opaqueTag     string                 // For opaque datatypes
+	opaqueSize    uint32                 // For opaque datatypes
+	chunkDims     []uint64               // For chunked layout
+	pipeline      *writer.FilterPipeline // Filter pipeline for chunked datasets
+	enableShuffle bool                   // Add shuffle filter before compression
 }
 
 // WithStringSize sets the fixed string size for String datasets.
@@ -1135,6 +1138,95 @@ func WithOpaqueTag(tag string, size uint32) DatasetOption {
 func WithChunkDims(dims []uint64) DatasetOption {
 	return func(cfg *datasetConfig) {
 		cfg.chunkDims = dims
+	}
+}
+
+// WithGZIPCompression enables GZIP compression with specified level (1-9).
+// This option is only valid for chunked datasets (requires WithChunkDims).
+//
+// Compression levels:
+//
+//	1 = fastest compression, larger files
+//	6 = balanced (default if invalid level)
+//	9 = best compression, slower
+//
+// GZIP compression reduces storage size but adds CPU overhead during read/write.
+// Best used with repetitive or structured data.
+//
+// Example:
+//
+//	// Create compressed dataset with level 6 compression
+//	ds, _ := fw.CreateDataset("/data", hdf5.Int32, []uint64{1000},
+//	    hdf5.WithChunkDims([]uint64{100}),
+//	    hdf5.WithGZIPCompression(6))
+func WithGZIPCompression(level int) DatasetOption {
+	return func(cfg *datasetConfig) {
+		if cfg.pipeline == nil {
+			cfg.pipeline = writer.NewFilterPipeline()
+		}
+		cfg.pipeline.AddFilter(writer.NewGZIPFilter(level))
+	}
+}
+
+// WithShuffle enables byte shuffle filter (improves compression).
+// This option is only valid for chunked datasets (requires WithChunkDims).
+//
+// The shuffle filter reorders bytes to group similar values, significantly
+// improving compression ratios for numeric data (typically 2-10x better).
+//
+// Shuffle should be combined with compression (e.g., GZIP) to be effective.
+// It's automatically placed before compression in the filter pipeline.
+//
+// Best for:
+//   - Integer arrays with slowly changing values
+//   - Floating-point arrays with similar magnitudes
+//   - Multi-dimensional arrays with spatial locality
+//
+// Example:
+//
+//	// Create dataset with shuffle+compression for best compression
+//	ds, _ := fw.CreateDataset("/data", hdf5.Float64, []uint64{1000},
+//	    hdf5.WithChunkDims([]uint64{100}),
+//	    hdf5.WithShuffle(),
+//	    hdf5.WithGZIPCompression(9))
+func WithShuffle() DatasetOption {
+	return func(cfg *datasetConfig) {
+		if cfg.pipeline == nil {
+			cfg.pipeline = writer.NewFilterPipeline()
+		}
+		// Shuffle will be inserted at the beginning of pipeline during dataset creation
+		cfg.enableShuffle = true
+	}
+}
+
+// WithFletcher32 enables Fletcher32 checksum for data integrity verification.
+// This option is only valid for chunked datasets (requires WithChunkDims).
+//
+// The Fletcher32 filter adds a 4-byte checksum to each chunk, allowing detection
+// of data corruption during storage or transmission.
+//
+// Overhead:
+//   - Storage: +4 bytes per chunk (minimal)
+//   - CPU: Low (faster than CRC32)
+//
+// Use when:
+//   - Data integrity is critical
+//   - Detecting corruption is more important than preventing it
+//   - Working with unreliable storage or network
+//
+// Example:
+//
+//	// Create dataset with compression and checksum
+//	ds, _ := fw.CreateDataset("/data", hdf5.Int32, []uint64{1000},
+//	    hdf5.WithChunkDims([]uint64{100}),
+//	    hdf5.WithGZIPCompression(6),
+//	    hdf5.WithFletcher32())
+func WithFletcher32() DatasetOption {
+	return func(cfg *datasetConfig) {
+		if cfg.pipeline == nil {
+			cfg.pipeline = writer.NewFilterPipeline()
+		}
+		cfg.pipeline.AddFilter(writer.NewFletcher32Filter())
 	}
 }
 

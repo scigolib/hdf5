@@ -456,8 +456,8 @@ func TestExtractChunkData(t *testing.T) {
 		// 3D indexing: index = i*3*4 + j*4 + k
 		// Chunk [0,0,0] covers i=0-1, j=0-1, k=0-1
 		expected := []uint32{
-			0, 1,   // i=0, j=0, k=0-1
-			4, 5,   // i=0, j=1, k=0-1
+			0, 1, // i=0, j=0, k=0-1
+			4, 5, // i=0, j=1, k=0-1
 			12, 13, // i=1, j=0, k=0-1
 			16, 17, // i=1, j=1, k=0-1
 		}

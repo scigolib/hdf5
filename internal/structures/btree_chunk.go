@@ -158,8 +158,8 @@ func (w *ChunkBTreeWriter) WriteToFile(writer Writer, allocator Allocator) (uint
 	// 2. Build node
 	node := &ChunkBTreeNode{
 		Signature:    [4]byte{'T', 'R', 'E', 'E'},
-		NodeType:     1,  // Raw Data Chunk (NOT 0 like groups!)
-		NodeLevel:    0,  // Leaf
+		NodeType:     1, // Raw Data Chunk (NOT 0 like groups!)
+		NodeLevel:    0, // Leaf
 		EntriesUsed:  uint16(len(w.entries)),
 		LeftSibling:  0xFFFFFFFFFFFFFFFF, // Undefined (no siblings)
 		RightSibling: 0xFFFFFFFFFFFFFFFF, // Undefined (no siblings)
@@ -209,6 +209,7 @@ func (w *ChunkBTreeWriter) WriteToFile(writer Writer, allocator Allocator) (uint
 // - Header: 4 (sig) + 1 (type) + 1 (level) + 2 (entries) + 8 (left) + 8 (right) = 24 bytes
 // - Keys: (entries+1) * (dim*8 + 4) bytes
 //   - Each key: dim * uint64 (coordinates) + uint32 (filter mask)
+//
 // - Children: entries * 8 bytes
 //   - Each child: uint64 (chunk address)
 //
@@ -216,8 +217,8 @@ func (w *ChunkBTreeWriter) WriteToFile(writer Writer, allocator Allocator) (uint
 // Future versions may support variable offsetSize from superblock.
 func serializeChunkBTreeNode(node *ChunkBTreeNode, dimensionality int) []byte {
 	// Size calculation
-	keySize := dimensionality*8 + 4        // N coords (8 bytes each) + filter mask (4 bytes)
-	keysSize := len(node.Keys) * keySize   // All keys
+	keySize := dimensionality*8 + 4          // N coords (8 bytes each) + filter mask (4 bytes)
+	keysSize := len(node.Keys) * keySize     // All keys
 	childrenSize := len(node.ChildAddrs) * 8 // All children (8 bytes each)
 	totalSize := 24 + keysSize + childrenSize
 
