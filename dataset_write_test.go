@@ -152,7 +152,7 @@ func TestDatasetWrite_Int32(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, info.Size(), int64(100), "file should have data written")
 
-	// TODO: Verify by reading back (requires dataset to be linked in group - Component 3)
+	// NOTE: Reading back verification will be added once Component 3 (Groups) is complete.
 	// For now, we've verified data was written to file
 }
 
