@@ -335,6 +335,116 @@ func EncodeSymbolTableMessage(btreeAddr, heapAddr uint64, offsetSize, lengthSize
 	return buf
 }
 
+// EncodeAttributeMessage encodes an Attribute message for compact storage.
+// This creates a version 3 attribute message (HDF5 1.8+).
+//
+// Parameters:
+//   - name: Attribute name (null-terminated in encoded form)
+//   - datatype: Datatype message for the attribute value
+//   - dataspace: Dataspace message for the attribute value
+//   - data: Raw attribute data bytes
+//
+// Returns:
+//   - Encoded message bytes
+//   - Error if encoding fails
+//
+// Format (version 3):
+//   - Version: 1 byte (3)
+//   - Flags: 1 byte (0 for compact, no special features)
+//   - Name size: 2 bytes (includes null terminator)
+//   - Datatype size: 2 bytes
+//   - Dataspace size: 2 bytes
+//   - Name encoding: 1 byte (0=ASCII, 1=UTF-8)
+//   - Name: variable (null-terminated)
+//   - Datatype: variable (encoded datatype message)
+//   - Dataspace: variable (encoded dataspace message)
+//   - Data: variable (actual attribute value)
+//
+// Reference: HDF5 spec III.M (Attribute Message)
+// C Reference: H5Oattr.c - H5O__attr_encode()
+func EncodeAttributeMessage(name string, datatype *DatatypeMessage, dataspace *DataspaceMessage, data []byte) ([]byte, error) {
+	// Validate inputs
+	if name == "" {
+		return nil, fmt.Errorf("attribute name cannot be empty")
+	}
+	if datatype == nil {
+		return nil, fmt.Errorf("datatype cannot be nil")
+	}
+	if dataspace == nil {
+		return nil, fmt.Errorf("dataspace cannot be nil")
+	}
+
+	// Encode datatype and dataspace messages
+	datatypeBytes, err := EncodeDatatypeMessage(datatype)
+	if err != nil {
+		return nil, fmt.Errorf("encode datatype: %w", err)
+	}
+
+	dataspaceBytes, err := EncodeDataspaceMessage(dataspace.Dimensions, dataspace.MaxDims)
+	if err != nil {
+		return nil, fmt.Errorf("encode dataspace: %w", err)
+	}
+
+	// Calculate sizes
+	// Name size includes null terminator
+	nameSize := uint16(len(name) + 1)
+	datatypeSize := uint16(len(datatypeBytes))
+	dataspaceSize := uint16(len(dataspaceBytes))
+
+	// Calculate total message size
+	// Header: version(1) + flags(1) + name_size(2) + dtype_size(2) + dspace_size(2) + name_encoding(1) = 9 bytes
+	headerSize := 9
+	messageSize := headerSize + int(nameSize) + len(datatypeBytes) + len(dataspaceBytes) + len(data)
+
+	buf := make([]byte, messageSize)
+	offset := 0
+
+	// Version 3 (HDF5 1.8+)
+	buf[offset] = 3
+	offset++
+
+	// Flags (0 = compact storage, no special features)
+	buf[offset] = 0
+	offset++
+
+	// Name size (includes null terminator)
+	binary.LittleEndian.PutUint16(buf[offset:offset+2], nameSize)
+	offset += 2
+
+	// Datatype size
+	binary.LittleEndian.PutUint16(buf[offset:offset+2], datatypeSize)
+	offset += 2
+
+	// Dataspace size
+	binary.LittleEndian.PutUint16(buf[offset:offset+2], dataspaceSize)
+	offset += 2
+
+	// Name encoding (0 = ASCII)
+	buf[offset] = 0
+	offset++
+
+	// Name (null-terminated)
+	copy(buf[offset:], []byte(name))
+	offset += len(name)
+	buf[offset] = 0 // null terminator
+	offset++
+
+	// Datatype message
+	copy(buf[offset:], datatypeBytes)
+	offset += len(datatypeBytes)
+
+	// Dataspace message
+	copy(buf[offset:], dataspaceBytes)
+	offset += len(dataspaceBytes)
+
+	// Attribute data
+	if len(data) > 0 {
+		copy(buf[offset:], data)
+	}
+
+	return buf, nil
+}
+
 // writeUint64 writes a uint64 value to buffer using variable-sized encoding.
 // This is a helper for encoding addresses and sizes with different byte widths.
 func writeUint64(buf []byte, value uint64, size int, endianness binary.ByteOrder) {

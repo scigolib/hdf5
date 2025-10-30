@@ -536,3 +536,311 @@ func TestWriteUint64(t *testing.T) {
 		})
 	}
 }
+
+func TestEncodeAttributeMessage(t *testing.T) {
+	tests := []struct {
+		name      string
+		attrName  string
+		datatype  *DatatypeMessage
+		dataspace *DataspaceMessage
+		data      []byte
+		wantErr   bool
+		validate  func(t *testing.T, encoded []byte)
+	}{
+		{
+			name:     "scalar int32 attribute",
+			attrName: "version",
+			datatype: &DatatypeMessage{
+				Class:         DatatypeFixed,
+				Size:          4,
+				ClassBitField: 0, // little-endian, unsigned
+			},
+			dataspace: &DataspaceMessage{
+				Dimensions: []uint64{1}, // scalar (HDF5 uses [1] for scalars)
+				MaxDims:    nil,
+			},
+			data:    []byte{0x2A, 0x00, 0x00, 0x00}, // 42 in little-endian
+			wantErr: false,
+			validate: func(t *testing.T, encoded []byte) {
+				// Parse header
+				offset := 0
+
+				// Version should be 3
+				assert.Equal(t, byte(3), encoded[offset])
+				offset++
+
+				// Flags should be 0
+				assert.Equal(t, byte(0), encoded[offset])
+				offset++
+
+				// Name size (includes null terminator: "version" = 7 + 1 = 8)
+				nameSize := binary.LittleEndian.Uint16(encoded[offset : offset+2])
+				assert.Equal(t, uint16(8), nameSize)
+				offset += 2
+
+				// Datatype size (should be 12 bytes for int32)
+				datatypeSize := binary.LittleEndian.Uint16(encoded[offset : offset+2])
+				assert.Equal(t, uint16(12), datatypeSize)
+				offset += 2
+
+				// Dataspace size (should be 16 bytes for scalar: 8 header + 8 for one dimension)
+				dataspaceSize := binary.LittleEndian.Uint16(encoded[offset : offset+2])
+				assert.Equal(t, uint16(16), dataspaceSize)
+				offset += 2
+
+				// Name encoding (should be 0 for ASCII)
+				assert.Equal(t, byte(0), encoded[offset])
+				offset++
+
+				// Name (null-terminated)
+				name := string(encoded[offset : offset+7])
+				assert.Equal(t, "version", name)
+				offset += 7
+				assert.Equal(t, byte(0), encoded[offset]) // null terminator
+				offset++
+
+				// Skip datatype (12 bytes)
+				offset += 12
+
+				// Skip dataspace (16 bytes for scalar)
+				offset += 16
+
+				// Verify data
+				assert.Equal(t, []byte{0x2A, 0x00, 0x00, 0x00}, encoded[offset:offset+4])
+			},
+		},
+		{
+			name:     "string attribute",
+			attrName: "units",
+			datatype: &DatatypeMessage{
+				Class:         DatatypeString,
+				Size:          10, // Fixed-length string (10 chars)
+				ClassBitField: 0,
+			},
+			dataspace: &DataspaceMessage{
+				Dimensions: []uint64{1}, // scalar (HDF5 uses [1] for scalars)
+				MaxDims:    nil,
+			},
+			data:    []byte("Celsius\x00\x00\x00"), // Padded to 10 chars
+			wantErr: false,
+			validate: func(t *testing.T, encoded []byte) {
+				// Parse header
+				offset := 0
+
+				// Version
+				assert.Equal(t, byte(3), encoded[offset])
+				offset++
+
+				// Flags
+				assert.Equal(t, byte(0), encoded[offset])
+				offset++
+
+				// Name size: "units" = 5 + 1 = 6
+				nameSize := binary.LittleEndian.Uint16(encoded[offset : offset+2])
+				assert.Equal(t, uint16(6), nameSize)
+				offset += 2
+
+				// Datatype size (9 bytes for string)
+				datatypeSize := binary.LittleEndian.Uint16(encoded[offset : offset+2])
+				assert.Equal(t, uint16(9), datatypeSize)
+				offset += 2
+
+				// Dataspace size (16 bytes for scalar: 8 header + 8 for one dimension)
+				dataspaceSize := binary.LittleEndian.Uint16(encoded[offset : offset+2])
+				assert.Equal(t, uint16(16), dataspaceSize)
+				offset += 2
+
+				// Name encoding
+				assert.Equal(t, byte(0), encoded[offset])
+				offset++
+
+				// Name
+				name := string(encoded[offset : offset+5])
+				assert.Equal(t, "units", name)
+				offset += 5
+				assert.Equal(t, byte(0), encoded[offset])
+				offset++
+
+				// Skip datatype and dataspace
+				offset += 9 + 16 // datatype 9, dataspace 16 for scalar
+
+				// Verify data
+				assert.Equal(t, []byte("Celsius\x00\x00\x00"), encoded[offset:offset+10])
+			},
+		},
+		{
+			name:     "array attribute float64",
+			attrName: "calibration",
+			datatype: &DatatypeMessage{
+				Class:         DatatypeFloat,
+				Size:          8,
+				ClassBitField: 0,
+			},
+			dataspace: &DataspaceMessage{
+				Dimensions: []uint64{2}, // 1D array with 2 elements
+				MaxDims:    nil,
+			},
+			data:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x3F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // [1.0, 0.0]
+			wantErr: false,
+			validate: func(t *testing.T, encoded []byte) {
+				// Just verify basic structure
+				offset := 0
+
+				// Version
+				assert.Equal(t, byte(3), encoded[offset])
+				offset++
+
+				// Flags
+				assert.Equal(t, byte(0), encoded[offset])
+				offset++
+
+				// Name size: "calibration" = 11 + 1 = 12
+				nameSize := binary.LittleEndian.Uint16(encoded[offset : offset+2])
+				assert.Equal(t, uint16(12), nameSize)
+
+				// Total message should contain:
+				// - Header: 9 bytes
+				// - Name: 12 bytes
+				// - Datatype: 20 bytes (float64)
+				// - Dataspace: 16 bytes (1D with 1 dim)
+				// - Data: 16 bytes (2 * 8 bytes)
+				expectedSize := 9 + 12 + 20 + 16 + 16
+				assert.Equal(t, expectedSize, len(encoded))
+			},
+		},
+		{
+			name:     "empty name error",
+			attrName: "",
+			datatype: &DatatypeMessage{
+				Class: DatatypeFixed,
+				Size:  4,
+			},
+			dataspace: &DataspaceMessage{
+				Dimensions: []uint64{},
+			},
+			data:    []byte{0x00, 0x00, 0x00, 0x00},
+			wantErr: true,
+		},
+		{
+			name:     "nil datatype error",
+			attrName: "test",
+			datatype: nil,
+			dataspace: &DataspaceMessage{
+				Dimensions: []uint64{},
+			},
+			data:    []byte{0x00},
+			wantErr: true,
+		},
+		{
+			name:     "nil dataspace error",
+			attrName: "test",
+			datatype: &DatatypeMessage{
+				Class: DatatypeFixed,
+				Size:  4,
+			},
+			dataspace: nil,
+			data:      []byte{0x00},
+			wantErr:   true,
+		},
+		{
+			name:     "empty data is valid",
+			attrName: "empty_attr",
+			datatype: &DatatypeMessage{
+				Class:         DatatypeFixed,
+				Size:          4,
+				ClassBitField: 0,
+			},
+			dataspace: &DataspaceMessage{
+				Dimensions: []uint64{1}, // scalar (HDF5 uses [1] for scalars)
+			},
+			data:    []byte{}, // No data (unusual but valid)
+			wantErr: false,
+			validate: func(t *testing.T, encoded []byte) {
+				// Should still encode valid message, just with no data section
+				assert.True(t, len(encoded) > 0)
+
+				// Version should be 3
+				assert.Equal(t, byte(3), encoded[0])
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := EncodeAttributeMessage(tt.attrName, tt.datatype, tt.dataspace, tt.data)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, encoded)
+
+			if tt.validate != nil {
+				tt.validate(t, encoded)
+			}
+		})
+	}
+}
+
+func TestEncodeAttributeMessage_RoundTrip(t *testing.T) {
+	// Test that we can encode an attribute and then decode it back
+	tests := []struct {
+		name      string
+		attrName  string
+		datatype  *DatatypeMessage
+		dataspace *DataspaceMessage
+		data      []byte
+	}{
+		{
+			name:     "int32 scalar",
+			attrName: "test_int",
+			datatype: &DatatypeMessage{
+				Class:         DatatypeFixed,
+				Size:          4,
+				ClassBitField: 0,
+			},
+			dataspace: &DataspaceMessage{
+				Dimensions: []uint64{1}, // scalar (HDF5 uses [1] for scalars)
+				MaxDims:    nil,
+			},
+			data: []byte{0x01, 0x02, 0x03, 0x04},
+		},
+		{
+			name:     "float64 array",
+			attrName: "test_array",
+			datatype: &DatatypeMessage{
+				Class:         DatatypeFloat,
+				Size:          8,
+				ClassBitField: 0,
+			},
+			dataspace: &DataspaceMessage{
+				Dimensions: []uint64{3},
+				MaxDims:    nil,
+			},
+			data: make([]byte, 24), // 3 * 8 bytes
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Encode
+			encoded, err := EncodeAttributeMessage(tt.attrName, tt.datatype, tt.dataspace, tt.data)
+			require.NoError(t, err)
+			require.NotNil(t, encoded)
+
+			// Decode (using existing ParseAttributeMessage)
+			decoded, err := ParseAttributeMessage(encoded, binary.LittleEndian)
+			require.NoError(t, err)
+			require.NotNil(t, decoded)
+
+			// Verify round-trip
+			assert.Equal(t, tt.attrName, decoded.Name)
+			assert.Equal(t, tt.datatype.Class, decoded.Datatype.Class)
+			assert.Equal(t, tt.datatype.Size, decoded.Datatype.Size)
+			assert.Equal(t, len(tt.dataspace.Dimensions), len(decoded.Dataspace.Dimensions))
+			assert.Equal(t, tt.data, decoded.Data)
+		})
+	}
+}
