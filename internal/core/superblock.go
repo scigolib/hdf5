@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 
 	"github.com/scigolib/hdf5/internal/utils"
@@ -204,4 +205,89 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 	}
 
 	return sb, nil
+}
+
+// WriteTo writes the superblock to the writer at offset 0.
+// For MVP (v0.11.0-beta), only superblock v2 is supported for writing.
+//
+// Superblock v2 format (48 bytes):
+//
+//	Bytes 0-7:   Signature (\x89HDF\r\n\x1a\n)
+//	Byte 8:      Version (2)
+//	Byte 9:      Size of Offsets (8 bytes)
+//	Byte 10:     Size of Lengths (8 bytes)
+//	Byte 11:     File Consistency Flags (0)
+//	Bytes 12-19: Base Address (typically 0)
+//	Bytes 20-27: Superblock Extension Address (UNDEF if none)
+//	Bytes 28-35: End-of-File Address (file size)
+//	Bytes 36-43: Root Group Object Header Address
+//	Bytes 44-47: Superblock Checksum (CRC32)
+//
+// Parameters:
+//   - w: Writer (typically a FileWriter)
+//   - eofAddress: Current end-of-file address
+//
+// Returns error if write fails or if superblock version is not 2.
+func (sb *Superblock) WriteTo(w io.WriterAt, eofAddress uint64) error {
+	// For MVP, only support writing v2 superblocks
+	if sb.Version != Version2 {
+		return fmt.Errorf("only superblock version 2 is supported for writing, got version %d", sb.Version)
+	}
+
+	// Validate required fields
+	if sb.OffsetSize != 8 || sb.LengthSize != 8 {
+		return fmt.Errorf("only 8-byte offsets and lengths are supported for writing, got offset=%d, length=%d",
+			sb.OffsetSize, sb.LengthSize)
+	}
+
+	// Allocate buffer for superblock v2 (48 bytes)
+	buf := make([]byte, 48)
+
+	// Bytes 0-7: Signature
+	copy(buf[0:8], Signature)
+
+	// Byte 8: Version 2
+	buf[8] = 2
+
+	// Byte 9: Size of offsets (8 bytes)
+	buf[9] = 8
+
+	// Byte 10: Size of lengths (8 bytes)
+	buf[10] = 8
+
+	// Byte 11: File consistency flags (0 for now)
+	buf[11] = 0
+
+	// Bytes 12-19: Base address (typically 0)
+	binary.LittleEndian.PutUint64(buf[12:20], sb.BaseAddress)
+
+	// Bytes 20-27: Superblock extension address (UNDEF if none)
+	// UNDEF is represented as 0xFFFFFFFFFFFFFFFF
+	superExt := sb.SuperExtension
+	if superExt == 0 {
+		superExt = 0xFFFFFFFFFFFFFFFF // UNDEF
+	}
+	binary.LittleEndian.PutUint64(buf[20:28], superExt)
+
+	// Bytes 28-35: End-of-file address
+	binary.LittleEndian.PutUint64(buf[28:36], eofAddress)
+
+	// Bytes 36-43: Root group object header address
+	binary.LittleEndian.PutUint64(buf[36:44], sb.RootGroup)
+
+	// Bytes 44-47: Superblock checksum (CRC32 of bytes 0-43)
+	checksum := crc32.ChecksumIEEE(buf[0:44])
+	binary.LittleEndian.PutUint32(buf[44:48], checksum)
+
+	// Write superblock at offset 0
+	n, err := w.WriteAt(buf, 0)
+	if err != nil {
+		return fmt.Errorf("failed to write superblock: %w", err)
+	}
+
+	if n != 48 {
+		return fmt.Errorf("incomplete superblock write: wrote %d bytes, expected 48", n)
+	}
+
+	return nil
 }
