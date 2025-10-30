@@ -587,6 +587,11 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 		opt(config)
 	}
 
+	// Check if chunked layout requested
+	if len(config.chunkDims) > 0 {
+		return fw.createChunkedDataset(name, dtype, dims, config)
+	}
+
 	// Get datatype info
 	dtInfo, err := getDatatypeInfo(dtype, config)
 	if err != nil {
@@ -622,6 +627,7 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 		dataSize,
 		dataAddress,
 		fw.file.sb,
+		nil, // No chunk dimensions for contiguous layout
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode layout: %w", err)
@@ -727,13 +733,16 @@ func calculateObjectHeaderSize(ohw *core.ObjectHeaderWriter) (uint64, error) {
 
 // DatasetWriter provides write access to a dataset.
 type DatasetWriter struct {
-	fileWriter  *FileWriter
-	name        string
-	address     uint64 // Object header address
-	dataAddress uint64 // Data storage address
-	dataSize    uint64 // Total data size in bytes
-	dtype       *core.DatatypeMessage
-	dims        []uint64
+	fileWriter       *FileWriter
+	name             string
+	address          uint64 // Object header address
+	dataAddress      uint64 // Data storage address (contiguous) or B-tree address (chunked)
+	dataSize         uint64 // Total data size in bytes
+	dtype            *core.DatatypeMessage
+	dims             []uint64
+	isChunked        bool              // True if using chunked layout
+	chunkCoordinator *writer.ChunkCoordinator // For chunked datasets
+	chunkDims        []uint64          // Chunk dimensions
 }
 
 // Write writes data to the dataset.
@@ -791,7 +800,12 @@ func (dw *DatasetWriter) Write(data interface{}) error {
 		return fmt.Errorf("data size mismatch: expected %d bytes, got %d bytes", dw.dataSize, len(buf))
 	}
 
-	// Write data to file
+	// Handle chunked vs contiguous layout
+	if dw.isChunked {
+		return dw.writeChunkedData(buf)
+	}
+
+	// Write data to file (contiguous layout)
 	if err := dw.fileWriter.writer.WriteAtAddress(buf, dw.dataAddress); err != nil {
 		return fmt.Errorf("failed to write data: %w", err)
 	}
@@ -1037,6 +1051,7 @@ type datasetConfig struct {
 	enumValues []int64  // For enum datatypes
 	opaqueTag  string   // For opaque datatypes
 	opaqueSize uint32   // For opaque datatypes
+	chunkDims  []uint64 // For chunked layout
 }
 
 // WithStringSize sets the fixed string size for String datasets.
@@ -1104,6 +1119,22 @@ func WithOpaqueTag(tag string, size uint32) DatasetOption {
 	return func(cfg *datasetConfig) {
 		cfg.opaqueTag = tag
 		cfg.opaqueSize = size
+	}
+}
+
+// WithChunkDims enables chunked storage with specified chunk dimensions.
+// When specified, the dataset will use chunked layout instead of contiguous.
+//
+// Chunk dimensions must match dataset rank and be > 0 in all dimensions.
+// Chunks should be chosen for optimal I/O patterns (typical: 10KB-1MB per chunk).
+//
+// Example:
+//
+//	// 2D dataset 1000x2000, chunked as 100x200
+//	ds, _ := fw.CreateDataset("/data", hdf5.Float64, []uint64{1000, 2000}, hdf5.WithChunkDims([]uint64{100, 200}))
+func WithChunkDims(dims []uint64) DatasetOption {
+	return func(cfg *datasetConfig) {
+		cfg.chunkDims = dims
 	}
 }
 
