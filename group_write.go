@@ -6,6 +6,7 @@ import (
 
 	"github.com/scigolib/hdf5/internal/core"
 	"github.com/scigolib/hdf5/internal/structures"
+	"github.com/scigolib/hdf5/internal/writer"
 )
 
 // validateGroupPath validates group path is not empty, starts with '/', and is not root.
@@ -71,8 +72,11 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, error) {
 	return heapAddr, btreeAddr, nil
 }
 
-// CreateGroup creates a new group in the HDF5 file.
+// CreateGroup creates a new empty group in the HDF5 file.
 // Groups organize datasets and other groups in a hierarchical structure.
+//
+// This method creates an empty group using symbol table format (old HDF5 format).
+// For groups with many links, consider using CreateDenseGroup() or CreateGroupWithLinks().
 //
 // Parameters:
 //   - path: Group path (must start with "/", e.g., "/data" or "/data/experiments")
@@ -284,4 +288,186 @@ func (fw *FileWriter) readLocalHeap(addr uint64) (*structures.LocalHeap, error) 
 func (fw *FileWriter) readSymbolTableNode(addr uint64) (*structures.SymbolTableNode, error) {
 	// Use the existing ParseSymbolTableNode function from structures package
 	return structures.ParseSymbolTableNode(fw.writer, addr, fw.file.sb)
+}
+
+// CreateDenseGroup creates new dense group (HDF5 1.8+ format).
+//
+// Dense groups are more efficient for large numbers of links (>8).
+// They use fractal heap + B-tree v2 instead of symbol table.
+//
+// Parameters:
+//   - name: Group name (must start with "/")
+//   - links: Map of link_name → target_path
+//
+// Returns:
+//   - error: Non-nil if creation fails
+//
+// Example:
+//
+//	err := fw.CreateDenseGroup("/large_group", map[string]string{
+//	    "dataset1": "/data/dataset1",
+//	    "dataset2": "/data/dataset2",
+//	    // ... many links
+//	})
+//
+// Reference: H5Gcreate.c - H5Gcreate2().
+func (fw *FileWriter) CreateDenseGroup(name string, links map[string]string) error {
+	// Validate name
+	if !strings.HasPrefix(name, "/") {
+		return fmt.Errorf("group name must start with /: %s", name)
+	}
+
+	// Create DenseGroupWriter
+	dgw := writer.NewDenseGroupWriter(name)
+
+	// Add all links
+	for linkName, targetPath := range links {
+		// Resolve target path to object header address
+		targetAddr, err := fw.resolveObjectAddress(targetPath)
+		if err != nil {
+			return fmt.Errorf("failed to resolve target %s: %w", targetPath, err)
+		}
+
+		err = dgw.AddLink(linkName, targetAddr)
+		if err != nil {
+			return fmt.Errorf("failed to add link %s: %w", linkName, err)
+		}
+	}
+
+	// Write dense group
+	ohAddr, err := dgw.WriteToFile(fw.writer, fw.writer.Allocator(), fw.file.sb)
+	if err != nil {
+		return fmt.Errorf("failed to write dense group: %w", err)
+	}
+
+	// Link to parent (root group for MVP)
+	parent, childName := parsePath(name)
+	if parent != "" && parent != "/" {
+		return fmt.Errorf("nested groups not yet supported in MVP, parent must be root (got parent %q)", parent)
+	}
+
+	if err := fw.linkToParent(parent, childName, ohAddr); err != nil {
+		return fmt.Errorf("failed to link to parent: %w", err)
+	}
+
+	return nil
+}
+
+// resolveObjectAddress resolves object path to file address.
+//
+// This is a helper for link creation - looks up the target object's
+// address in the file by its path.
+//
+// For MVP: Only supports root-level objects (direct lookup in root group).
+// Future: Full path resolution with nested groups.
+//
+// Parameters:
+//   - path: Object path (e.g., "/data/dataset1" or "/dataset1")
+//
+// Returns:
+//   - uint64: File address of object header
+//   - error: Non-nil if object not found
+func (fw *FileWriter) resolveObjectAddress(path string) (uint64, error) {
+	// For MVP: only support root-level paths
+	if path == "/" {
+		return fw.rootGroupAddr, nil
+	}
+
+	if !strings.HasPrefix(path, "/") {
+		return 0, fmt.Errorf("path must start with /: %s", path)
+	}
+
+	// Parse path
+	parent, name := parsePath(path)
+
+	// For MVP: only root-level objects supported
+	if parent != "" && parent != "/" {
+		return 0, fmt.Errorf("nested paths not yet supported in MVP (got %q)", path)
+	}
+
+	// Read root group's symbol table to find the object
+	stNode, err := fw.readSymbolTableNode(fw.rootStNodeAddr)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read symbol table: %w", err)
+	}
+
+	heap, err := fw.readLocalHeap(fw.rootHeapAddr)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read local heap: %w", err)
+	}
+
+	// Search for object in symbol table
+	for _, entry := range stNode.Entries {
+		// Get link name from heap
+		linkName, err := heap.GetString(entry.LinkNameOffset)
+		if err != nil {
+			continue
+		}
+
+		if linkName == name {
+			return entry.ObjectAddress, nil
+		}
+	}
+
+	return 0, fmt.Errorf("object not found: %s", path)
+}
+
+// Dense group threshold (HDF5 default: switch to dense when >8 links).
+const denseGroupThreshold = 8
+
+// CreateGroupWithLinks creates group with automatic format selection.
+//
+// This method automatically chooses the most efficient storage format:
+//   - Symbol table (old format) for ≤8 links (compact)
+//   - Dense format (new format) for >8 links (scalable)
+//
+// This matches HDF5 1.8+ behavior: start compact, use dense when needed.
+//
+// Parameters:
+//   - name: Group name (must start with "/")
+//   - links: Map of link_name → target_path (can be empty)
+//
+// Returns:
+//   - error: Non-nil if creation fails
+//
+// Example:
+//
+//	// Small group (will use symbol table)
+//	fw.CreateGroupWithLinks("/small", map[string]string{
+//	    "data1": "/dataset1",
+//	    "data2": "/dataset2",
+//	})
+//
+//	// Large group (will use dense format)
+//	largeLinks := make(map[string]string)
+//	for i := 0; i < 100; i++ {
+//	    largeLinks[fmt.Sprintf("link%d", i)] = fmt.Sprintf("/dataset%d", i)
+//	}
+//	fw.CreateGroupWithLinks("/large", largeLinks)
+//
+// Reference: H5Gint.c - H5G_convert_to_dense().
+func (fw *FileWriter) CreateGroupWithLinks(name string, links map[string]string) error {
+	if len(links) > denseGroupThreshold {
+		// Use dense format for large groups
+		return fw.CreateDenseGroup(name, links)
+	}
+
+	// Use symbol table format for small groups
+	// Create empty group first
+	if err := fw.CreateGroup(name); err != nil {
+		return err
+	}
+
+	// For MVP: linking is handled by CreateDenseGroup for dense groups
+	// For symbol table groups, links would need to be added via linkToParent
+	// This is a limitation of the MVP - symbol table groups can be created empty,
+	// but adding links after creation requires manual linkToParent calls
+
+	// Future: implement addLinkToGroup() to add links to existing symbol table groups
+
+	if len(links) > 0 {
+		return fmt.Errorf("adding links to symbol table groups not yet supported in MVP (group %s has %d links)", name, len(links))
+	}
+
+	return nil
 }
