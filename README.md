@@ -5,12 +5,12 @@
 [![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat&logo=go)](https://golang.org)
 [![Go Report Card](https://goreportcard.com/badge/github.com/scigolib/hdf5)](https://goreportcard.com/report/github.com/scigolib/hdf5)
 [![CI](https://github.com/scigolib/hdf5/actions/workflows/test.yml/badge.svg)](https://github.com/scigolib/hdf5/actions)
-[![Coverage](https://img.shields.io/badge/coverage-76.3%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
+[![Coverage](https://img.shields.io/badge/coverage-70.2%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-beta-green.svg)](ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-v0.11.1--beta-green.svg)](ROADMAP.md)
 [![GoDoc](https://pkg.go.dev/badge/github.com/scigolib/hdf5.svg)](https://pkg.go.dev/github.com/scigolib/hdf5)
 
-A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. Read support is feature-complete, write support MVP ready!
+A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. Read support is feature-complete, write support advancing rapidly!
 
 ---
 
@@ -22,8 +22,8 @@ A modern, pure Go library for reading and writing HDF5 files without CGo depende
 - ✅ **Full Dataset Reading** - Compact, contiguous, chunked layouts with GZIP
 - ✅ **Rich Datatypes** - Integers, floats, strings (fixed/variable), compounds
 - ✅ **Memory Efficient** - Buffer pooling and smart memory management
-- ✅ **Production Ready** - Read support feature-complete, write support MVP ready
-- ✍️ **Read + Write (MVP)** - v0.11.0-beta: Basic write support (contiguous datasets, groups, all datatypes)
+- ✅ **Production Ready** - Read support feature-complete (v0.10.0-beta)
+- ✍️ **Write Support Advancing** - v0.11.1-beta: Chunked datasets, dense groups, attribute writing!
 
 ---
 

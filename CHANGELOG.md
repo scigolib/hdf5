@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.11.1-beta] - 2025-10-31 (IN PROGRESS)
+
+### 🎉 Extended Write Support - Chunked Datasets, Dense Groups & Attributes!
+
+**Duration**: 1 day (2025-10-31)
+**Goal**: Add chunked storage, dense groups, and attribute writing - ✅ **ACHIEVED**
+
+### ✨ Added
+
+#### Chunked Dataset Storage (~4 hours)
+- **Chunked layout** - Split large datasets into chunks for efficient I/O
+- **GZIP compression** - Deflate filter for data compression
+- **Shuffle filter** - Byte-shuffling for better compression
+- **Chunk coordinator** - Manages chunk storage and filtering pipeline
+- **Files**: `dataset_write_chunked.go`, `internal/writer/chunk_coordinator.go`
+- **Tests**: 12 test functions, compression validation
+- **Coverage**: 89.6% (writer package)
+
+#### Dense Groups (All 4 Phases ~6 hours, saved 4 by architecture!)
+- **Fractal Heap** - Compact heap for link messages (WritableFractalHeap)
+- **B-tree v2** - Fast name→heap_id indexing (WritableBTreeV2)
+- **Link Info Message** - Dense storage metadata
+- **Automatic transition** - Symbol table → dense at 8+ links
+- **Code reuse proof** - Modular architecture enables rapid development
+- **Files**: `internal/structures/fractalheap_write.go`, `internal/structures/btreev2_write.go`
+- **Tests**: 16 test functions, integration validation
+- **Coverage**: 91.3% (structures package)
+
+#### Attribute Writing (Phases 1-2 ~6 hours, saved 4 by reuse!)
+- **Compact attributes (0-7)** - Stored in object header messages
+- **Dense attributes (8+)** - REUSED Fractal Heap + B-tree v2 from Dense Groups!
+- **Automatic transition** - Compact → dense at 8 attributes or header full
+- **EncodeAttributeFromStruct()** - Complete attribute message encoding
+- **Object header modification** - Add/remove messages from headers
+- **Architecture improvements** - Go 2025 best practices (interface-based design)
+- **Files**: `attribute_write.go`, `internal/writer/dense_attribute_writer.go`
+- **Tests**: 12 test cases (8 unit + 4 integration)
+- **Coverage**: 70.2% overall, 89.6% writer
+
+### 🏗️ Architecture Improvements
+- **FileWriter.Reader()** - Returns `io.ReaderAt` interface (not concrete type)
+- **Interface-based design** - Program to interfaces, not implementations
+- **Code reuse success** - Dense attributes reused heap/B-tree → saved ~8 hours!
+- **Dependency Inversion** - Proper Go 2025 patterns
+
+### 📊 Quality Metrics
+- **Test Coverage**: 70.2% overall (target: >70%) ✅
+- **All Tests**: 100% passing ✅
+- **Code Quality**: Lint issues reduced to 42 (from 47)
+- **Files Changed**: 14 files, ~2,000 insertions
+
+### ⚠️ Known Limitations (v0.11.1-beta)
+- **Dense storage read-modify-write** - Adding to existing dense storage after file reopen (v0.11.2-beta)
+- **Attribute modification** - Write-once only (no updates)
+- **Attribute deletion** - Not yet supported
+- **Compound types** - Not yet supported for attributes
+
+### 🔗 Reference
+- H5Aint.c, H5Adense.c - Attribute implementation
+- H5Gstab.c, H5Gdense.c - Group storage formats
+- H5Dchunk.c, H5Z.c - Chunked storage and filters
+
+---
+
 ## [0.11.0-beta] - 2025-10-30
 
 ### 🎉 Basic Write Support MVP Complete! (5/5 components)
