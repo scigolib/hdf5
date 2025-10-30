@@ -239,7 +239,7 @@ func TestAllocatorEndOfFile(t *testing.T) {
 	}
 }
 
-// Benchmark allocation performance
+// Benchmark allocation performance.
 func BenchmarkAllocate(b *testing.B) {
 	alloc := NewAllocator(0)
 
@@ -260,5 +260,399 @@ func BenchmarkIsAllocated(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = alloc.IsAllocated(500*1024, 1024)
+	}
+}
+
+// ==================== COMPREHENSIVE TESTS (Component 5) ====================
+
+// TestAllocator_StressTest validates allocator under high load.
+func TestAllocator_StressTest(t *testing.T) {
+	t.Run("10000 small allocations", func(t *testing.T) {
+		alloc := NewAllocator(0)
+		const numAllocs = 10000
+		const allocSize = 64
+
+		addrs := make([]uint64, numAllocs)
+
+		// Allocate 10,000 blocks
+		for i := 0; i < numAllocs; i++ {
+			addr, err := alloc.Allocate(allocSize)
+			require.NoError(t, err)
+			addrs[i] = addr
+		}
+
+		// Verify all addresses are unique
+		seen := make(map[uint64]bool)
+		for i, addr := range addrs {
+			assert.False(t, seen[addr], "duplicate address %d at index %d", addr, i)
+			seen[addr] = true
+		}
+
+		// Verify sequential allocation (no gaps)
+		for i := 0; i < numAllocs-1; i++ {
+			expected := addrs[i] + allocSize
+			assert.Equal(t, expected, addrs[i+1],
+				"allocation %d: addresses not sequential", i)
+		}
+
+		// Verify no overlaps
+		err := alloc.ValidateNoOverlaps()
+		assert.NoError(t, err)
+
+		// Verify total space used
+		expectedEOF := uint64(numAllocs * allocSize)
+		assert.Equal(t, expectedEOF, alloc.EndOfFile())
+	})
+
+	t.Run("mixed size allocations", func(t *testing.T) {
+		alloc := NewAllocator(48) // Start after superblock
+		sizes := []uint64{10, 100, 1000, 50, 500, 25, 250}
+
+		var expectedEOF uint64 = 48
+		for _, size := range sizes {
+			addr, err := alloc.Allocate(size)
+			require.NoError(t, err)
+			assert.Equal(t, expectedEOF, addr)
+			expectedEOF += size
+		}
+
+		assert.Equal(t, expectedEOF, alloc.EndOfFile())
+		assert.NoError(t, alloc.ValidateNoOverlaps())
+	})
+}
+
+// TestAllocator_LargeAllocations tests allocations of various large sizes.
+func TestAllocator_LargeAllocations(t *testing.T) {
+	tests := []struct {
+		name string
+		size uint64
+	}{
+		{"1 MB", 1024 * 1024},
+		{"10 MB", 10 * 1024 * 1024},
+		{"100 MB", 100 * 1024 * 1024},
+		{"1 GB", 1024 * 1024 * 1024},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			alloc := NewAllocator(0)
+
+			addr, err := alloc.Allocate(tt.size)
+			require.NoError(t, err)
+			assert.Equal(t, uint64(0), addr)
+			assert.Equal(t, tt.size, alloc.EndOfFile())
+
+			// Verify block is tracked
+			blocks := alloc.Blocks()
+			require.Len(t, blocks, 1)
+			assert.Equal(t, uint64(0), blocks[0].Offset)
+			assert.Equal(t, tt.size, blocks[0].Size)
+		})
+	}
+}
+
+// TestAllocator_Blocks_Complete tests the Blocks() method thoroughly.
+func TestAllocator_Blocks_Complete(t *testing.T) {
+	t.Run("blocks are returned sorted", func(t *testing.T) {
+		alloc := NewAllocator(0)
+
+		// Allocate blocks (they're already sequential, but test sorting anyway)
+		_, _ = alloc.Allocate(100)
+		_, _ = alloc.Allocate(200)
+		_, _ = alloc.Allocate(50)
+
+		blocks := alloc.Blocks()
+		require.Len(t, blocks, 3)
+
+		// Verify sorted by offset
+		for i := 0; i < len(blocks)-1; i++ {
+			assert.Less(t, blocks[i].Offset, blocks[i+1].Offset,
+				"blocks should be sorted by offset")
+		}
+	})
+
+	t.Run("blocks returns copy not reference", func(t *testing.T) {
+		alloc := NewAllocator(0)
+		_, _ = alloc.Allocate(100)
+
+		// Get blocks
+		blocks1 := alloc.Blocks()
+		require.Len(t, blocks1, 1)
+
+		// Modify the returned slice
+		blocks1[0].Size = 999
+		blocks1[0].Offset = 888
+
+		// Get blocks again - should be unchanged
+		blocks2 := alloc.Blocks()
+		require.Len(t, blocks2, 1)
+		assert.Equal(t, uint64(100), blocks2[0].Size, "size should be unchanged")
+		assert.Equal(t, uint64(0), blocks2[0].Offset, "offset should be unchanged")
+	})
+
+	t.Run("blocks with many allocations", func(t *testing.T) {
+		alloc := NewAllocator(0)
+
+		// Allocate 100 blocks
+		for i := 0; i < 100; i++ {
+			_, _ = alloc.Allocate(10)
+		}
+
+		blocks := alloc.Blocks()
+		assert.Len(t, blocks, 100)
+
+		// Verify all blocks are present and sorted
+		for i := 0; i < 100; i++ {
+			expectedOffset := uint64(i * 10)
+			assert.Equal(t, expectedOffset, blocks[i].Offset)
+			assert.Equal(t, uint64(10), blocks[i].Size)
+		}
+	})
+}
+
+// TestAllocator_ValidateNoOverlaps_Complete tests overlap validation.
+func TestAllocator_ValidateNoOverlaps_Complete(t *testing.T) {
+	t.Run("validates sequential allocations pass", func(t *testing.T) {
+		alloc := NewAllocator(0)
+
+		// Allocate many sequential blocks
+		for i := 0; i < 100; i++ {
+			_, _ = alloc.Allocate(100)
+		}
+
+		err := alloc.ValidateNoOverlaps()
+		assert.NoError(t, err, "sequential allocations should never overlap")
+	})
+
+	t.Run("detects overlaps if blocks are manually corrupted", func(t *testing.T) {
+		alloc := NewAllocator(0)
+
+		// Allocate normal blocks
+		_, _ = alloc.Allocate(100)
+		_, _ = alloc.Allocate(100)
+
+		// Manually corrupt internal state to create overlap (for testing detection)
+		// This simulates a bug in allocation logic
+		alloc.blocks[1].Offset = 50 // Overlaps with first block [0, 100)
+
+		err := alloc.ValidateNoOverlaps()
+		assert.Error(t, err, "should detect overlap")
+		assert.Contains(t, err.Error(), "overlap detected")
+	})
+
+	t.Run("validates empty allocator", func(t *testing.T) {
+		alloc := NewAllocator(0)
+		err := alloc.ValidateNoOverlaps()
+		assert.NoError(t, err)
+	})
+
+	t.Run("validates single block", func(t *testing.T) {
+		alloc := NewAllocator(0)
+		_, _ = alloc.Allocate(100)
+
+		err := alloc.ValidateNoOverlaps()
+		assert.NoError(t, err)
+	})
+
+	t.Run("validates adjacent blocks (no gaps)", func(t *testing.T) {
+		alloc := NewAllocator(0)
+
+		// These blocks are perfectly adjacent [0,100), [100,200), [200,250)
+		_, _ = alloc.Allocate(100)
+		_, _ = alloc.Allocate(100)
+		_, _ = alloc.Allocate(50)
+
+		err := alloc.ValidateNoOverlaps()
+		assert.NoError(t, err, "adjacent blocks should not be considered overlapping")
+	})
+}
+
+// TestAllocator_EdgeCases tests various edge cases.
+func TestAllocator_EdgeCases(t *testing.T) {
+	t.Run("allocate size 1", func(t *testing.T) {
+		alloc := NewAllocator(0)
+		addr, err := alloc.Allocate(1)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(0), addr)
+		assert.Equal(t, uint64(1), alloc.EndOfFile())
+	})
+
+	t.Run("allocate max uint64 size", func(t *testing.T) {
+		alloc := NewAllocator(0)
+
+		// This might cause overflow in real implementation, but test it
+		// In practice, filesystems can't handle this, but allocator should try
+		size := uint64(1<<63 - 1) // Very large but not overflow-causing
+		addr, err := alloc.Allocate(size)
+
+		// Should succeed (allocator doesn't validate size limits in MVP)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(0), addr)
+	})
+
+	t.Run("allocate from non-zero initial offset", func(t *testing.T) {
+		initialOffset := uint64(12345)
+		alloc := NewAllocator(initialOffset)
+
+		addr, err := alloc.Allocate(100)
+		require.NoError(t, err)
+		assert.Equal(t, initialOffset, addr)
+		assert.Equal(t, initialOffset+100, alloc.EndOfFile())
+	})
+
+	t.Run("many allocations preserve order", func(t *testing.T) {
+		alloc := NewAllocator(0)
+
+		// Allocate with varying sizes
+		sizes := []uint64{10, 20, 5, 100, 1, 50}
+		addrs := make([]uint64, len(sizes))
+
+		for i, size := range sizes {
+			addr, err := alloc.Allocate(size)
+			require.NoError(t, err)
+			addrs[i] = addr
+		}
+
+		// Verify addresses are in ascending order (sequential allocation)
+		for i := 0; i < len(addrs)-1; i++ {
+			assert.Less(t, addrs[i], addrs[i+1],
+				"addresses should be sequential and ascending")
+		}
+	})
+}
+
+// TestAllocator_GetTotalAllocated tests total space tracking.
+func TestAllocator_GetTotalAllocated(t *testing.T) {
+	t.Run("empty allocator", func(t *testing.T) {
+		alloc := NewAllocator(100)
+
+		// Get blocks and calculate total
+		blocks := alloc.Blocks()
+		var total uint64
+		for _, block := range blocks {
+			total += block.Size
+		}
+
+		assert.Equal(t, uint64(0), total)
+	})
+
+	t.Run("after allocations", func(t *testing.T) {
+		alloc := NewAllocator(100)
+
+		sizes := []uint64{100, 200, 50}
+		for _, size := range sizes {
+			_, _ = alloc.Allocate(size)
+		}
+
+		// Get blocks and calculate total
+		blocks := alloc.Blocks()
+		var total uint64
+		for _, block := range blocks {
+			total += block.Size
+		}
+
+		expectedTotal := uint64(100 + 200 + 50)
+		assert.Equal(t, expectedTotal, total)
+	})
+}
+
+// TestAllocator_IsAllocated_Comprehensive adds more overlap tests.
+func TestAllocator_IsAllocated_Comprehensive(t *testing.T) {
+	alloc := NewAllocator(0)
+
+	// Create blocks: [0,100), [100,300), [300,350)
+	_, _ = alloc.Allocate(100)
+	_, _ = alloc.Allocate(200)
+	_, _ = alloc.Allocate(50)
+
+	tests := []struct {
+		name     string
+		offset   uint64
+		size     uint64
+		expected bool
+	}{
+		// Full containment
+		{"contains entire first block", 0, 100, true},
+		{"contains entire second block", 100, 200, true},
+		{"contains all blocks", 0, 350, true},
+
+		// Partial containment
+		{"partially overlaps first", 50, 100, true},
+		{"spans two blocks", 50, 150, true},
+		{"spans all blocks", 0, 400, true},
+
+		// No overlap - before
+		{"way before (impossible in our sequential scheme)", 0, 0, false},
+
+		// No overlap - after
+		{"just after last block", 350, 100, false},
+		{"way after last block", 1000, 100, false},
+
+		// Edge cases - touching boundaries
+		{"starts at block end (next block start)", 100, 50, true}, // Overlaps second block
+		{"ends at block start", 0, 0, false},                      // Zero size
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := alloc.IsAllocated(tt.offset, tt.size)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestAllocator_ConcurrentAccess documents thread-safety limitation.
+//
+// This test is skipped because the allocator is NOT thread-safe in MVP.
+// Thread safety will be added in v0.11.0-RC if needed.
+//
+// If thread safety were added, this test would verify:
+//   - Concurrent allocations produce unique addresses
+//   - No overlaps occur with concurrent access
+//   - All allocations are tracked correctly
+func TestAllocator_ConcurrentAccess(t *testing.T) {
+	t.Skip("Allocator is NOT thread-safe in MVP - this is a documented limitation")
+
+	// This test is skipped but documents the expected behavior.
+	// In v0.11.0-RC, we might add thread safety and enable this test.
+}
+
+// BenchmarkAllocate_Sequential benchmarks sequential allocations.
+func BenchmarkAllocate_Sequential(b *testing.B) {
+	alloc := NewAllocator(0)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = alloc.Allocate(1024)
+	}
+}
+
+// BenchmarkBlocks benchmarks retrieving all blocks.
+func BenchmarkBlocks(b *testing.B) {
+	alloc := NewAllocator(0)
+
+	// Pre-allocate 1000 blocks
+	for i := 0; i < 1000; i++ {
+		_, _ = alloc.Allocate(1024)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = alloc.Blocks()
+	}
+}
+
+// BenchmarkValidateNoOverlaps benchmarks overlap validation.
+func BenchmarkValidateNoOverlaps(b *testing.B) {
+	alloc := NewAllocator(0)
+
+	// Pre-allocate 1000 blocks
+	for i := 0; i < 1000; i++ {
+		_, _ = alloc.Allocate(1024)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = alloc.ValidateNoOverlaps()
 	}
 }
