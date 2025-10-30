@@ -179,7 +179,7 @@ func (stn *SymbolTableNode) WriteAt(w io.WriterAt, address uint64, offsetSize ui
 	buf := make([]byte, totalSize)
 
 	// Write header
-	copy(buf[0:4], []byte("SNOD"))
+	copy(buf[0:4], "SNOD")
 	buf[4] = stn.Version
 	buf[5] = 0 // Reserved
 	endianness.PutUint16(buf[6:8], stn.NumSymbols)

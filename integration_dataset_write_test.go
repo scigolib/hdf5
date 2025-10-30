@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestDatasetWrite_EndToEnd tests complete workflow: create → write → verify binary
+// TestDatasetWrite_EndToEnd tests complete workflow: create → write → verify binary.
 func TestDatasetWrite_EndToEnd(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_e2e.h5")
@@ -40,7 +40,7 @@ func TestDatasetWrite_EndToEnd(t *testing.T) {
 	// Step 3: Verify HDF5 signature
 	f, err := os.Open(filename)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	sig := make([]byte, 8)
 	_, err = f.ReadAt(sig, 0)
@@ -48,14 +48,14 @@ func TestDatasetWrite_EndToEnd(t *testing.T) {
 	assert.Equal(t, "\x89HDF\r\n\x1a\n", string(sig))
 }
 
-// TestDatasetWrite_MultipleTypes tests writing multiple datasets with different types
+// TestDatasetWrite_MultipleTypes tests writing multiple datasets with different types.
 func TestDatasetWrite_MultipleTypes(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_multi_types.h5")
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create datasets of different types
 	tests := []struct {
@@ -115,14 +115,14 @@ func TestDatasetWrite_MultipleTypes(t *testing.T) {
 	assert.Greater(t, info.Size(), int64(200))
 }
 
-// TestDatasetWrite_2DArrays tests writing multi-dimensional datasets
+// TestDatasetWrite_2DArrays tests writing multi-dimensional datasets.
 func TestDatasetWrite_2DArrays(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_2d.h5")
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	tests := []struct {
 		name string
@@ -165,14 +165,14 @@ func TestDatasetWrite_2DArrays(t *testing.T) {
 	}
 }
 
-// TestDatasetWrite_LargeDataset tests writing larger datasets
+// TestDatasetWrite_LargeDataset tests writing larger datasets.
 func TestDatasetWrite_LargeDataset(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_large.h5")
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create 1000-element dataset
 	ds, err := fw.CreateDataset("/large_data", Float64, []uint64{1000})
@@ -200,14 +200,14 @@ func TestDatasetWrite_LargeDataset(t *testing.T) {
 	assert.Greater(t, info.Size(), int64(8000))
 }
 
-// TestDatasetWrite_SequentialWrites tests creating and writing multiple datasets sequentially
+// TestDatasetWrite_SequentialWrites tests creating and writing multiple datasets sequentially.
 func TestDatasetWrite_SequentialWrites(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_sequential.h5")
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Write 10 datasets sequentially
 	for i := 0; i < 10; i++ {
@@ -259,7 +259,7 @@ func TestDatasetWrite_VerifyBinaryFormat(t *testing.T) {
 	// Read binary data at data address
 	f, err := os.Open(filename)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	buf := make([]byte, 12) // 3 * 4 bytes
 	_, err = f.ReadAt(buf, int64(dataAddr))
@@ -299,7 +299,7 @@ func TestDatasetWrite_Float64Encoding(t *testing.T) {
 	// Verify binary format
 	f, err := os.Open(filename)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	buf := make([]byte, 24) // 3 * 8 bytes
 	_, err = f.ReadAt(buf, int64(dataAddr))
@@ -316,14 +316,14 @@ func TestDatasetWrite_Float64Encoding(t *testing.T) {
 	assert.Equal(t, uint64(0x400921FB54442D18), val2) // π
 }
 
-// TestDatasetWrite_ErrorConditions tests various error conditions
+// TestDatasetWrite_ErrorConditions tests various error conditions.
 func TestDatasetWrite_ErrorConditions(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_errors.h5")
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Skip write-after-close test - behavior is undefined in MVP
 	// The file writer is closed, so subsequent writes may fail
@@ -332,7 +332,7 @@ func TestDatasetWrite_ErrorConditions(t *testing.T) {
 	// Reopen for remaining tests
 	fw2, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw2.Close()
+	defer func() { _ = fw2.Close() }()
 
 	t.Run("wrong data length", func(t *testing.T) {
 		ds, err := fw2.CreateDataset("/test2", Int32, []uint64{5})
@@ -356,14 +356,14 @@ func TestDatasetWrite_ErrorConditions(t *testing.T) {
 	})
 }
 
-// TestDatasetWrite_3DArray tests 3D array writing
+// TestDatasetWrite_3DArray tests 3D array writing.
 func TestDatasetWrite_3DArray(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_3d.h5")
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create 2x3x4 3D array
 	ds, err := fw.CreateDataset("/array_3d", Float64, []uint64{2, 3, 4})
@@ -383,14 +383,14 @@ func TestDatasetWrite_3DArray(t *testing.T) {
 	assert.Equal(t, uint64(192), ds.dataSize) // 24 * 8 bytes
 }
 
-// TestDatasetWrite_AllIntegers tests all integer types systematically
+// TestDatasetWrite_AllIntegers tests all integer types systematically.
 func TestDatasetWrite_AllIntegers(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_all_integers.h5")
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	tests := []struct {
 		name     string

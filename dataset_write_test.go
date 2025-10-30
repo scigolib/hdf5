@@ -29,7 +29,7 @@ func TestCreateForWrite(t *testing.T) {
 	// Verify file can be opened for reading
 	f, err := Open(filename)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Verify superblock
 	assert.Equal(t, uint8(2), f.SuperblockVersion())
@@ -42,7 +42,7 @@ func TestCreateDataset_1D_Int32(t *testing.T) {
 	// Create file
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create dataset
 	ds, err := fw.CreateDataset("/data", Int32, []uint64{5})
@@ -61,7 +61,7 @@ func TestCreateDataset_2D_Float64(t *testing.T) {
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create 3x4 matrix
 	ds, err := fw.CreateDataset("/matrix", Float64, []uint64{3, 4})
@@ -79,7 +79,7 @@ func TestCreateDataset_InvalidInputs(t *testing.T) {
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	tests := []struct {
 		name    string
@@ -162,7 +162,7 @@ func TestDatasetWrite_Float64(t *testing.T) {
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create dataset
 	ds, err := fw.CreateDataset("/floats", Float64, []uint64{10})
@@ -183,7 +183,7 @@ func TestDatasetWrite_2D_Matrix(t *testing.T) {
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create 3x4 matrix
 	ds, err := fw.CreateDataset("/matrix", Float64, []uint64{3, 4})
@@ -205,7 +205,7 @@ func TestDatasetWrite_AllTypes(t *testing.T) {
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	tests := []struct {
 		name  string
@@ -268,7 +268,7 @@ func TestDatasetWrite_TypeMismatch(t *testing.T) {
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create int32 dataset
 	ds, err := fw.CreateDataset("/data", Int32, []uint64{5})
@@ -287,7 +287,7 @@ func TestDatasetWrite_SizeMismatch(t *testing.T) {
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create dataset with 5 elements
 	ds, err := fw.CreateDataset("/data", Int32, []uint64{5})
@@ -306,7 +306,7 @@ func TestMultipleDatasets(t *testing.T) {
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create first dataset
 	ds1, err := fw.CreateDataset("/int_data", Int32, []uint64{5})

@@ -159,22 +159,10 @@ type FileWriter struct {
 //	ds, _ := fw.CreateDataset("/data", hdf5.Float64, []uint64{100})
 //	ds.Write(myData)
 func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
-	// Map CreateMode to writer.CreateMode
-	var writerMode writer.CreateMode
-	switch mode {
-	case CreateTruncate:
-		writerMode = writer.ModeTruncate
-	case CreateExclusive:
-		writerMode = writer.ModeExclusive
-	default:
-		return nil, fmt.Errorf("invalid create mode: %d", mode)
-	}
-
-	// Step 1: Create FileWriter
-	// Superblock v2 is 48 bytes
-	fw, err := writer.NewFileWriter(filename, writerMode, 48)
+	// Map CreateMode to writer.CreateMode and create basic writer
+	fw, err := initializeFileWriter(filename, mode)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create writer: %w", err)
+		return nil, err
 	}
 
 	// Ensure cleanup on error
@@ -185,93 +173,10 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 		}
 	}()
 
-	// Step 2: Create root group with Symbol Table structure
-	// (for compatibility with created groups and datasets)
-
-	// 2a. Create local heap for root group names
-	rootHeap := structures.NewLocalHeap(256) // Initial capacity for ~10-20 names
-	rootHeapAddr, err := fw.Allocate(rootHeap.Size())
+	// Create root group with Symbol Table structure
+	rootInfo, err := createRootGroupStructure(fw)
 	if err != nil {
-		return nil, fmt.Errorf("failed to allocate root heap: %w", err)
-	}
-
-	// 2b. Create symbol table node for root group
-	rootStNode := structures.NewSymbolTableNode(32) // Standard capacity (2*K where K=16)
-
-	// Calculate symbol table node size
-	// Format: 8-byte header + 32 * entrySize
-	// entrySize = 2*offsetSize + 4 + 4 + 16 = 2*8 + 24 = 40 bytes
-	offsetSize := 8
-	entrySize := 2*offsetSize + 4 + 4 + 16
-	stNodeSize := uint64(8 + 32*entrySize)
-
-	rootStNodeAddr, err := fw.Allocate(stNodeSize)
-	if err != nil {
-		return nil, fmt.Errorf("failed to allocate root symbol table node: %w", err)
-	}
-
-	// Write symbol table node (empty initially)
-	if err := rootStNode.WriteAt(fw, rootStNodeAddr, uint8(offsetSize), 32, binary.LittleEndian); err != nil {
-		return nil, fmt.Errorf("failed to write root symbol table node: %w", err)
-	}
-
-	// 2c. Create B-tree for root group
-	rootBTree := structures.NewBTreeNodeV1(0, 16) // Type 0 = group symbol table, K=16
-
-	// Add symbol table node address as child (with key 0 for empty group)
-	if err := rootBTree.AddKey(0, rootStNodeAddr); err != nil {
-		return nil, fmt.Errorf("failed to add root B-tree key: %w", err)
-	}
-
-	// Calculate B-tree size
-	// Header: 4 (sig) + 1 (type) + 1 (level) + 2 (entries) + 2*8 (siblings) = 24 bytes
-	// Keys: (2K+1) * offsetSize = 33 * 8 = 264 bytes
-	// Children: 2K * offsetSize = 32 * 8 = 256 bytes
-	btreeSize := uint64(24 + (2*16+1)*offsetSize + 2*16*offsetSize)
-
-	rootBTreeAddr, err := fw.Allocate(btreeSize)
-	if err != nil {
-		return nil, fmt.Errorf("failed to allocate root B-tree: %w", err)
-	}
-
-	// Write B-tree
-	if err := rootBTree.WriteAt(fw, rootBTreeAddr, uint8(offsetSize), 16, binary.LittleEndian); err != nil {
-		return nil, fmt.Errorf("failed to write root B-tree: %w", err)
-	}
-
-	// 2d. Write local heap (after B-tree and symbol table addresses are known)
-	if err := rootHeap.WriteTo(fw, rootHeapAddr); err != nil {
-		return nil, fmt.Errorf("failed to write root heap: %w", err)
-	}
-
-	// 2e. Create root group object header with Symbol Table message
-	stMsg := core.EncodeSymbolTableMessage(rootBTreeAddr, rootHeapAddr, offsetSize, 8)
-
-	rootGroupHeader := &core.ObjectHeaderWriter{
-		Version: 2,
-		Flags:   0,
-		Messages: []core.MessageWriter{
-			{Type: core.MsgSymbolTable, Data: stMsg},
-		},
-	}
-
-	// Calculate root group object header size
-	rootGroupSize := rootGroupHeader.Size()
-
-	// Allocate space for root group object header
-	rootGroupAddr, err := fw.Allocate(rootGroupSize)
-	if err != nil {
-		return nil, fmt.Errorf("failed to allocate root group header: %w", err)
-	}
-
-	// Write root group object header
-	writtenSize, err := rootGroupHeader.WriteTo(fw, rootGroupAddr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to write root group header: %w", err)
-	}
-
-	if writtenSize != rootGroupSize {
-		return nil, fmt.Errorf("root group size mismatch: expected %d, wrote %d", rootGroupSize, writtenSize)
+		return nil, err
 	}
 
 	// Step 3: Create Superblock v2
@@ -280,14 +185,14 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 		OffsetSize:     8,
 		LengthSize:     8,
 		BaseAddress:    0,
-		RootGroup:      rootGroupAddr,
+		RootGroup:      rootInfo.groupAddr,
 		Endianness:     binary.LittleEndian,
 		SuperExtension: 0,
 		DriverInfo:     0,
 	}
 
 	// Calculate end-of-file address
-	eofAddress := uint64(48) + rootGroupSize
+	eofAddress := uint64(48) + rootInfo.groupSize
 
 	// Step 4: Write superblock at offset 0
 	if err := sb.WriteTo(fw, eofAddress); err != nil {
@@ -312,10 +217,10 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 		file:           fileObj,
 		writer:         fw,
 		filename:       filename,
-		rootGroupAddr:  rootGroupAddr,
-		rootBTreeAddr:  rootBTreeAddr,
-		rootHeapAddr:   rootHeapAddr,
-		rootStNodeAddr: rootStNodeAddr,
+		rootGroupAddr:  rootInfo.groupAddr,
+		rootBTreeAddr:  rootInfo.btreeAddr,
+		rootHeapAddr:   rootInfo.heapAddr,
+		rootStNodeAddr: rootInfo.stNodeAddr,
 	}, nil
 }
 
@@ -361,7 +266,7 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 	}
 
 	// For MVP, only support root-level datasets
-	if len(name) > 0 && name[0] != '/' {
+	if name != "" && name[0] != '/' {
 		return nil, fmt.Errorf("dataset name must start with '/' (got %q)", name)
 	}
 
@@ -573,30 +478,13 @@ func (dw *DatasetWriter) Write(data interface{}) error {
 
 // encodeFixedPointData encodes integer data to bytes.
 func encodeFixedPointData(data interface{}, elemSize uint32, expectedSize uint64) ([]byte, error) {
-	// First, validate data size matches expected size
-	var dataLen int
-	switch v := data.(type) {
-	case []int8:
-		dataLen = len(v)
-	case []uint8:
-		dataLen = len(v)
-	case []int16:
-		dataLen = len(v)
-	case []uint16:
-		dataLen = len(v)
-	case []int32:
-		dataLen = len(v)
-	case []uint32:
-		dataLen = len(v)
-	case []int64:
-		dataLen = len(v)
-	case []uint64:
-		dataLen = len(v)
-	default:
-		return nil, fmt.Errorf("unsupported data type: %T", data)
+	// Validate data size matches expected size
+	dataLen, err := getIntegerSliceLength(data)
+	if err != nil {
+		return nil, err
 	}
 
-	actualSize := uint64(dataLen) * uint64(elemSize)
+	actualSize := uint64(dataLen) * uint64(elemSize) //nolint:gosec // Safe: dataLen from slice length always fits in uint64
 	if actualSize != expectedSize {
 		return nil, fmt.Errorf("data size mismatch: expected %d bytes, got %d bytes", expectedSize, actualSize)
 	}
@@ -605,67 +493,105 @@ func encodeFixedPointData(data interface{}, elemSize uint32, expectedSize uint64
 
 	switch elemSize {
 	case 1:
-		// int8 or uint8
-		switch v := data.(type) {
-		case []int8:
-			for i, val := range v {
-				buf[i] = byte(val)
-			}
-		case []uint8:
-			copy(buf, v)
-		default:
-			return nil, fmt.Errorf("expected []int8 or []uint8, got %T", data)
-		}
-
+		return encode1ByteIntegers(data, buf)
 	case 2:
-		// int16 or uint16
-		switch v := data.(type) {
-		case []int16:
-			for i, val := range v {
-				binary.LittleEndian.PutUint16(buf[i*2:], uint16(val))
-			}
-		case []uint16:
-			for i, val := range v {
-				binary.LittleEndian.PutUint16(buf[i*2:], val)
-			}
-		default:
-			return nil, fmt.Errorf("expected []int16 or []uint16, got %T", data)
-		}
-
+		return encode2ByteIntegers(data, buf)
 	case 4:
-		// int32 or uint32
-		switch v := data.(type) {
-		case []int32:
-			for i, val := range v {
-				binary.LittleEndian.PutUint32(buf[i*4:], uint32(val))
-			}
-		case []uint32:
-			for i, val := range v {
-				binary.LittleEndian.PutUint32(buf[i*4:], val)
-			}
-		default:
-			return nil, fmt.Errorf("expected []int32 or []uint32, got %T", data)
-		}
-
+		return encode4ByteIntegers(data, buf)
 	case 8:
-		// int64 or uint64
-		switch v := data.(type) {
-		case []int64:
-			for i, val := range v {
-				binary.LittleEndian.PutUint64(buf[i*8:], uint64(val))
-			}
-		case []uint64:
-			for i, val := range v {
-				binary.LittleEndian.PutUint64(buf[i*8:], val)
-			}
-		default:
-			return nil, fmt.Errorf("expected []int64 or []uint64, got %T", data)
-		}
-
+		return encode8ByteIntegers(data, buf)
 	default:
 		return nil, fmt.Errorf("unsupported integer size: %d", elemSize)
 	}
+}
 
+// getIntegerSliceLength returns the length of integer slice or error if type is unsupported.
+func getIntegerSliceLength(data interface{}) (int, error) {
+	switch v := data.(type) {
+	case []int8:
+		return len(v), nil
+	case []uint8:
+		return len(v), nil
+	case []int16:
+		return len(v), nil
+	case []uint16:
+		return len(v), nil
+	case []int32:
+		return len(v), nil
+	case []uint32:
+		return len(v), nil
+	case []int64:
+		return len(v), nil
+	case []uint64:
+		return len(v), nil
+	default:
+		return 0, fmt.Errorf("unsupported data type: %T", data)
+	}
+}
+
+// encode1ByteIntegers encodes []int8 or []uint8 to buffer.
+func encode1ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
+	switch v := data.(type) {
+	case []int8:
+		for i, val := range v {
+			buf[i] = byte(val)
+		}
+	case []uint8:
+		copy(buf, v)
+	default:
+		return nil, fmt.Errorf("expected []int8 or []uint8, got %T", data)
+	}
+	return buf, nil
+}
+
+// encode2ByteIntegers encodes []int16 or []uint16 to buffer.
+func encode2ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
+	switch v := data.(type) {
+	case []int16:
+		for i, val := range v {
+			binary.LittleEndian.PutUint16(buf[i*2:], uint16(val)) //nolint:gosec // Safe: int16 always fits in uint16
+		}
+	case []uint16:
+		for i, val := range v {
+			binary.LittleEndian.PutUint16(buf[i*2:], val)
+		}
+	default:
+		return nil, fmt.Errorf("expected []int16 or []uint16, got %T", data)
+	}
+	return buf, nil
+}
+
+// encode4ByteIntegers encodes []int32 or []uint32 to buffer.
+func encode4ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
+	switch v := data.(type) {
+	case []int32:
+		for i, val := range v {
+			binary.LittleEndian.PutUint32(buf[i*4:], uint32(val)) //nolint:gosec // Safe: int32 always fits in uint32
+		}
+	case []uint32:
+		for i, val := range v {
+			binary.LittleEndian.PutUint32(buf[i*4:], val)
+		}
+	default:
+		return nil, fmt.Errorf("expected []int32 or []uint32, got %T", data)
+	}
+	return buf, nil
+}
+
+// encode8ByteIntegers encodes []int64 or []uint64 to buffer.
+func encode8ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
+	switch v := data.(type) {
+	case []int64:
+		for i, val := range v {
+			binary.LittleEndian.PutUint64(buf[i*8:], uint64(val)) //nolint:gosec // Safe: int64 always fits in uint64
+		}
+	case []uint64:
+		for i, val := range v {
+			binary.LittleEndian.PutUint64(buf[i*8:], val)
+		}
+	default:
+		return nil, fmt.Errorf("expected []int64 or []uint64, got %T", data)
+	}
 	return buf, nil
 }
 
@@ -798,4 +724,167 @@ func (fw *FileWriter) Close() error {
 
 	fw.writer = nil
 	return nil
+}
+
+// initializeFileWriter creates and initializes a new FileWriter with the given mode.
+func initializeFileWriter(filename string, mode CreateMode) (*writer.FileWriter, error) {
+	var writerMode writer.CreateMode
+	switch mode {
+	case CreateTruncate:
+		writerMode = writer.ModeTruncate
+	case CreateExclusive:
+		writerMode = writer.ModeExclusive
+	default:
+		return nil, fmt.Errorf("invalid create mode: %d", mode)
+	}
+
+	// Superblock v2 is 48 bytes
+	fw, err := writer.NewFileWriter(filename, writerMode, 48)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create writer: %w", err)
+	}
+
+	return fw, nil
+}
+
+// rootGroupInfo contains information about the created root group structure.
+type rootGroupInfo struct {
+	groupAddr  uint64 // Root group object header address
+	groupSize  uint64 // Root group object header size
+	btreeAddr  uint64 // B-tree address
+	heapAddr   uint64 // Local heap address
+	stNodeAddr uint64 // Symbol table node address
+}
+
+// createRootGroupStructure creates the root group with Symbol Table structure.
+// Returns information about the created root group structure.
+func createRootGroupStructure(fw *writer.FileWriter) (*rootGroupInfo, error) {
+	const offsetSize = 8
+	const lengthSize = 8
+
+	// Create local heap for root group names
+	rootHeap := structures.NewLocalHeap(256) // Initial capacity for ~10-20 names
+	rootHeapAddr, err := fw.Allocate(rootHeap.Size())
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate root heap: %w", err)
+	}
+
+	// Create and write symbol table node
+	rootStNodeAddr, err := createSymbolTableNode(fw, offsetSize)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create and write B-tree
+	rootBTreeAddr, err := createBTreeNode(fw, rootStNodeAddr, offsetSize)
+	if err != nil {
+		return nil, err
+	}
+
+	// Write local heap
+	if err := rootHeap.WriteTo(fw, rootHeapAddr); err != nil {
+		return nil, fmt.Errorf("failed to write root heap: %w", err)
+	}
+
+	// Create and write root group object header
+	rootGroupAddr, rootGroupSize, err := writeRootGroupHeader(fw, rootBTreeAddr, rootHeapAddr, offsetSize, lengthSize)
+	if err != nil {
+		return nil, err
+	}
+
+	return &rootGroupInfo{
+		groupAddr:  rootGroupAddr,
+		groupSize:  rootGroupSize,
+		btreeAddr:  rootBTreeAddr,
+		heapAddr:   rootHeapAddr,
+		stNodeAddr: rootStNodeAddr,
+	}, nil
+}
+
+// createSymbolTableNode creates and writes a symbol table node for a group.
+// Returns the address where the node was written.
+func createSymbolTableNode(fw *writer.FileWriter, offsetSize int) (uint64, error) {
+	rootStNode := structures.NewSymbolTableNode(32) // Standard capacity (2*K where K=16)
+
+	// Calculate symbol table node size
+	// Format: 8-byte header + 32 * entrySize
+	// entrySize = 2*offsetSize + 4 + 4 + 16 = 2*8 + 24 = 40 bytes
+	entrySize := 2*offsetSize + 4 + 4 + 16
+	stNodeSize := uint64(8 + 32*entrySize) //nolint:gosec // Safe: constant calculation always fits in uint64
+
+	rootStNodeAddr, err := fw.Allocate(stNodeSize)
+	if err != nil {
+		return 0, fmt.Errorf("failed to allocate root symbol table node: %w", err)
+	}
+
+	// Write symbol table node (empty initially)
+	if err := rootStNode.WriteAt(fw, rootStNodeAddr, uint8(offsetSize), 32, binary.LittleEndian); err != nil { //nolint:gosec // Safe: offsetSize validated to be 8
+		return 0, fmt.Errorf("failed to write root symbol table node: %w", err)
+	}
+
+	return rootStNodeAddr, nil
+}
+
+// createBTreeNode creates and writes a B-tree node for a group.
+// Returns the address where the node was written.
+func createBTreeNode(fw *writer.FileWriter, stNodeAddr uint64, offsetSize int) (uint64, error) {
+	rootBTree := structures.NewBTreeNodeV1(0, 16) // Type 0 = group symbol table, K=16
+
+	// Add symbol table node address as child (with key 0 for empty group)
+	if err := rootBTree.AddKey(0, stNodeAddr); err != nil {
+		return 0, fmt.Errorf("failed to add root B-tree key: %w", err)
+	}
+
+	// Calculate B-tree size
+	// Header: 4 (sig) + 1 (type) + 1 (level) + 2 (entries) + 2*8 (siblings) = 24 bytes
+	// Keys: (2K+1) * offsetSize = 33 * 8 = 264 bytes
+	// Children: 2K * offsetSize = 32 * 8 = 256 bytes
+	btreeSize := uint64(24 + (2*16+1)*offsetSize + 2*16*offsetSize) //nolint:gosec // Safe: constant calculation always fits in uint64
+
+	rootBTreeAddr, err := fw.Allocate(btreeSize)
+	if err != nil {
+		return 0, fmt.Errorf("failed to allocate root B-tree: %w", err)
+	}
+
+	// Write B-tree
+	if err := rootBTree.WriteAt(fw, rootBTreeAddr, uint8(offsetSize), 16, binary.LittleEndian); err != nil { //nolint:gosec // Safe: offsetSize validated to be 8
+		return 0, fmt.Errorf("failed to write root B-tree: %w", err)
+	}
+
+	return rootBTreeAddr, nil
+}
+
+// writeRootGroupHeader creates and writes the root group object header.
+// Returns the address where the header was written and its size.
+func writeRootGroupHeader(fw *writer.FileWriter, btreeAddr, heapAddr uint64, offsetSize, lengthSize int) (uint64, uint64, error) {
+	stMsg := core.EncodeSymbolTableMessage(btreeAddr, heapAddr, offsetSize, lengthSize)
+
+	rootGroupHeader := &core.ObjectHeaderWriter{
+		Version: 2,
+		Flags:   0,
+		Messages: []core.MessageWriter{
+			{Type: core.MsgSymbolTable, Data: stMsg},
+		},
+	}
+
+	// Calculate root group object header size
+	rootGroupSize := rootGroupHeader.Size()
+
+	// Allocate space for root group object header
+	rootGroupAddr, err := fw.Allocate(rootGroupSize)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to allocate root group header: %w", err)
+	}
+
+	// Write root group object header
+	writtenSize, err := rootGroupHeader.WriteTo(fw, rootGroupAddr)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to write root group header: %w", err)
+	}
+
+	if writtenSize != rootGroupSize {
+		return 0, 0, fmt.Errorf("root group size mismatch: expected %d, wrote %d", rootGroupSize, writtenSize)
+	}
+
+	return rootGroupAddr, rootGroupSize, nil
 }

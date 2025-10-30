@@ -25,8 +25,8 @@ import (
 //   - Data Size: lengthSize bytes
 //
 // Reference: HDF5 spec III.D (Data Storage - Data Layout Message)
-// C Reference: H5Olayout.c - H5O__layout_encode()
-func EncodeLayoutMessage(layoutClass DataLayoutClass, dataSize uint64, dataAddress uint64, sb *Superblock) ([]byte, error) {
+// C Reference: H5Olayout.c - H5O__layout_encode()..
+func EncodeLayoutMessage(layoutClass DataLayoutClass, dataSize, dataAddress uint64, sb *Superblock) ([]byte, error) {
 	if layoutClass != LayoutContiguous {
 		return nil, fmt.Errorf("only contiguous layout is supported for writing, got class %d", layoutClass)
 	}
@@ -72,7 +72,7 @@ func EncodeLayoutMessage(layoutClass DataLayoutClass, dataSize uint64, dataAddre
 //   - Bytes 8+: Properties (variable, depends on class)
 //
 // Reference: HDF5 spec III.C (Datatype Message)
-// C Reference: H5Odtype.c - H5O__dtype_encode()
+// C Reference: H5Odtype.c - H5O__dtype_encode()..
 func EncodeDatatypeMessage(dt *DatatypeMessage) ([]byte, error) {
 	// Basic validation
 	if dt.Size == 0 {
@@ -126,28 +126,29 @@ func encodeDatatypeNumeric(dt *DatatypeMessage) ([]byte, error) {
 		var mantissaBits, exponentBits uint8
 		var exponentBias uint8
 
-		if dt.Size == 4 {
+		switch dt.Size {
+		case 4:
 			// float32
 			mantissaBits = 23
 			exponentBits = 8
 			exponentBias = 127
-		} else if dt.Size == 8 {
+		case 8:
 			// float64
 			mantissaBits = 52
 			exponentBits = 11
 			//nolint:mnd // Standard IEEE 754 bias for float64
 			exponentBias = 127 // Will be adjusted in full implementation
-		} else {
+		default:
 			return nil, fmt.Errorf("unsupported float size: %d", dt.Size)
 		}
 
 		properties = make([]byte, 12)
-		properties[0] = byteOrder          // Byte order
-		properties[1] = byte(dt.Size * 8)  // Precision in bits
-		properties[2] = 0                  // Offset (always 0 for standard floats)
-		properties[3] = exponentBits       // Exponent size
-		properties[4] = byte(mantissaBits) // Mantissa size
-		properties[5] = exponentBias       // Exponent bias
+		properties[0] = byteOrder         // Byte order
+		properties[1] = byte(dt.Size * 8) // Precision in bits
+		properties[2] = 0                 // Offset (always 0 for standard floats)
+		properties[3] = exponentBits      // Exponent size
+		properties[4] = mantissaBits      // Mantissa size
+		properties[5] = exponentBias      // Exponent bias
 		// Remaining bytes: mantissa location, exponent location, etc. (set to 0 for standard)
 	} else {
 		// Fixed-point (integer) properties (4 bytes)
@@ -207,7 +208,7 @@ func encodeDatatypeString(dt *DatatypeMessage) ([]byte, error) {
 }
 
 // encodeDatatypeCompound encodes compound datatype (basic support for MVP).
-func encodeDatatypeCompound(dt *DatatypeMessage) ([]byte, error) {
+func encodeDatatypeCompound(_ *DatatypeMessage) ([]byte, error) {
 	// For MVP, compound types are simplified
 	// In full implementation, this would encode member definitions
 	// For now, return error as compound writing is not fully supported in MVP
@@ -233,8 +234,8 @@ func encodeDatatypeCompound(dt *DatatypeMessage) ([]byte, error) {
 //   - Max Dimensions: dimensionality * 8 bytes (if flags & 0x01)
 //
 // Reference: HDF5 spec III.A (Dataspace Message)
-// C Reference: H5Osdspace.c - H5O__sdspace_encode()
-func EncodeDataspaceMessage(dims []uint64, maxDims []uint64) ([]byte, error) {
+// C Reference: H5Osdspace.c - H5O__sdspace_encode()..
+func EncodeDataspaceMessage(dims, maxDims []uint64) ([]byte, error) {
 	if len(dims) == 0 {
 		return nil, fmt.Errorf("dimensions cannot be empty (use [1] for scalar)")
 	}
@@ -320,8 +321,8 @@ func EncodeDataspaceMessage(dims []uint64, maxDims []uint64) ([]byte, error) {
 //   - Local heap address: offsetSize bytes
 //
 // Reference: HDF5 spec III.E (Symbol Table Message)
-// C Reference: H5Ostab.c - H5O__stab_encode()
-func EncodeSymbolTableMessage(btreeAddr, heapAddr uint64, offsetSize, lengthSize int) []byte {
+// C Reference: H5Ostab.c - H5O__stab_encode()..
+func EncodeSymbolTableMessage(btreeAddr, heapAddr uint64, offsetSize, _ int) []byte {
 	// Message size: 2 * offsetSize
 	messageSize := 2 * offsetSize
 	buf := make([]byte, messageSize)
@@ -361,7 +362,7 @@ func EncodeSymbolTableMessage(btreeAddr, heapAddr uint64, offsetSize, lengthSize
 //   - Data: variable (actual attribute value)
 //
 // Reference: HDF5 spec III.M (Attribute Message)
-// C Reference: H5Oattr.c - H5O__attr_encode()
+// C Reference: H5Oattr.c - H5O__attr_encode()..
 func EncodeAttributeMessage(name string, datatype *DatatypeMessage, dataspace *DataspaceMessage, data []byte) ([]byte, error) {
 	// Validate inputs
 	if name == "" {
@@ -424,7 +425,7 @@ func EncodeAttributeMessage(name string, datatype *DatatypeMessage, dataspace *D
 	offset++
 
 	// Name (null-terminated)
-	copy(buf[offset:], []byte(name))
+	copy(buf[offset:], name)
 	offset += len(name)
 	buf[offset] = 0 // null terminator
 	offset++

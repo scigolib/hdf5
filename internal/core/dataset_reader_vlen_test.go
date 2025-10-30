@@ -12,7 +12,7 @@ func TestReadVariableLengthStrings(t *testing.T) {
 	filename := "../../testdata/vlen_strings.h5"
 	file, err := os.Open(filename)
 	require.NoError(t, err, "failed to open test file")
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Read superblock
 	sb, err := ReadSuperblock(file)

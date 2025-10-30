@@ -12,7 +12,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to open file: %v", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	fmt.Println("Superblock version:", file.SuperblockVersion())
 	fmt.Println("\nObjects in file:")

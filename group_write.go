@@ -233,7 +233,7 @@ func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint6
 	}
 
 	// Step 6: Write updated symbol table node
-	offsetSize := uint8(fw.file.sb.OffsetSize)
+	offsetSize := fw.file.sb.OffsetSize
 	if err := stNode.WriteAt(fw.writer, stNodeAddr, offsetSize, 32, fw.file.sb.Endianness); err != nil {
 		return fmt.Errorf("write symbol table: %w", err)
 	}

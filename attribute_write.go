@@ -61,7 +61,7 @@ func (ds *DatasetWriter) WriteAttribute(name string, value interface{}) error {
 // - In v0.11.0-RC, we'll implement proper object header modification with continuation blocks
 //
 // NOTE: Object header modification with continuation blocks planned for v0.11.0-RC.
-func writeAttribute(fw *FileWriter, objectHeaderAddr uint64, name string, value interface{}) error {
+func writeAttribute(_ *FileWriter, objectHeaderAddr uint64, name string, value interface{}) error {
 	// For MVP, attributes are not yet supported
 	// This requires:
 	// 1. Reading existing object header from disk
@@ -298,7 +298,7 @@ func encodeAttributeValue(value interface{}) ([]byte, error) {
 	case reflect.String:
 		str := v.String()
 		buf := make([]byte, len(str)+1)
-		copy(buf, []byte(str))
+		copy(buf, str)
 		buf[len(str)] = 0 // Null terminator
 		return buf, nil
 	case reflect.Slice:
@@ -349,7 +349,7 @@ func encodeSliceValue(v reflect.Value) ([]byte, error) {
 	}
 }
 
-// Suppress unused warnings for now (these will be used when attribute writing is fully implemented)
+// Suppress unused warnings for now (these will be used when attribute writing is fully implemented).
 var (
 	_ = (*core.DatatypeMessage)(nil)
 	_ = (*core.DataspaceMessage)(nil)

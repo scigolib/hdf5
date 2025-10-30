@@ -151,7 +151,7 @@ func readAddress(data []byte, size int) uint64 {
 // For MVP (single node), we simplify:
 // - Only leaf nodes (level = 0)
 // - Only one child pointer (to symbol table node)
-// - Left/right siblings are undefined
+// - Left/right siblings are undefined.
 type BTreeNodeV1 struct {
 	Signature     [4]byte  // "TREE"
 	NodeType      uint8    // 0 = group symbol table
@@ -181,7 +181,7 @@ func NewBTreeNodeV1(nodeType uint8, K uint16) *BTreeNodeV1 {
 // AddKey adds a key and child pointer to the B-tree node.
 // For leaf nodes in groups, keys are link name offsets in the local heap,
 // and child pointers are addresses of symbol table nodes.
-func (btn *BTreeNodeV1) AddKey(key uint64, childAddr uint64) error {
+func (btn *BTreeNodeV1) AddKey(key, childAddr uint64) error {
 	maxKeys := cap(btn.Keys)
 	if len(btn.Keys) >= maxKeys {
 		return fmt.Errorf("b-tree node is full (%d/%d keys)", len(btn.Keys), maxKeys)
