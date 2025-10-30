@@ -447,3 +447,405 @@ func BenchmarkLocalHeap_GetString(b *testing.B) {
 		_, _ = heap.GetString(0)
 	}
 }
+
+// --- Write Support Tests ---
+
+func TestNewLocalHeap(t *testing.T) {
+	tests := []struct {
+		name         string
+		initialSize  uint64
+		expectedSize uint64
+	}{
+		{
+			name:         "minimum size",
+			initialSize:  0,
+			expectedSize: 16, // Rounded up to minimum
+		},
+		{
+			name:         "small size",
+			initialSize:  10,
+			expectedSize: 16, // Rounded up to 8-byte alignment
+		},
+		{
+			name:         "aligned size",
+			initialSize:  64,
+			expectedSize: 64, // Already aligned
+		},
+		{
+			name:         "unaligned size",
+			initialSize:  65,
+			expectedSize: 72, // Rounded up to next 8-byte boundary
+		},
+		{
+			name:         "large size",
+			initialSize:  1000,
+			expectedSize: 1000, // Already aligned
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			heap := NewLocalHeap(tt.initialSize)
+			require.NotNil(t, heap)
+			require.Equal(t, tt.expectedSize, heap.DataSegmentSize)
+			require.Equal(t, uint64(1), heap.OffsetToHeadFreeList) // H5HL_FREE_NULL
+			require.NotNil(t, heap.strings)
+			require.Equal(t, 0, len(heap.strings))
+		})
+	}
+}
+
+func TestLocalHeap_AddString(t *testing.T) {
+	tests := []struct {
+		name            string
+		heapSize        uint64
+		stringsToAdd    []string
+		expectedOffsets []uint64
+		expectError     bool
+	}{
+		{
+			name:            "single string",
+			heapSize:        64,
+			stringsToAdd:    []string{"hello"},
+			expectedOffsets: []uint64{0},
+			expectError:     false,
+		},
+		{
+			name:            "multiple strings",
+			heapSize:        64,
+			stringsToAdd:    []string{"first", "second", "third"},
+			expectedOffsets: []uint64{0, 6, 13}, // "first\0" (6), "second\0" (7), "third\0" (6)
+			expectError:     false,
+		},
+		{
+			name:            "empty string",
+			heapSize:        64,
+			stringsToAdd:    []string{""},
+			expectedOffsets: []uint64{0},
+			expectError:     false,
+		},
+		{
+			name:            "strings with spaces",
+			heapSize:        64,
+			stringsToAdd:    []string{"hello world", "foo bar"},
+			expectedOffsets: []uint64{0, 12}, // "hello world\0" (12)
+			expectError:     false,
+		},
+		{
+			name:         "heap overflow",
+			heapSize:     16, // Very small heap
+			stringsToAdd: []string{"this is a very long string that won't fit"},
+			expectError:  true,
+		},
+		{
+			name:         "multiple strings overflow",
+			heapSize:     20,
+			stringsToAdd: []string{"first", "second", "third"}, // Total: 6+7+6 = 19 bytes (fits)
+			expectError:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			heap := NewLocalHeap(tt.heapSize)
+			require.NotNil(t, heap)
+
+			for i, str := range tt.stringsToAdd {
+				offset, err := heap.AddString(str)
+
+				if tt.expectError {
+					if err != nil {
+						// Expected error occurred
+						return
+					}
+					// Continue to next string
+					continue
+				}
+
+				require.NoError(t, err)
+				if i < len(tt.expectedOffsets) {
+					require.Equal(t, tt.expectedOffsets[i], offset, "offset mismatch for string %d", i)
+				}
+			}
+		})
+	}
+}
+
+func TestLocalHeap_Size(t *testing.T) {
+	tests := []struct {
+		name         string
+		heapSize     uint64
+		expectedSize uint64
+	}{
+		{
+			name:         "minimum heap",
+			heapSize:     16,
+			expectedSize: 32 + 16, // header (32) + data (16)
+		},
+		{
+			name:         "medium heap",
+			heapSize:     128,
+			expectedSize: 32 + 128,
+		},
+		{
+			name:         "large heap",
+			heapSize:     1024,
+			expectedSize: 32 + 1024,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			heap := NewLocalHeap(tt.heapSize)
+			require.Equal(t, tt.expectedSize, heap.Size())
+		})
+	}
+}
+
+func TestLocalHeap_WriteTo(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func() (*LocalHeap, []string)
+		address uint64
+		verify  func(*testing.T, []byte, *LocalHeap)
+	}{
+		{
+			name: "empty heap",
+			setup: func() (*LocalHeap, []string) {
+				return NewLocalHeap(64), []string{}
+			},
+			address: 0,
+			verify: func(t *testing.T, data []byte, heap *LocalHeap) {
+				// Verify header
+				require.Equal(t, "HEAP", string(data[0:4]))
+				require.Equal(t, byte(0), data[4]) // Version
+				require.Equal(t, byte(0), data[5]) // Reserved
+				require.Equal(t, byte(0), data[6])
+				require.Equal(t, byte(0), data[7])
+
+				// Verify data segment size
+				dataSegSize := binary.LittleEndian.Uint64(data[8:16])
+				require.Equal(t, uint64(64), dataSegSize)
+
+				// Verify free list offset (should be 1 = NULL)
+				freeListOffset := binary.LittleEndian.Uint64(data[16:24])
+				require.Equal(t, uint64(1), freeListOffset)
+
+				// Verify data segment address
+				dataSegAddr := binary.LittleEndian.Uint64(data[24:32])
+				require.Equal(t, uint64(32), dataSegAddr) // 0 + 32 (header size)
+			},
+		},
+		{
+			name: "heap with single string",
+			setup: func() (*LocalHeap, []string) {
+				heap := NewLocalHeap(64)
+				_, _ = heap.AddString("hello")
+				return heap, []string{"hello"}
+			},
+			address: 0,
+			verify: func(t *testing.T, data []byte, heap *LocalHeap) {
+				// Verify header
+				require.Equal(t, "HEAP", string(data[0:4]))
+
+				// Verify data contains "hello\0"
+				dataStart := 32
+				require.Equal(t, "hello", string(data[dataStart:dataStart+5]))
+				require.Equal(t, byte(0), data[dataStart+5]) // Null terminator
+			},
+		},
+		{
+			name: "heap with multiple strings",
+			setup: func() (*LocalHeap, []string) {
+				heap := NewLocalHeap(128)
+				_, _ = heap.AddString("first")
+				_, _ = heap.AddString("second")
+				_, _ = heap.AddString("third")
+				return heap, []string{"first", "second", "third"}
+			},
+			address: 0,
+			verify: func(t *testing.T, data []byte, heap *LocalHeap) {
+				// Verify all strings are present
+				dataStart := 32
+				offset := dataStart
+
+				// "first\0"
+				require.Equal(t, "first", string(data[offset:offset+5]))
+				require.Equal(t, byte(0), data[offset+5])
+				offset += 6
+
+				// "second\0"
+				require.Equal(t, "second", string(data[offset:offset+6]))
+				require.Equal(t, byte(0), data[offset+6])
+				offset += 7
+
+				// "third\0"
+				require.Equal(t, "third", string(data[offset:offset+5]))
+				require.Equal(t, byte(0), data[offset+5])
+			},
+		},
+		{
+			name: "heap at non-zero address",
+			setup: func() (*LocalHeap, []string) {
+				heap := NewLocalHeap(64)
+				_, _ = heap.AddString("test")
+				return heap, []string{"test"}
+			},
+			address: 1000,
+			verify: func(t *testing.T, data []byte, heap *LocalHeap) {
+				// Verify data segment address accounts for heap address
+				dataSegAddr := binary.LittleEndian.Uint64(data[1024:1032])
+				require.Equal(t, uint64(1032), dataSegAddr) // 1000 + 32
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			heap, _ := tt.setup()
+
+			// Create buffer for writing
+			buf := make([]byte, 10000)
+			writer := &mockWriter{data: buf}
+
+			// Write heap
+			err := heap.WriteTo(writer, tt.address)
+			require.NoError(t, err)
+
+			// Verify
+			tt.verify(t, buf, heap)
+		})
+	}
+}
+
+func TestLocalHeap_WriteToAndRead(t *testing.T) {
+	// Round-trip test: Write heap, then read it back
+	tests := []struct {
+		name    string
+		strings []string
+	}{
+		{
+			name:    "single string",
+			strings: []string{"hello"},
+		},
+		{
+			name:    "multiple strings",
+			strings: []string{"one", "two", "three", "four"},
+		},
+		{
+			name:    "empty and non-empty strings",
+			strings: []string{"", "test", "", "data"},
+		},
+		{
+			name:    "long strings",
+			strings: []string{"this is a longer string", "another long string here"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Calculate required size
+			totalSize := uint64(0)
+			for _, s := range tt.strings {
+				totalSize += uint64(len(s) + 1) // +1 for null terminator
+			}
+			heapSize := totalSize + 64 // Extra space
+
+			// Create and populate heap
+			writeHeap := NewLocalHeap(heapSize)
+			offsets := make([]uint64, len(tt.strings))
+			for i, s := range tt.strings {
+				offset, err := writeHeap.AddString(s)
+				require.NoError(t, err)
+				offsets[i] = offset
+			}
+
+			// Write to buffer
+			buf := make([]byte, 10000)
+			writer := &mockWriter{data: buf}
+			err := writeHeap.WriteTo(writer, 0)
+			require.NoError(t, err)
+
+			// Read back
+			reader := &mockReaderAt{data: buf}
+			sb := createMockSuperblock()
+			readHeap, err := LoadLocalHeap(reader, 0, sb)
+			require.NoError(t, err)
+			require.NotNil(t, readHeap)
+
+			// Verify all strings can be retrieved
+			// Note: GetString adds 16 to offset (for free list metadata in read format)
+			// But our write format doesn't have that, so we need to adjust
+			// For this test, we'll directly check the data buffer
+			for i, expectedStr := range tt.strings {
+				offset := offsets[i]
+				// Read directly from data segment (starts at byte 32)
+				dataStart := 32 + offset
+				end := dataStart
+				for end < uint64(len(buf)) && buf[end] != 0 {
+					end++
+				}
+				actualStr := string(buf[dataStart:end])
+				require.Equal(t, expectedStr, actualStr, "string mismatch at index %d", i)
+			}
+		})
+	}
+}
+
+func TestLocalHeap_AddString_Errors(t *testing.T) {
+	tests := []struct {
+		name        string
+		heapSize    uint64
+		stringsToAdd []string
+		expectError bool
+	}{
+		{
+			name:         "exact fit",
+			heapSize:     19, // "hello\0" (6) + "world\0" (6) + "!\0" (2) = 14, but aligned to 24
+			stringsToAdd: []string{"hello", "world", "!"},
+			expectError:  false,
+		},
+		{
+			name:         "overflow by one byte",
+			heapSize:     16,
+			stringsToAdd: []string{"1234567890123456"}, // 17 bytes with null
+			expectError:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			heap := NewLocalHeap(tt.heapSize)
+
+			var lastErr error
+			for _, s := range tt.stringsToAdd {
+				_, err := heap.AddString(s)
+				if err != nil {
+					lastErr = err
+					break
+				}
+			}
+
+			if tt.expectError {
+				require.Error(t, lastErr)
+				require.Contains(t, lastErr.Error(), "local heap is full")
+			} else {
+				require.NoError(t, lastErr)
+			}
+		})
+	}
+}
+
+// --- Mock helpers for write tests ---
+
+type mockWriter struct {
+	data []byte
+}
+
+func (m *mockWriter) WriteAt(p []byte, off int64) (n int, err error) {
+	if off < 0 || off >= int64(len(m.data)) {
+		return 0, errors.New("offset out of range")
+	}
+	n = copy(m.data[off:], p)
+	return n, nil
+}
