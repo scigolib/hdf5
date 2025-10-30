@@ -61,6 +61,27 @@ func NewMinimalRootGroupHeader() *ObjectHeaderWriter {
 	}
 }
 
+// Size calculates the total size of the object header in bytes.
+// This is used for pre-allocation before writing.
+//
+// Returns:
+//   - Total size in bytes
+//
+// For object header v2:
+//   - Header: 4 (signature) + 1 (version) + 1 (flags) + 1 (chunk size) = 7 bytes
+//   - Messages: sum of (1 + 2 + 1 + len(data)) for each message
+func (ohw *ObjectHeaderWriter) Size() uint64 {
+	// Calculate message data size
+	var messageDataSize uint64
+	for _, msg := range ohw.Messages {
+		// Each message: Type (1) + Size (2) + Flags (1) + Data (variable)
+		messageDataSize += 1 + 2 + 1 + uint64(len(msg.Data))
+	}
+
+	// Header size: Signature (4) + Version (1) + Flags (1) + Chunk Size (1) + Messages
+	return 4 + 1 + 1 + 1 + messageDataSize
+}
+
 // WriteTo writes the object header to the writer at the specified address.
 // Returns the total size written (useful for allocation tracking).
 //

@@ -47,10 +47,18 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 
 	numSymbols := sb.Endianness.Uint16(header[6:8])
 
+	// Note: Symbol table nodes have a fixed capacity (typically 32 entries for K=16).
+	// When parsing, we don't know the original capacity if numSymbols=0.
+	// Use standard capacity (32) to allow modifications.
+	capacity := uint16(32) // Standard capacity (2*K where K=16)
+	if numSymbols > capacity {
+		capacity = numSymbols // Increase if needed
+	}
+
 	node := &SymbolTableNode{
 		Version:    version,
 		NumSymbols: numSymbols,
-		Entries:    make([]SymbolTableEntry, 0, numSymbols),
+		Entries:    make([]SymbolTableEntry, 0, capacity),
 	}
 
 	if numSymbols == 0 {
@@ -133,5 +141,103 @@ func readAddressFromBytes(data []byte, size int, endianness binary.ByteOrder) ui
 		var buf [8]byte
 		copy(buf[:], data[:size])
 		return endianness.Uint64(buf[:])
+	}
+}
+
+// NewSymbolTableNode creates a new empty symbol table node with the given capacity.
+// capacity is typically 2*K where K is the B-tree order (default: K=16, so capacity=32).
+func NewSymbolTableNode(capacity uint16) *SymbolTableNode {
+	return &SymbolTableNode{
+		Version:    1,
+		NumSymbols: 0,
+		Entries:    make([]SymbolTableEntry, 0, capacity),
+	}
+}
+
+// AddEntry adds a symbol table entry to the node.
+// Returns an error if the node would exceed capacity.
+func (stn *SymbolTableNode) AddEntry(entry SymbolTableEntry) error {
+	capacity := cap(stn.Entries)
+	if int(stn.NumSymbols) >= capacity {
+		return fmt.Errorf("symbol table node is full (%d/%d)", stn.NumSymbols, capacity)
+	}
+
+	stn.Entries = append(stn.Entries, entry)
+	stn.NumSymbols++
+	return nil
+}
+
+// WriteAt writes the symbol table node to w at the specified address.
+// offsetSize determines the size of addresses in the file (typically 8 bytes).
+// maxEntries is the fixed size of the node (for padding with zeros).
+func (stn *SymbolTableNode) WriteAt(w io.WriterAt, address uint64, offsetSize uint8, maxEntries uint16, endianness binary.ByteOrder) error {
+	// Calculate entry size: 2*offsetSize + 4 + 4 + 16
+	entrySize := int(offsetSize)*2 + 4 + 4 + 16
+
+	// Total size: 8-byte header + (maxEntries * entrySize)
+	totalSize := 8 + int(maxEntries)*entrySize
+	buf := make([]byte, totalSize)
+
+	// Write header
+	copy(buf[0:4], []byte("SNOD"))
+	buf[4] = stn.Version
+	buf[5] = 0 // Reserved
+	endianness.PutUint16(buf[6:8], stn.NumSymbols)
+
+	// Write entries
+	pos := 8
+	for i := uint16(0); i < maxEntries; i++ {
+		if i < stn.NumSymbols {
+			entry := stn.Entries[i]
+
+			// Write link name offset
+			writeAddressToBytes(buf[pos:], entry.LinkNameOffset, int(offsetSize), endianness)
+			pos += int(offsetSize)
+
+			// Write object header address
+			writeAddressToBytes(buf[pos:], entry.ObjectAddress, int(offsetSize), endianness)
+			pos += int(offsetSize)
+
+			// Write cache type
+			endianness.PutUint32(buf[pos:pos+4], entry.CacheType)
+			pos += 4
+
+			// Write reserved
+			endianness.PutUint32(buf[pos:pos+4], entry.Reserved)
+			pos += 4
+
+			// Skip scratch-pad (16 bytes, already zero)
+			pos += 16
+		} else {
+			// Write empty entry (all zeros)
+			pos += entrySize
+		}
+	}
+
+	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.WriterAt interface
+	_, err := w.WriteAt(buf, int64(address))
+	return err
+}
+
+// writeAddressToBytes writes a variable-sized address to byte slice.
+func writeAddressToBytes(data []byte, addr uint64, size int, endianness binary.ByteOrder) {
+	if size > len(data) {
+		size = len(data)
+	}
+
+	switch size {
+	case 1:
+		data[0] = byte(addr)
+	case 2:
+		endianness.PutUint16(data[:2], uint16(addr))
+	case 4:
+		endianness.PutUint32(data[:4], uint32(addr))
+	case 8:
+		endianness.PutUint64(data[:8], addr)
+	default:
+		// Pad to requested size
+		var buf [8]byte
+		endianness.PutUint64(buf[:], addr)
+		copy(data[:size], buf[:size])
 	}
 }

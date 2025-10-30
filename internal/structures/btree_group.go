@@ -135,3 +135,153 @@ func readAddress(data []byte, size int) uint64 {
 		return binary.LittleEndian.Uint64(buf[:])
 	}
 }
+
+// BTreeNodeV1 represents a B-tree version 1 node for group symbol tables.
+// This is the "TREE" format used for indexing symbol table nodes.
+//
+// Format:
+// - 4 bytes: Signature ("TREE")
+// - 1 byte: Node type (0 = group B-tree)
+// - 1 byte: Node level (0 = leaf, 1+ = internal)
+// - 2 bytes: Number of entries used
+// - offsetSize bytes: Left sibling address (0xFFFFFFFFFFFFFFFF for none)
+// - offsetSize bytes: Right sibling address (0xFFFFFFFFFFFFFFFF for none)
+// - Then: 2K+1 keys (each offsetSize bytes) alternating with 2K child addresses
+//
+// For MVP (single node), we simplify:
+// - Only leaf nodes (level = 0)
+// - Only one child pointer (to symbol table node)
+// - Left/right siblings are undefined
+type BTreeNodeV1 struct {
+	Signature     [4]byte  // "TREE"
+	NodeType      uint8    // 0 = group symbol table
+	NodeLevel     uint8    // 0 = leaf
+	EntriesUsed   uint16   // Number of entries
+	LeftSibling   uint64   // Address of left sibling (UNDEF for none)
+	RightSibling  uint64   // Address of right sibling (UNDEF for none)
+	Keys          []uint64 // Link name offsets in heap (2K+1 for full node)
+	ChildPointers []uint64 // Child node addresses (2K for full node, or symbol table node addresses for leaf)
+}
+
+// NewBTreeNodeV1 creates a new B-tree v1 node for group symbol tables.
+// For MVP, this is always a leaf node pointing to a single symbol table node.
+func NewBTreeNodeV1(nodeType uint8, K uint16) *BTreeNodeV1 {
+	return &BTreeNodeV1{
+		Signature:     [4]byte{'T', 'R', 'E', 'E'},
+		NodeType:      nodeType,
+		NodeLevel:     0, // Leaf node for MVP
+		EntriesUsed:   0,
+		LeftSibling:   0xFFFFFFFFFFFFFFFF,            // Undefined
+		RightSibling:  0xFFFFFFFFFFFFFFFF,            // Undefined
+		Keys:          make([]uint64, 0, 2*int(K)+1), // 2K+1 keys
+		ChildPointers: make([]uint64, 0, 2*int(K)),   // 2K children
+	}
+}
+
+// AddKey adds a key and child pointer to the B-tree node.
+// For leaf nodes in groups, keys are link name offsets in the local heap,
+// and child pointers are addresses of symbol table nodes.
+func (btn *BTreeNodeV1) AddKey(key uint64, childAddr uint64) error {
+	maxKeys := cap(btn.Keys)
+	if len(btn.Keys) >= maxKeys {
+		return fmt.Errorf("b-tree node is full (%d/%d keys)", len(btn.Keys), maxKeys)
+	}
+
+	// For MVP: simple append (no balancing)
+	btn.Keys = append(btn.Keys, key)
+	btn.ChildPointers = append(btn.ChildPointers, childAddr)
+	btn.EntriesUsed++
+
+	return nil
+}
+
+// WriteAt writes the B-tree node to w at the specified address.
+// offsetSize determines the size of addresses in the file (typically 8).
+// K is the B-tree order (default 16, so 2K+1 = 33 keys).
+func (btn *BTreeNodeV1) WriteAt(w io.WriterAt, address uint64, offsetSize uint8, K uint16, endianness binary.ByteOrder) error {
+	// Calculate sizes
+	maxKeys := 2*int(K) + 1
+	maxChildren := 2 * int(K)
+
+	// Header size: 4 (sig) + 1 (type) + 1 (level) + 2 (entries) + 2*offsetSize (siblings)
+	headerSize := 8 + 2*int(offsetSize)
+
+	// Keys and children are interleaved:
+	// Key[0], Child[0], Key[1], Child[1], ..., Key[2K], Child[2K-1], Key[2K]
+	// Total: (2K+1) keys * offsetSize + 2K children * offsetSize
+	keysSize := maxKeys * int(offsetSize)
+	childrenSize := maxChildren * int(offsetSize)
+
+	totalSize := headerSize + keysSize + childrenSize
+	buf := make([]byte, totalSize)
+
+	// Write header
+	pos := 0
+	copy(buf[pos:], btn.Signature[:])
+	pos += 4
+	buf[pos] = btn.NodeType
+	pos++
+	buf[pos] = btn.NodeLevel
+	pos++
+	endianness.PutUint16(buf[pos:], btn.EntriesUsed)
+	pos += 2
+
+	// Write left sibling
+	writeAddr(buf[pos:], btn.LeftSibling, int(offsetSize), endianness)
+	pos += int(offsetSize)
+
+	// Write right sibling
+	writeAddr(buf[pos:], btn.RightSibling, int(offsetSize), endianness)
+	pos += int(offsetSize)
+
+	// Write keys and children (interleaved)
+	// For a leaf B-tree in groups: keys are heap offsets, children are symbol table node addresses
+	for i := 0; i < maxKeys; i++ {
+		var key uint64
+		if i < len(btn.Keys) {
+			key = btn.Keys[i]
+		}
+		// If i >= len(Keys), key is 0 (padding)
+
+		writeAddr(buf[pos:], key, int(offsetSize), endianness)
+		pos += int(offsetSize)
+
+		// After each key (except the last), write a child pointer
+		if i < maxChildren {
+			var child uint64
+			if i < len(btn.ChildPointers) {
+				child = btn.ChildPointers[i]
+			}
+
+			writeAddr(buf[pos:], child, int(offsetSize), endianness)
+			pos += int(offsetSize)
+		}
+	}
+
+	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.WriterAt interface
+	_, err := w.WriteAt(buf, int64(address))
+	return err
+}
+
+// writeAddr writes a variable-sized address to byte slice.
+func writeAddr(data []byte, addr uint64, size int, endianness binary.ByteOrder) {
+	if size > len(data) {
+		size = len(data)
+	}
+
+	switch size {
+	case 1:
+		data[0] = byte(addr)
+	case 2:
+		endianness.PutUint16(data[:2], uint16(addr))
+	case 4:
+		endianness.PutUint32(data[:4], uint32(addr))
+	case 8:
+		endianness.PutUint64(data[:8], addr)
+	default:
+		// Pad to requested size
+		var buf [8]byte
+		endianness.PutUint64(buf[:], addr)
+		copy(data[:size], buf[:size])
+	}
+}

@@ -142,12 +142,12 @@ func encodeDatatypeNumeric(dt *DatatypeMessage) ([]byte, error) {
 		}
 
 		properties = make([]byte, 12)
-		properties[0] = byteOrder                // Byte order
-		properties[1] = byte(dt.Size * 8)        // Precision in bits
-		properties[2] = 0                        // Offset (always 0 for standard floats)
-		properties[3] = exponentBits             // Exponent size
-		properties[4] = byte(mantissaBits)       // Mantissa size
-		properties[5] = exponentBias             // Exponent bias
+		properties[0] = byteOrder          // Byte order
+		properties[1] = byte(dt.Size * 8)  // Precision in bits
+		properties[2] = 0                  // Offset (always 0 for standard floats)
+		properties[3] = exponentBits       // Exponent size
+		properties[4] = byte(mantissaBits) // Mantissa size
+		properties[5] = exponentBias       // Exponent bias
 		// Remaining bytes: mantissa location, exponent location, etc. (set to 0 for standard)
 	} else {
 		// Fixed-point (integer) properties (4 bytes)
@@ -299,6 +299,40 @@ func EncodeDataspaceMessage(dims []uint64, maxDims []uint64) ([]byte, error) {
 	}
 
 	return buf, nil
+}
+
+// EncodeSymbolTableMessage encodes a Symbol Table Message.
+// This message is used in group object headers to point to the symbol table structure.
+//
+// Message type: 0x11 (17)
+//
+// Parameters:
+//   - btreeAddr: Address of the B-tree v1 root node
+//   - heapAddr: Address of the local heap
+//   - offsetSize: Size of addresses in bytes (from superblock)
+//   - lengthSize: Size of lengths in bytes (from superblock)
+//
+// Returns:
+//   - Encoded message bytes
+//
+// Format:
+//   - B-tree address: offsetSize bytes
+//   - Local heap address: offsetSize bytes
+//
+// Reference: HDF5 spec III.E (Symbol Table Message)
+// C Reference: H5Ostab.c - H5O__stab_encode()
+func EncodeSymbolTableMessage(btreeAddr, heapAddr uint64, offsetSize, lengthSize int) []byte {
+	// Message size: 2 * offsetSize
+	messageSize := 2 * offsetSize
+	buf := make([]byte, messageSize)
+
+	// B-tree address (variable size based on superblock)
+	writeUint64(buf[0:], btreeAddr, offsetSize, binary.LittleEndian)
+
+	// Local heap address (variable size based on superblock)
+	writeUint64(buf[offsetSize:], heapAddr, offsetSize, binary.LittleEndian)
+
+	return buf
 }
 
 // writeUint64 writes a uint64 value to buffer using variable-sized encoding.
