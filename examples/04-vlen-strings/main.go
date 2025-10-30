@@ -16,7 +16,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to open file:", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	fmt.Printf("File opened successfully. Superblock version: %d\n", file.SuperblockVersion())
 	fmt.Printf("Offset size: %d bytes\n", file.Superblock().OffsetSize)

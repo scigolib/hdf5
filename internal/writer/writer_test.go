@@ -62,7 +62,7 @@ func TestNewFileWriter(t *testing.T) {
 				require.NoError(t, err)
 				_, err = f.WriteString("existing content")
 				require.NoError(t, err)
-				f.Close()
+				_ = f.Close()
 			}
 
 			writer, err := NewFileWriter(path, tt.mode, tt.initialOffset)
@@ -75,7 +75,7 @@ func TestNewFileWriter(t *testing.T) {
 
 			require.NoError(t, err)
 			require.NotNil(t, writer)
-			defer writer.Close()
+			defer func() { _ = writer.Close() }()
 
 			// Verify initial state
 			assert.NotNil(t, writer.File())
@@ -94,7 +94,7 @@ func TestFileWriter_Allocate(t *testing.T) {
 
 	writer, err := NewFileWriter(path, ModeTruncate, 48)
 	require.NoError(t, err)
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 
 	t.Run("sequential allocations", func(t *testing.T) {
 		addr1, err := writer.Allocate(100)
@@ -120,7 +120,7 @@ func TestFileWriter_WriteAt(t *testing.T) {
 
 	writer, err := NewFileWriter(path, ModeTruncate, 0)
 	require.NoError(t, err)
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 
 	t.Run("write data at address", func(t *testing.T) {
 		data := []byte("Hello, HDF5!")
@@ -167,7 +167,7 @@ func TestFileWriter_WriteAtWithAllocation(t *testing.T) {
 
 	writer, err := NewFileWriter(path, ModeTruncate, 0)
 	require.NoError(t, err)
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 
 	t.Run("allocate and write", func(t *testing.T) {
 		data := []byte("Test data")
@@ -220,7 +220,7 @@ func TestFileWriter_Flush(t *testing.T) {
 
 	writer, err := NewFileWriter(path, ModeTruncate, 0)
 	require.NoError(t, err)
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 
 	// Write data
 	data := []byte("Test flush")
@@ -234,7 +234,7 @@ func TestFileWriter_Flush(t *testing.T) {
 	// Verify data persists (open another reader)
 	f, err := os.Open(path)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	buf := make([]byte, len(data))
 	n, err := f.ReadAt(buf, int64(addr))
@@ -306,7 +306,7 @@ func TestFileWriter_EndOfFile(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			writer, err := NewFileWriter(path, ModeTruncate, tt.initialOffset)
 			require.NoError(t, err)
-			defer writer.Close()
+			defer func() { _ = writer.Close() }()
 
 			for _, size := range tt.writes {
 				data := make([]byte, size)
@@ -358,7 +358,7 @@ func TestFileWriter_Integration(t *testing.T) {
 		// Reopen and verify data persists
 		f, err := os.Open(path)
 		require.NoError(t, err)
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		buf1 := make([]byte, len(block1))
 		_, err = f.ReadAt(buf1, int64(addr1))

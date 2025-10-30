@@ -12,12 +12,12 @@ import (
 // This demonstrates the full write infrastructure even though linking is not yet implemented.
 func TestFullWriteWorkflow_GroupsAndDatasets(t *testing.T) {
 	testFile := "test_full_write_workflow.h5"
-	defer os.Remove(testFile)
+	defer func() { _ = os.Remove(testFile) }()
 
 	// Create file
 	fw, err := CreateForWrite(testFile, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create groups (MVP: not linked, but structure is valid)
 	err = fw.CreateGroup("/data")
@@ -45,7 +45,7 @@ func TestFullWriteWorkflow_GroupsAndDatasets(t *testing.T) {
 	// Reopen and verify file is valid HDF5
 	f, err := Open(testFile)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Verify root group exists
 	root := f.Root()
@@ -59,11 +59,11 @@ func TestFullWriteWorkflow_GroupsAndDatasets(t *testing.T) {
 // TestFullWriteWorkflow_MultipleDatasets tests writing multiple datasets with different types.
 func TestFullWriteWorkflow_MultipleDatasets(t *testing.T) {
 	testFile := "test_multiple_datasets.h5"
-	defer os.Remove(testFile)
+	defer func() { _ = os.Remove(testFile) }()
 
 	fw, err := CreateForWrite(testFile, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create datasets with different types
 	tests := []struct {
@@ -115,7 +115,7 @@ func TestFullWriteWorkflow_MultipleDatasets(t *testing.T) {
 	// Verify file is valid
 	f, err := Open(testFile)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	require.NotNil(t, f.Root())
 }
@@ -123,7 +123,7 @@ func TestFullWriteWorkflow_MultipleDatasets(t *testing.T) {
 // TestFullWriteWorkflow_BinaryStructure verifies the binary file structure.
 func TestFullWriteWorkflow_BinaryStructure(t *testing.T) {
 	testFile := "test_binary_structure.h5"
-	defer os.Remove(testFile)
+	defer func() { _ = os.Remove(testFile) }()
 
 	fw, err := CreateForWrite(testFile, CreateTruncate)
 	require.NoError(t, err)
@@ -163,11 +163,11 @@ func TestFullWriteWorkflow_BinaryStructure(t *testing.T) {
 // TestFullWriteWorkflow_ErrorCases tests error handling.
 func TestFullWriteWorkflow_ErrorCases(t *testing.T) {
 	testFile := "test_error_cases.h5"
-	defer os.Remove(testFile)
+	defer func() { _ = os.Remove(testFile) }()
 
 	fw, err := CreateForWrite(testFile, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Error: Create dataset with mismatched data
 	ds, err := fw.CreateDataset("/test", Int32, []uint64{5})
@@ -187,7 +187,7 @@ func TestFullWriteWorkflow_ErrorCases(t *testing.T) {
 // TestFullWriteWorkflow_CloseAndReopen tests write-close-reopen cycle.
 func TestFullWriteWorkflow_CloseAndReopen(t *testing.T) {
 	testFile := "test_close_reopen.h5"
-	defer os.Remove(testFile)
+	defer func() { _ = os.Remove(testFile) }()
 
 	// Write phase
 	{
@@ -214,7 +214,7 @@ func TestFullWriteWorkflow_CloseAndReopen(t *testing.T) {
 	{
 		f, err := Open(testFile)
 		require.NoError(t, err)
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		// Verify file structure
 		root := f.Root()
@@ -234,7 +234,7 @@ func TestFullWriteWorkflow_CloseAndReopen(t *testing.T) {
 // This is the comprehensive test that validates Component 3 is complete.
 func TestFullWriteWorkflow_WithDiscovery(t *testing.T) {
 	testFile := "test_discovery.h5"
-	defer os.Remove(testFile)
+	defer func() { _ = os.Remove(testFile) }()
 
 	// Write phase
 	fw, err := CreateForWrite(testFile, CreateTruncate)
@@ -261,7 +261,7 @@ func TestFullWriteWorkflow_WithDiscovery(t *testing.T) {
 	// Read phase - verify discovery
 	f, err := Open(testFile)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Verify root group exists and has children
 	root := f.Root()
@@ -346,7 +346,7 @@ func TestFullWriteWorkflow_WithDiscovery(t *testing.T) {
 // TestFullWriteWorkflow_MultipleObjects tests creating many objects.
 func TestFullWriteWorkflow_MultipleObjects(t *testing.T) {
 	testFile := "test_multiple_objects.h5"
-	defer os.Remove(testFile)
+	defer func() { _ = os.Remove(testFile) }()
 
 	fw, err := CreateForWrite(testFile, CreateTruncate)
 	require.NoError(t, err)
@@ -368,7 +368,7 @@ func TestFullWriteWorkflow_MultipleObjects(t *testing.T) {
 	// Verify all datasets are discoverable
 	f, err := Open(testFile)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	children := f.Root().Children()
 	require.Equal(t, 10, len(children), "should have 10 datasets")

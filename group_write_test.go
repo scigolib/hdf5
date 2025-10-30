@@ -9,12 +9,12 @@ import (
 
 func TestCreateGroup_RootLevel(t *testing.T) {
 	testFile := "test_create_group_root.h5"
-	defer os.Remove(testFile)
+	defer func() { _ = os.Remove(testFile) }()
 
 	// Create file
 	fw, err := CreateForWrite(testFile, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create root-level group
 	err = fw.CreateGroup("/data")
@@ -27,7 +27,7 @@ func TestCreateGroup_RootLevel(t *testing.T) {
 	// Reopen and verify structure
 	f, err := Open(testFile)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// For MVP, group is created but not linked (limitation)
 	// We verify the file is still valid
@@ -37,11 +37,11 @@ func TestCreateGroup_RootLevel(t *testing.T) {
 
 func TestCreateGroup_ValidationErrors(t *testing.T) {
 	testFile := "test_create_group_validation.h5"
-	defer os.Remove(testFile)
+	defer func() { _ = os.Remove(testFile) }()
 
 	fw, err := CreateForWrite(testFile, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	tests := []struct {
 		name    string
@@ -81,11 +81,11 @@ func TestCreateGroup_ValidationErrors(t *testing.T) {
 
 func TestCreateGroup_Multiple(t *testing.T) {
 	testFile := "test_create_group_multiple.h5"
-	defer os.Remove(testFile)
+	defer func() { _ = os.Remove(testFile) }()
 
 	fw, err := CreateForWrite(testFile, CreateTruncate)
 	require.NoError(t, err)
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Create multiple root-level groups
 	groups := []string{"/data", "/metadata", "/results"}
@@ -101,7 +101,7 @@ func TestCreateGroup_Multiple(t *testing.T) {
 	// Reopen and verify file structure
 	f, err := Open(testFile)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	root := f.Root()
 	require.NotNil(t, root)
@@ -157,7 +157,7 @@ func TestParsePath(t *testing.T) {
 
 func TestCreateGroup_BinaryFormat(t *testing.T) {
 	testFile := "test_create_group_binary.h5"
-	defer os.Remove(testFile)
+	defer func() { _ = os.Remove(testFile) }()
 
 	fw, err := CreateForWrite(testFile, CreateTruncate)
 	require.NoError(t, err)

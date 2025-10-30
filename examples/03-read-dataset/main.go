@@ -24,7 +24,7 @@ func testSimpleFloat64() {
 	if err != nil {
 		log.Fatalf("Failed to open file: %v", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Get the dataset
 	var dataset *hdf5.Dataset
@@ -74,7 +74,7 @@ func testMatrix() {
 	if err != nil {
 		log.Fatalf("Failed to open file: %v", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Get the dataset
 	var dataset *hdf5.Dataset
@@ -117,7 +117,7 @@ func testMultipleDatasets() {
 	if err != nil {
 		log.Fatalf("Failed to open file: %v", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Read all datasets
 	datasets := make(map[string]*hdf5.Dataset)

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockWriterAt implements io.WriterAt for testing
+// mockWriterAt implements io.WriterAt for testing.
 type mockWriterAt struct {
 	buf *bytes.Buffer
 }

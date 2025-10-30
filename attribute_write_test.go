@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Test inferDatatypeFromValue for various Go types
+// Test inferDatatypeFromValue for various Go types.
 func TestInferDatatypeFromValue(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -121,7 +121,7 @@ func TestInferDatatypeFromValue(t *testing.T) {
 	}
 }
 
-// Test encodeAttributeValue for various Go types
+// Test encodeAttributeValue for various Go types.
 func TestEncodeAttributeValue(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -217,13 +217,13 @@ func TestEncodeAttributeValue(t *testing.T) {
 	}
 }
 
-// Test WriteAttribute API (currently returns error as not yet implemented)
+// Test WriteAttribute API (currently returns error as not yet implemented).
 func TestDatasetWriter_WriteAttribute(t *testing.T) {
 	// Create a temporary file for testing
 	fw, err := CreateForWrite("testdata/test_attributes.h5", CreateTruncate)
 	require.NoError(t, err)
 	defer func() {
-		fw.Close()
+		_ = fw.Close()
 		// Clean up test file
 		// os.Remove("testdata/test_attributes.h5")
 	}()
@@ -239,7 +239,7 @@ func TestDatasetWriter_WriteAttribute(t *testing.T) {
 	assert.Contains(t, err.Error(), "not yet implemented", "error should indicate MVP limitation")
 }
 
-// Test round-trip: encode value → decode with existing parser
+// Test round-trip: encode value → decode with existing parser.
 func TestAttributeEncoding_RoundTrip(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -280,7 +280,7 @@ func TestAttributeEncoding_RoundTrip(t *testing.T) {
 	}
 }
 
-// Benchmark attribute encoding performance
+// Benchmark attribute encoding performance.
 func BenchmarkEncodeAttributeValue(b *testing.B) {
 	values := []interface{}{
 		int32(42),

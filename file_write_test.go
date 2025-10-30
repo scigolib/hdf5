@@ -30,7 +30,7 @@ func TestCreate(t *testing.T) {
 				// Verify file can be opened
 				f, err := Open(filename)
 				require.NoError(t, err)
-				defer f.Close()
+				defer func() { _ = f.Close() }()
 
 				// Verify root group
 				assert.NotNil(t, f.Root())
@@ -59,13 +59,13 @@ func TestCreate(t *testing.T) {
 			wantErr: false,
 			setup: func(t *testing.T, filename string) {
 				// Create file with some content first
-				require.NoError(t, os.WriteFile(filename, []byte("old content"), 0644))
+				require.NoError(t, os.WriteFile(filename, []byte("old content"), 0o644))
 			},
 			verify: func(t *testing.T, filename string) {
 				// Verify file was overwritten with valid HDF5 content
 				f, err := Open(filename)
 				require.NoError(t, err)
-				defer f.Close()
+				defer func() { _ = f.Close() }()
 
 				assert.NotNil(t, f.Root())
 			},
@@ -118,7 +118,7 @@ func TestCreate_RoundTrip(t *testing.T) {
 	// Reopen and verify
 	f2, err := Open(filename)
 	require.NoError(t, err)
-	defer f2.Close()
+	defer func() { _ = f2.Close() }()
 
 	// Verify superblock
 	assert.Equal(t, uint8(2), f2.SuperblockVersion(), "Should be superblock v2")
@@ -208,7 +208,7 @@ func TestCreate_ReadOnlyAfterCreate(t *testing.T) {
 	// Create file
 	f, err := Create(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// For MVP, file is read-only after creation
 	// Verify we can read root group

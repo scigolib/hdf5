@@ -227,7 +227,7 @@ func (w *FileWriter) Seek(offset int64, whence int) (int64, error) {
 	return w.file.Seek(offset, whence)
 }
 
-// Ensure FileWriter implements io.ReaderAt and io.WriterAt
+// Ensure FileWriter implements io.ReaderAt and io.WriterAt.
 var (
 	_ io.ReaderAt = (*FileWriter)(nil)
 	_ io.WriterAt = (*FileWriter)(nil)

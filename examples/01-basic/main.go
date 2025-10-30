@@ -36,7 +36,7 @@ func testFile(filename string) {
 		log.Printf("Failed to open file: %v", err)
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	fmt.Printf("File opened successfully. Superblock version: %d\n", file.SuperblockVersion())
 

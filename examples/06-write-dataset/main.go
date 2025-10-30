@@ -27,7 +27,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create file: %v", err)
 	}
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Example 1: Write a 1D int32 array
 	fmt.Println("Writing 1D int32 dataset...")
@@ -78,20 +78,20 @@ func main() {
 
 	// int8
 	ds4, _ := fw.CreateDataset("/int8_data", hdf5.Int8, []uint64{3})
-	ds4.Write([]int8{-128, 0, 127})
+	_ = ds4.Write([]int8{-128, 0, 127})
 
 	// uint8
 	ds5, _ := fw.CreateDataset("/uint8_data", hdf5.Uint8, []uint64{3})
-	ds5.Write([]uint8{0, 128, 255})
+	_ = ds5.Write([]uint8{0, 128, 255})
 
 	// int64
 	ds6, _ := fw.CreateDataset("/int64_data", hdf5.Int64, []uint64{3})
-	ds6.Write([]int64{-1000000, 0, 1000000})
+	_ = ds6.Write([]int64{-1000000, 0, 1000000})
 
 	// Example 5: Write float32 data
 	fmt.Println("Writing float32 dataset...")
 	ds7, _ := fw.CreateDataset("/float32_data", hdf5.Float32, []uint64{5})
-	ds7.Write([]float32{1.5, 2.5, 3.5, 4.5, 5.5})
+	_ = ds7.Write([]float32{1.5, 2.5, 3.5, 4.5, 5.5})
 
 	// Close file and flush all writes
 	if err := fw.Close(); err != nil {
