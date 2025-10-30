@@ -113,105 +113,82 @@ type datatypeInfo struct {
 	opaqueTag  string        // Opaque tag
 }
 
-// getDatatypeInfo returns HDF5 datatype information for a Go datatype.
-func getDatatypeInfo(dt Datatype, config *datasetConfig) (*datatypeInfo, error) {
-	switch {
-	// Basic integer types
-	case dt == Int8:
-		return &datatypeInfo{class: core.DatatypeFixed, size: 1, classBitField: 0x00}, nil
-	case dt == Int16:
-		return &datatypeInfo{class: core.DatatypeFixed, size: 2, classBitField: 0x00}, nil
-	case dt == Int32:
-		return &datatypeInfo{class: core.DatatypeFixed, size: 4, classBitField: 0x00}, nil
-	case dt == Int64:
-		return &datatypeInfo{class: core.DatatypeFixed, size: 8, classBitField: 0x00}, nil
-	case dt == Uint8:
-		return &datatypeInfo{class: core.DatatypeFixed, size: 1, classBitField: 0x00}, nil
-	case dt == Uint16:
-		return &datatypeInfo{class: core.DatatypeFixed, size: 2, classBitField: 0x00}, nil
-	case dt == Uint32:
-		return &datatypeInfo{class: core.DatatypeFixed, size: 4, classBitField: 0x00}, nil
-	case dt == Uint64:
-		return &datatypeInfo{class: core.DatatypeFixed, size: 8, classBitField: 0x00}, nil
+// datatypeHandler is the interface for handling different HDF5 datatypes.
+// This follows the Go-idiomatic registry pattern used in stdlib (encoding/json, database/sql).
+type datatypeHandler interface {
+	// GetInfo returns datatype metadata for the given configuration.
+	GetInfo(config *datasetConfig) (*datatypeInfo, error)
 
-	// Float types
-	case dt == Float32:
-		return &datatypeInfo{class: core.DatatypeFloat, size: 4, classBitField: 0x00}, nil
-	case dt == Float64:
-		return &datatypeInfo{class: core.DatatypeFloat, size: 8, classBitField: 0x00}, nil
-
-	// String type
-	case dt == String:
-		if config.stringSize == 0 {
-			return nil, fmt.Errorf("string datatype requires size > 0 (use WithStringSize option)")
-		}
-		return &datatypeInfo{class: core.DatatypeString, size: config.stringSize, classBitField: 0x00}, nil
-
-	// Array types
-	case dt >= ArrayInt8 && dt <= ArrayFloat64:
-		return getArrayDatatypeInfo(dt, config)
-
-	// Enum types
-	case dt >= EnumInt8 && dt <= EnumUint64:
-		return getEnumDatatypeInfo(dt, config)
-
-	// Reference types
-	case dt == ObjectReference:
-		return &datatypeInfo{class: core.DatatypeReference, size: 8, classBitField: 0x00}, nil
-	case dt == RegionReference:
-		return &datatypeInfo{class: core.DatatypeReference, size: 12, classBitField: 0x01}, nil
-
-	// Opaque type
-	case dt == Opaque:
-		if config.opaqueTag == "" || config.opaqueSize == 0 {
-			return nil, fmt.Errorf("opaque datatype requires tag and size > 0 (use WithOpaqueTag option)")
-		}
-		return &datatypeInfo{
-			class:     core.DatatypeOpaque,
-			size:      config.opaqueSize,
-			opaqueTag: config.opaqueTag,
-		}, nil
-
-	default:
-		return nil, fmt.Errorf("unsupported datatype: %d", dt)
-	}
+	// EncodeDatatypeMessage encodes the HDF5 datatype message bytes.
+	EncodeDatatypeMessage(info *datatypeInfo) ([]byte, error)
 }
 
-// getArrayDatatypeInfo returns datatype info for array types.
-func getArrayDatatypeInfo(dt Datatype, config *datasetConfig) (*datatypeInfo, error) {
+// basicTypeHandler handles simple fixed-point and float datatypes.
+type basicTypeHandler struct {
+	class         core.DatatypeClass
+	size          uint32
+	classBitField uint32
+}
+
+func (h *basicTypeHandler) GetInfo(_ *datasetConfig) (*datatypeInfo, error) {
+	return &datatypeInfo{
+		class:         h.class,
+		size:          h.size,
+		classBitField: h.classBitField,
+	}, nil
+}
+
+func (h *basicTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, error) {
+	msg := &core.DatatypeMessage{
+		Class:         info.class,
+		Version:       1,
+		Size:          info.size,
+		ClassBitField: info.classBitField,
+	}
+	return core.EncodeDatatypeMessage(msg)
+}
+
+// stringTypeHandler handles fixed-length string datatypes.
+type stringTypeHandler struct{}
+
+func (h *stringTypeHandler) GetInfo(config *datasetConfig) (*datatypeInfo, error) {
+	if config.stringSize == 0 {
+		return nil, fmt.Errorf("string datatype requires size > 0 (use WithStringSize option)")
+	}
+	return &datatypeInfo{
+		class:         core.DatatypeString,
+		size:          config.stringSize,
+		classBitField: 0x00,
+	}, nil
+}
+
+func (h *stringTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, error) {
+	msg := &core.DatatypeMessage{
+		Class:         info.class,
+		Version:       1,
+		Size:          info.size,
+		ClassBitField: info.classBitField,
+	}
+	return core.EncodeDatatypeMessage(msg)
+}
+
+// arrayTypeHandler handles array datatypes (fixed-size collections of base types).
+type arrayTypeHandler struct {
+	baseType Datatype
+}
+
+func (h *arrayTypeHandler) GetInfo(config *datasetConfig) (*datatypeInfo, error) {
 	if len(config.arrayDims) == 0 {
 		return nil, fmt.Errorf("array datatype requires dimensions (use WithArrayDims option)")
 	}
 
-	// Map array type to base type
-	var baseType Datatype
-	switch dt {
-	case ArrayInt8:
-		baseType = Int8
-	case ArrayInt16:
-		baseType = Int16
-	case ArrayInt32:
-		baseType = Int32
-	case ArrayInt64:
-		baseType = Int64
-	case ArrayUint8:
-		baseType = Uint8
-	case ArrayUint16:
-		baseType = Uint16
-	case ArrayUint32:
-		baseType = Uint32
-	case ArrayUint64:
-		baseType = Uint64
-	case ArrayFloat32:
-		baseType = Float32
-	case ArrayFloat64:
-		baseType = Float64
-	default:
-		return nil, fmt.Errorf("invalid array datatype: %d", dt)
+	// Get base type handler and info
+	baseHandler, ok := datatypeRegistry[h.baseType]
+	if !ok {
+		return nil, fmt.Errorf("invalid array base type: %d", h.baseType)
 	}
 
-	// Get base type info (recursively)
-	baseInfo, err := getDatatypeInfo(baseType, config)
+	baseInfo, err := baseHandler.GetInfo(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get array base type: %w", err)
 	}
@@ -231,8 +208,29 @@ func getArrayDatatypeInfo(dt Datatype, config *datasetConfig) (*datatypeInfo, er
 	}, nil
 }
 
-// getEnumDatatypeInfo returns datatype info for enum types.
-func getEnumDatatypeInfo(dt Datatype, config *datasetConfig) (*datatypeInfo, error) {
+func (h *arrayTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, error) {
+	// Encode base type message first
+	baseMsg := &core.DatatypeMessage{
+		Class:         info.baseType.class,
+		Version:       1,
+		Size:          info.baseType.size,
+		ClassBitField: info.baseType.classBitField,
+	}
+	baseData, err := core.EncodeDatatypeMessage(baseMsg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode array base type: %w", err)
+	}
+
+	// Encode array datatype message with dimensions
+	return core.EncodeArrayDatatypeMessage(baseData, info.arrayDims, info.size)
+}
+
+// enumTypeHandler handles enumeration datatypes (named integer constants).
+type enumTypeHandler struct {
+	baseType Datatype
+}
+
+func (h *enumTypeHandler) GetInfo(config *datasetConfig) (*datatypeInfo, error) {
 	if len(config.enumNames) == 0 || len(config.enumValues) == 0 {
 		return nil, fmt.Errorf("enum datatype requires names and values (use WithEnumValues option)")
 	}
@@ -241,31 +239,13 @@ func getEnumDatatypeInfo(dt Datatype, config *datasetConfig) (*datatypeInfo, err
 			len(config.enumNames), len(config.enumValues))
 	}
 
-	// Map enum type to base integer type
-	var baseType Datatype
-	switch dt {
-	case EnumInt8:
-		baseType = Int8
-	case EnumInt16:
-		baseType = Int16
-	case EnumInt32:
-		baseType = Int32
-	case EnumInt64:
-		baseType = Int64
-	case EnumUint8:
-		baseType = Uint8
-	case EnumUint16:
-		baseType = Uint16
-	case EnumUint32:
-		baseType = Uint32
-	case EnumUint64:
-		baseType = Uint64
-	default:
-		return nil, fmt.Errorf("invalid enum datatype: %d", dt)
+	// Get base type handler and info
+	baseHandler, ok := datatypeRegistry[h.baseType]
+	if !ok {
+		return nil, fmt.Errorf("invalid enum base type: %d", h.baseType)
 	}
 
-	// Get base type info
-	baseInfo, err := getDatatypeInfo(baseType, config)
+	baseInfo, err := baseHandler.GetInfo(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get enum base type: %w", err)
 	}
@@ -277,6 +257,153 @@ func getEnumDatatypeInfo(dt Datatype, config *datasetConfig) (*datatypeInfo, err
 		enumNames:  config.enumNames,
 		enumValues: config.enumValues,
 	}, nil
+}
+
+func (h *enumTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, error) {
+	// Encode base type message first
+	baseMsg := &core.DatatypeMessage{
+		Class:         info.baseType.class,
+		Version:       1,
+		Size:          info.baseType.size,
+		ClassBitField: info.baseType.classBitField,
+	}
+	baseData, err := core.EncodeDatatypeMessage(baseMsg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode enum base type: %w", err)
+	}
+
+	// Convert enum values to bytes
+	valueBytes := make([]byte, len(info.enumValues)*int(info.baseType.size))
+	for i, val := range info.enumValues {
+		offset := i * int(info.baseType.size)
+		switch info.baseType.size {
+		case 1:
+			valueBytes[offset] = byte(val)
+		case 2:
+			binary.LittleEndian.PutUint16(valueBytes[offset:], uint16(val)) //nolint:gosec // Safe: validated size
+		case 4:
+			binary.LittleEndian.PutUint32(valueBytes[offset:], uint32(val)) //nolint:gosec // Safe: validated size
+		case 8:
+			binary.LittleEndian.PutUint64(valueBytes[offset:], uint64(val)) //nolint:gosec // Safe: validated size
+		}
+	}
+
+	// Encode enum datatype message
+	return core.EncodeEnumDatatypeMessage(baseData, info.enumNames, valueBytes, info.size)
+}
+
+// referenceTypeHandler handles reference datatypes (object and region references).
+type referenceTypeHandler struct {
+	size          uint32
+	classBitField uint32
+}
+
+func (h *referenceTypeHandler) GetInfo(_ *datasetConfig) (*datatypeInfo, error) {
+	return &datatypeInfo{
+		class:         core.DatatypeReference,
+		size:          h.size,
+		classBitField: h.classBitField,
+	}, nil
+}
+
+func (h *referenceTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, error) {
+	msg := &core.DatatypeMessage{
+		Class:         info.class,
+		Version:       1,
+		Size:          info.size,
+		ClassBitField: info.classBitField,
+	}
+	return core.EncodeDatatypeMessage(msg)
+}
+
+// opaqueTypeHandler handles opaque datatypes (uninterpreted byte sequences).
+type opaqueTypeHandler struct{}
+
+func (h *opaqueTypeHandler) GetInfo(config *datasetConfig) (*datatypeInfo, error) {
+	if config.opaqueTag == "" || config.opaqueSize == 0 {
+		return nil, fmt.Errorf("opaque datatype requires tag and size > 0 (use WithOpaqueTag option)")
+	}
+	return &datatypeInfo{
+		class:     core.DatatypeOpaque,
+		size:      config.opaqueSize,
+		opaqueTag: config.opaqueTag,
+	}, nil
+}
+
+func (h *opaqueTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, error) {
+	msg := &core.DatatypeMessage{
+		Class:         core.DatatypeOpaque,
+		Version:       1,
+		Size:          info.size,
+		ClassBitField: 0,
+		Properties:    []byte(info.opaqueTag),
+	}
+	return core.EncodeDatatypeMessage(msg)
+}
+
+// datatypeRegistry is the global registry mapping Datatype constants to their handlers.
+// This follows the Go stdlib pattern (encoding/json, database/sql, net/http).
+var datatypeRegistry map[Datatype]datatypeHandler
+
+// init initializes the datatype registry with all supported types.
+func init() {
+	datatypeRegistry = map[Datatype]datatypeHandler{
+		// Basic integers (fixed-point)
+		Int8:   &basicTypeHandler{core.DatatypeFixed, 1, 0x00},
+		Int16:  &basicTypeHandler{core.DatatypeFixed, 2, 0x00},
+		Int32:  &basicTypeHandler{core.DatatypeFixed, 4, 0x00},
+		Int64:  &basicTypeHandler{core.DatatypeFixed, 8, 0x00},
+		Uint8:  &basicTypeHandler{core.DatatypeFixed, 1, 0x00},
+		Uint16: &basicTypeHandler{core.DatatypeFixed, 2, 0x00},
+		Uint32: &basicTypeHandler{core.DatatypeFixed, 4, 0x00},
+		Uint64: &basicTypeHandler{core.DatatypeFixed, 8, 0x00},
+
+		// Floats
+		Float32: &basicTypeHandler{core.DatatypeFloat, 4, 0x00},
+		Float64: &basicTypeHandler{core.DatatypeFloat, 8, 0x00},
+
+		// String
+		String: &stringTypeHandler{},
+
+		// Arrays
+		ArrayInt8:    &arrayTypeHandler{Int8},
+		ArrayInt16:   &arrayTypeHandler{Int16},
+		ArrayInt32:   &arrayTypeHandler{Int32},
+		ArrayInt64:   &arrayTypeHandler{Int64},
+		ArrayUint8:   &arrayTypeHandler{Uint8},
+		ArrayUint16:  &arrayTypeHandler{Uint16},
+		ArrayUint32:  &arrayTypeHandler{Uint32},
+		ArrayUint64:  &arrayTypeHandler{Uint64},
+		ArrayFloat32: &arrayTypeHandler{Float32},
+		ArrayFloat64: &arrayTypeHandler{Float64},
+
+		// Enums
+		EnumInt8:   &enumTypeHandler{Int8},
+		EnumInt16:  &enumTypeHandler{Int16},
+		EnumInt32:  &enumTypeHandler{Int32},
+		EnumInt64:  &enumTypeHandler{Int64},
+		EnumUint8:  &enumTypeHandler{Uint8},
+		EnumUint16: &enumTypeHandler{Uint16},
+		EnumUint32: &enumTypeHandler{Uint32},
+		EnumUint64: &enumTypeHandler{Uint64},
+
+		// References
+		ObjectReference: &referenceTypeHandler{8, 0x00},
+		RegionReference: &referenceTypeHandler{12, 0x01},
+
+		// Opaque
+		Opaque: &opaqueTypeHandler{},
+	}
+}
+
+// getDatatypeInfo returns HDF5 datatype information for a Go datatype.
+// Uses the registry pattern for O(1) lookup and simplified logic.
+func getDatatypeInfo(dt Datatype, config *datasetConfig) (*datatypeInfo, error) {
+	handler, ok := datatypeRegistry[dt]
+	if !ok {
+		return nil, fmt.Errorf("unsupported datatype: %d", dt)
+	}
+	return handler.GetInfo(config)
 }
 
 // FileWriter represents an HDF5 file opened for writing.
@@ -476,86 +603,11 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 		return nil, fmt.Errorf("failed to allocate space for data: %w", err)
 	}
 
-	// Create datatype message (handle advanced types specially)
-	var datatypeData []byte
-	switch dtInfo.class {
-	case core.DatatypeArray:
-		// Array datatype: encode base type + array dimensions
-		baseMsg := &core.DatatypeMessage{
-			Class:         dtInfo.baseType.class,
-			Version:       1,
-			Size:          dtInfo.baseType.size,
-			ClassBitField: dtInfo.baseType.classBitField,
-		}
-		baseData, err := core.EncodeDatatypeMessage(baseMsg)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode array base type: %w", err)
-		}
-		datatypeData, err = core.EncodeArrayDatatypeMessage(baseData, dtInfo.arrayDims, dtInfo.size)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode array datatype: %w", err)
-		}
-
-	case core.DatatypeEnum:
-		// Enum datatype: encode base type + enum members
-		baseMsg := &core.DatatypeMessage{
-			Class:         dtInfo.baseType.class,
-			Version:       1,
-			Size:          dtInfo.baseType.size,
-			ClassBitField: dtInfo.baseType.classBitField,
-		}
-		baseData, err := core.EncodeDatatypeMessage(baseMsg)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode enum base type: %w", err)
-		}
-
-		// Convert enum values to bytes
-		valueBytes := make([]byte, len(dtInfo.enumValues)*int(dtInfo.baseType.size))
-		for i, val := range dtInfo.enumValues {
-			offset := i * int(dtInfo.baseType.size)
-			switch dtInfo.baseType.size {
-			case 1:
-				valueBytes[offset] = byte(val)
-			case 2:
-				binary.LittleEndian.PutUint16(valueBytes[offset:], uint16(val)) //nolint:gosec // Safe: validated size
-			case 4:
-				binary.LittleEndian.PutUint32(valueBytes[offset:], uint32(val)) //nolint:gosec // Safe: validated size
-			case 8:
-				binary.LittleEndian.PutUint64(valueBytes[offset:], uint64(val)) //nolint:gosec // Safe: validated size
-			}
-		}
-
-		datatypeData, err = core.EncodeEnumDatatypeMessage(baseData, dtInfo.enumNames, valueBytes, dtInfo.size)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode enum datatype: %w", err)
-		}
-
-	case core.DatatypeOpaque:
-		// Opaque datatype: encode with tag
-		datatypeMsg := &core.DatatypeMessage{
-			Class:         dtInfo.class,
-			Version:       1,
-			Size:          dtInfo.size,
-			ClassBitField: 0,
-			Properties:    []byte(dtInfo.opaqueTag),
-		}
-		datatypeData, err = core.EncodeDatatypeMessage(datatypeMsg)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode opaque datatype: %w", err)
-		}
-
-	default:
-		// Simple datatypes (fixed, float, string, reference)
-		datatypeMsg := &core.DatatypeMessage{
-			Class:         dtInfo.class,
-			Version:       1,
-			Size:          dtInfo.size,
-			ClassBitField: dtInfo.classBitField,
-		}
-		datatypeData, err = core.EncodeDatatypeMessage(datatypeMsg)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode datatype: %w", err)
-		}
+	// Encode datatype message using handler (simplified from complex switch)
+	handler := datatypeRegistry[dtype]
+	datatypeData, err := handler.EncodeDatatypeMessage(dtInfo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode datatype: %w", err)
 	}
 
 	// Create dataspace message
