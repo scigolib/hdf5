@@ -179,7 +179,7 @@ func parsePath(path string) (parent, name string) {
 }
 
 // linkToParent links a child object to its parent group.
-// For MVP, only supports linking to the root group.
+// Links the child by adding an entry to the parent's symbol table.
 //
 // Parameters:
 //   - parentPath: Path to parent group ("" or "/" for root)
@@ -188,33 +188,97 @@ func parsePath(path string) (parent, name string) {
 //
 // Returns:
 //   - error: If linking fails
-//
-// TODO (Component 3 completion): Implement actual linking
-// Current limitation:
-//   - Root group uses Link Info message (HDF5 1.8+ format)
-//   - Created groups/datasets use Symbol Table (HDF5 <1.8 format)
-//   - These are incompatible structures
-//
-// To fix:
-//   - Option A: Refactor root group to use Symbol Table (backwards compatible)
-//   - Option B: Support both structures with conversion layer
-//
-// For MVP demonstration:
-//   - Objects are created with valid structure but not linked from root
-//   - This allows testing the write infrastructure
-//   - Full linking will be implemented before v0.11.0-beta release
 func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint64) error {
 	// For MVP, only support root group as parent
 	if parentPath != "" && parentPath != "/" {
 		return fmt.Errorf("linking to non-root groups not supported in MVP")
 	}
 
-	// TODO: Implement linking when root group is refactored to Symbol Table
-	// For now, objects are created but not linked (MVP limitation)
+	// Use root group metadata
+	heapAddr := fw.rootHeapAddr
+	stNodeAddr := fw.rootStNodeAddr
 
-	// Temporary workaround: just succeed
-	// Objects exist in file with valid structure, but are not discoverable via root group
-	// This is acceptable for MVP to demonstrate the infrastructure works
+	// Step 1: Read existing local heap
+	heap, err := fw.readLocalHeap(heapAddr)
+	if err != nil {
+		return fmt.Errorf("read local heap: %w", err)
+	}
+
+	// Step 2: Add child name to heap
+	nameOffset, err := heap.AddString(childName)
+	if err != nil {
+		return fmt.Errorf("add string to heap: %w", err)
+	}
+
+	// Step 3: Read existing symbol table node
+	stNode, err := fw.readSymbolTableNode(stNodeAddr)
+	if err != nil {
+		return fmt.Errorf("read symbol table node: %w", err)
+	}
+
+	// Step 4: Add entry to symbol table
+	entry := structures.SymbolTableEntry{
+		LinkNameOffset: nameOffset,
+		ObjectAddress:  childAddr,
+		CacheType:      0, // No cache (MVP)
+		Reserved:       0,
+	}
+	if err := stNode.AddEntry(entry); err != nil {
+		return fmt.Errorf("add entry to symbol table: %w", err)
+	}
+
+	// Step 5: Write updated heap
+	if err := heap.WriteTo(fw.writer, heapAddr); err != nil {
+		return fmt.Errorf("write heap: %w", err)
+	}
+
+	// Step 6: Write updated symbol table node
+	offsetSize := uint8(fw.file.sb.OffsetSize)
+	if err := stNode.WriteAt(fw.writer, stNodeAddr, offsetSize, 32, fw.file.sb.Endianness); err != nil {
+		return fmt.Errorf("write symbol table: %w", err)
+	}
 
 	return nil
+}
+
+// readLocalHeap reads a local heap from the file at the specified address.
+// This is used to modify the heap by adding new strings for linking.
+//
+// Parameters:
+//   - addr: Address of the local heap in the file
+//
+// Returns:
+//   - *structures.LocalHeap: The heap structure (writable)
+//   - error: If read fails
+func (fw *FileWriter) readLocalHeap(addr uint64) (*structures.LocalHeap, error) {
+	// Load existing heap from disk
+	heap, err := structures.LoadLocalHeap(fw.writer, addr, fw.file.sb)
+	if err != nil {
+		return nil, fmt.Errorf("load local heap: %w", err)
+	}
+
+	// Convert to writable mode (copies Data to internal strings buffer)
+	if err := heap.PrepareForModification(); err != nil {
+		return nil, fmt.Errorf("prepare heap for modification: %w", err)
+	}
+
+	// Set write-mode fields
+	// Note: DataSegmentAddress is set by WriteTo(), not here
+	heap.OffsetToHeadFreeList = 1 // MVP: no free list (1 = H5HL_FREE_NULL)
+
+	return heap, nil
+}
+
+// readSymbolTableNode reads a symbol table node from the file at the specified address.
+// This is used to modify the node by adding new entries for linking.
+//
+// Parameters:
+//   - addr: Address of the symbol table node in the file
+//
+// Returns:
+//   - *structures.SymbolTableNode: The node structure (writable)
+//   - error: If read fails
+func (fw *FileWriter) readSymbolTableNode(addr uint64) (*structures.SymbolTableNode, error) {
+	// Use the existing ParseSymbolTableNode function from structures package
+	return structures.ParseSymbolTableNode(fw.writer, addr, fw.file.sb)
 }

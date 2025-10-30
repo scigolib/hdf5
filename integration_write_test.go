@@ -1,6 +1,7 @@
 package hdf5
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -227,4 +228,173 @@ func TestFullWriteWorkflow_CloseAndReopen(t *testing.T) {
 	info, err := os.Stat(testFile)
 	require.NoError(t, err)
 	require.Greater(t, info.Size(), int64(100), "file should not be empty")
+}
+
+// TestFullWriteWorkflow_WithDiscovery tests full write-close-reopen-discover cycle.
+// This is the comprehensive test that validates Component 3 is complete.
+func TestFullWriteWorkflow_WithDiscovery(t *testing.T) {
+	testFile := "test_discovery.h5"
+	defer os.Remove(testFile)
+
+	// Write phase
+	fw, err := CreateForWrite(testFile, CreateTruncate)
+	require.NoError(t, err)
+
+	// Create groups
+	err = fw.CreateGroup("/data")
+	require.NoError(t, err)
+
+	// Create datasets
+	ds1, err := fw.CreateDataset("/temperature", Int32, []uint64{10})
+	require.NoError(t, err)
+	err = ds1.Write([]int32{20, 21, 22, 23, 24, 25, 26, 27, 28, 29})
+	require.NoError(t, err)
+
+	ds2, err := fw.CreateDataset("/pressure", Float64, []uint64{5})
+	require.NoError(t, err)
+	err = ds2.Write([]float64{1.1, 2.2, 3.3, 4.4, 5.5})
+	require.NoError(t, err)
+
+	err = fw.Close()
+	require.NoError(t, err)
+
+	// Read phase - verify discovery
+	f, err := Open(testFile)
+	require.NoError(t, err)
+	defer f.Close()
+
+	// Verify root group exists and has children
+	root := f.Root()
+	require.NotNil(t, root)
+
+	// Verify can list children (discovery works!)
+	children := root.Children()
+	require.Len(t, children, 3, "should have exactly 3 children")
+
+	// Check child names
+	childNames := make([]string, len(children))
+	for i, child := range children {
+		childNames[i] = child.Name()
+	}
+	require.Contains(t, childNames, "temperature", "temperature dataset should be discoverable")
+	require.Contains(t, childNames, "pressure", "pressure dataset should be discoverable")
+	require.Contains(t, childNames, "data", "data group should be discoverable")
+
+	// Find and verify temperature dataset
+	var tempDataset *Dataset
+	for _, child := range children {
+		if child.Name() == "temperature" {
+			ds, ok := child.(*Dataset)
+			require.True(t, ok, "temperature should be a Dataset")
+			tempDataset = ds
+			break
+		}
+	}
+	require.NotNil(t, tempDataset, "temperature dataset should be found")
+
+	// Verify can read data back
+	tempData, err := tempDataset.Read()
+	require.NoError(t, err)
+
+	// Convert to int32 (Read returns []float64)
+	tempInt32 := make([]int32, len(tempData))
+	for i, v := range tempData {
+		tempInt32[i] = int32(v)
+	}
+	require.Equal(t, []int32{20, 21, 22, 23, 24, 25, 26, 27, 28, 29}, tempInt32)
+
+	// Find and verify pressure dataset
+	var presDataset *Dataset
+	for _, child := range children {
+		if child.Name() == "pressure" {
+			ds, ok := child.(*Dataset)
+			require.True(t, ok, "pressure should be a Dataset")
+			presDataset = ds
+			break
+		}
+	}
+	require.NotNil(t, presDataset, "pressure dataset should be found")
+
+	presData, err := presDataset.Read()
+	require.NoError(t, err)
+	require.Equal(t, []float64{1.1, 2.2, 3.3, 4.4, 5.5}, presData)
+
+	// Find and verify data group
+	var dataGroup *Group
+	for _, child := range children {
+		if child.Name() == "data" {
+			grp, ok := child.(*Group)
+			require.True(t, ok, "data should be a Group")
+			dataGroup = grp
+			break
+		}
+	}
+	require.NotNil(t, dataGroup, "data group should be found")
+	require.Equal(t, "data", dataGroup.Name())
+
+	// Verify Walk traverses the tree
+	visited := []string{}
+	f.Walk(func(path string, obj Object) {
+		visited = append(visited, path)
+	})
+	require.Contains(t, visited, "/")
+	require.Contains(t, visited, "/data/")
+	require.Contains(t, visited, "/temperature")
+	require.Contains(t, visited, "/pressure")
+}
+
+// TestFullWriteWorkflow_MultipleObjects tests creating many objects.
+func TestFullWriteWorkflow_MultipleObjects(t *testing.T) {
+	testFile := "test_multiple_objects.h5"
+	defer os.Remove(testFile)
+
+	fw, err := CreateForWrite(testFile, CreateTruncate)
+	require.NoError(t, err)
+
+	// Create 10 datasets
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("/dataset_%d", i)
+		ds, err := fw.CreateDataset(name, Int32, []uint64{3})
+		require.NoError(t, err)
+
+		data := []int32{int32(i), int32(i + 1), int32(i + 2)}
+		err = ds.Write(data)
+		require.NoError(t, err)
+	}
+
+	err = fw.Close()
+	require.NoError(t, err)
+
+	// Verify all datasets are discoverable
+	f, err := Open(testFile)
+	require.NoError(t, err)
+	defer f.Close()
+
+	children := f.Root().Children()
+	require.Equal(t, 10, len(children), "should have 10 datasets")
+
+	// Create map of datasets by name for easier lookup
+	datasetMap := make(map[string]*Dataset)
+	for _, child := range children {
+		ds, ok := child.(*Dataset)
+		require.True(t, ok, "child should be a Dataset")
+		datasetMap[child.Name()] = ds
+	}
+
+	// Verify can read each dataset
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("dataset_%d", i)
+		ds, found := datasetMap[name]
+		require.True(t, found, "dataset %s should be found", name)
+
+		data, err := ds.Read()
+		require.NoError(t, err)
+
+		// Convert to int32
+		dataInt32 := make([]int32, len(data))
+		for j, v := range data {
+			dataInt32[j] = int32(v)
+		}
+		require.Equal(t, []int32{int32(i), int32(i + 1), int32(i + 2)}, dataInt32)
+	}
 }

@@ -184,7 +184,7 @@ func NewBTreeNodeV1(nodeType uint8, K uint16) *BTreeNodeV1 {
 func (btn *BTreeNodeV1) AddKey(key uint64, childAddr uint64) error {
 	maxKeys := cap(btn.Keys)
 	if len(btn.Keys) >= maxKeys {
-		return fmt.Errorf("B-tree node is full (%d/%d keys)", len(btn.Keys), maxKeys)
+		return fmt.Errorf("b-tree node is full (%d/%d keys)", len(btn.Keys), maxKeys)
 	}
 
 	// For MVP: simple append (no balancing)

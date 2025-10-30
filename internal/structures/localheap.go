@@ -39,26 +39,31 @@ type LocalHeap struct {
 
 // LoadLocalHeap loads a local heap from the specified file address.
 func LoadLocalHeap(r io.ReaderAt, address uint64, sb *core.Superblock) (*LocalHeap, error) {
-	buf := utils.GetBuffer(16)
-	defer utils.ReleaseBuffer(buf)
+	// Read heap header (32 bytes for 8-byte addressing)
+	headerBuf := utils.GetBuffer(32)
+	defer utils.ReleaseBuffer(headerBuf)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	if _, err := r.ReadAt(buf, int64(address)); err != nil {
+	if _, err := r.ReadAt(headerBuf, int64(address)); err != nil {
 		return nil, utils.WrapError("local heap header read failed", err)
 	}
 
-	if string(buf[0:4]) != "HEAP" {
+	if string(headerBuf[0:4]) != "HEAP" {
 		return nil, errors.New("invalid local heap signature")
 	}
 
+	// Parse header fields
+	// Bytes 8-15: Data segment size
+	dataSegmentSize := sb.Endianness.Uint64(headerBuf[8:16])
+
 	heap := &LocalHeap{
-		HeaderSize: sb.Endianness.Uint64(buf[8:16]),
+		HeaderSize: 32, // Fixed header size for 8-byte addressing
 	}
 
-	dataSize := heap.HeaderSize - 16
-	heap.Data = make([]byte, dataSize)
+	// Allocate and read data segment
+	heap.Data = make([]byte, dataSegmentSize)
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	if _, err := r.ReadAt(heap.Data, int64(address+16)); err != nil {
+	if _, err := r.ReadAt(heap.Data, int64(address+32)); err != nil {
 		return nil, utils.WrapError("local heap data read failed", err)
 	}
 
@@ -66,17 +71,13 @@ func LoadLocalHeap(r io.ReaderAt, address uint64, sb *core.Superblock) (*LocalHe
 }
 
 // GetString retrieves a null-terminated string from the heap at the given offset.
+// The offset is relative to the start of the data segment (after the 32-byte header).
 func (h *LocalHeap) GetString(offset uint64) (string, error) {
-	// The first 16 bytes of heap data contain free list metadata
-	// Actual string data starts at offset 16 within the data section
-	// So we need to add 16 to the provided offset
-	dataOffset := offset + 16
-
-	if dataOffset >= uint64(len(h.Data)) {
+	if offset >= uint64(len(h.Data)) {
 		return "", errors.New("offset beyond heap data")
 	}
 
-	end := dataOffset
+	end := offset
 	for end < uint64(len(h.Data)) && h.Data[end] != 0 {
 		end++
 	}
@@ -85,7 +86,7 @@ func (h *LocalHeap) GetString(offset uint64) (string, error) {
 		return "", errors.New("string not null-terminated")
 	}
 
-	return string(h.Data[dataOffset:end]), nil
+	return string(h.Data[offset:end]), nil
 }
 
 // --- Write Support Functions ---
@@ -146,9 +147,16 @@ func (h *LocalHeap) AddString(s string) (offset uint64, err error) {
 	// Record offset before adding
 	offset = currentSize
 
+	// DEBUG: Log before adding
+	// fmt.Printf("DEBUG AddString: adding '%s' at offset %d\n", s, offset)
+	// fmt.Printf("DEBUG AddString: strings before: %q (len=%d)\n", h.strings, len(h.strings))
+
 	// Add string with null terminator
 	h.strings = append(h.strings, []byte(s)...)
 	h.strings = append(h.strings, 0) // Null terminator
+
+	// DEBUG: Log after adding
+	// fmt.Printf("DEBUG AddString: strings after: %q (len=%d)\n", h.strings, len(h.strings))
 
 	return offset, nil
 }
@@ -230,4 +238,56 @@ func (h *LocalHeap) WriteTo(w io.WriterAt, address uint64) error {
 func (h *LocalHeap) Size() uint64 {
 	// Header size (32 bytes) + data segment size
 	return 32 + h.DataSegmentSize
+}
+
+// PrepareForModification converts a read-mode heap to write-mode.
+// This allows adding new strings to an existing heap loaded from disk.
+//
+// This method copies the existing Data into the private strings buffer,
+// enabling AddString() to append new entries.
+//
+// Offsets are relative to the start of the data segment. The strings buffer
+// contains all data from the data segment, preserving existing offsets.
+//
+// CRITICAL: Must preserve null terminators after each string!
+//
+// Returns:
+//   - error: If preparation fails
+func (h *LocalHeap) PrepareForModification() error {
+	if h.Data == nil {
+		return errors.New("heap has no data to prepare")
+	}
+
+	// Find the actual used size (up to last non-zero byte, PLUS its null terminator)
+	// We need to include the null terminator after the last string!
+	usedSize := 0
+	for i := len(h.Data) - 1; i >= 0; i-- {
+		if h.Data[i] != 0 {
+			// Found last non-zero byte
+			// usedSize must include this byte AND its null terminator
+			// Look ahead to find the null terminator after this string
+			usedSize = i + 1
+
+			// Find the null terminator after this byte
+			for j := i + 1; j < len(h.Data); j++ {
+				if h.Data[j] == 0 {
+					usedSize = j + 1 // Include the null terminator
+					break
+				}
+			}
+			break
+		}
+	}
+
+	// Copy existing data to strings buffer (preserving all content and offsets)
+	// This MUST include all null terminators to maintain correct offsets
+	h.strings = make([]byte, usedSize)
+	copy(h.strings, h.Data[:usedSize])
+
+	// Set data segment size (for capacity checking)
+	if h.DataSegmentSize == 0 {
+		h.DataSegmentSize = uint64(len(h.Data))
+	}
+
+	return nil
 }

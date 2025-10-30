@@ -47,10 +47,18 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 
 	numSymbols := sb.Endianness.Uint16(header[6:8])
 
+	// Note: Symbol table nodes have a fixed capacity (typically 32 entries for K=16).
+	// When parsing, we don't know the original capacity if numSymbols=0.
+	// Use standard capacity (32) to allow modifications.
+	capacity := uint16(32) // Standard capacity (2*K where K=16)
+	if numSymbols > capacity {
+		capacity = numSymbols // Increase if needed
+	}
+
 	node := &SymbolTableNode{
 		Version:    version,
 		NumSymbols: numSymbols,
-		Entries:    make([]SymbolTableEntry, 0, numSymbols),
+		Entries:    make([]SymbolTableEntry, 0, capacity),
 	}
 
 	if numSymbols == 0 {

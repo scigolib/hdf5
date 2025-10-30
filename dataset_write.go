@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/scigolib/hdf5/internal/core"
+	"github.com/scigolib/hdf5/internal/structures"
 	"github.com/scigolib/hdf5/internal/writer"
 )
 
@@ -127,6 +128,12 @@ type FileWriter struct {
 	file     *File
 	writer   *writer.FileWriter
 	filename string
+
+	// Root group metadata for linking objects
+	rootGroupAddr  uint64 // Address of root group object header
+	rootBTreeAddr  uint64 // Address of root group B-tree
+	rootHeapAddr   uint64 // Address of root group local heap
+	rootStNodeAddr uint64 // Address of root group symbol table node
 }
 
 // CreateForWrite creates a new HDF5 file for writing.
@@ -178,23 +185,89 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 		}
 	}()
 
-	// Step 2: Create minimal root group
-	rootGroupHeader := core.NewMinimalRootGroupHeader()
+	// Step 2: Create root group with Symbol Table structure
+	// (for compatibility with created groups and datasets)
 
-	// Calculate root group size (need to know before allocating)
-	// Minimal root group header size is fixed (see NewMinimalRootGroupHeader)
-	rootGroupSize := rootGroupHeader.Size()
-
-	// Allocate space for root group (this updates allocator's nextOffset)
-	rootGroupAddr, err := fw.Allocate(rootGroupSize)
+	// 2a. Create local heap for root group names
+	rootHeap := structures.NewLocalHeap(256) // Initial capacity for ~10-20 names
+	rootHeapAddr, err := fw.Allocate(rootHeap.Size())
 	if err != nil {
-		return nil, fmt.Errorf("failed to allocate root group: %w", err)
+		return nil, fmt.Errorf("failed to allocate root heap: %w", err)
 	}
 
-	// Write root group to allocated address
+	// 2b. Create symbol table node for root group
+	rootStNode := structures.NewSymbolTableNode(32) // Standard capacity (2*K where K=16)
+
+	// Calculate symbol table node size
+	// Format: 8-byte header + 32 * entrySize
+	// entrySize = 2*offsetSize + 4 + 4 + 16 = 2*8 + 24 = 40 bytes
+	offsetSize := 8
+	entrySize := 2*offsetSize + 4 + 4 + 16
+	stNodeSize := uint64(8 + 32*entrySize)
+
+	rootStNodeAddr, err := fw.Allocate(stNodeSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate root symbol table node: %w", err)
+	}
+
+	// Write symbol table node (empty initially)
+	if err := rootStNode.WriteAt(fw, rootStNodeAddr, uint8(offsetSize), 32, binary.LittleEndian); err != nil {
+		return nil, fmt.Errorf("failed to write root symbol table node: %w", err)
+	}
+
+	// 2c. Create B-tree for root group
+	rootBTree := structures.NewBTreeNodeV1(0, 16) // Type 0 = group symbol table, K=16
+
+	// Add symbol table node address as child (with key 0 for empty group)
+	if err := rootBTree.AddKey(0, rootStNodeAddr); err != nil {
+		return nil, fmt.Errorf("failed to add root B-tree key: %w", err)
+	}
+
+	// Calculate B-tree size
+	// Header: 4 (sig) + 1 (type) + 1 (level) + 2 (entries) + 2*8 (siblings) = 24 bytes
+	// Keys: (2K+1) * offsetSize = 33 * 8 = 264 bytes
+	// Children: 2K * offsetSize = 32 * 8 = 256 bytes
+	btreeSize := uint64(24 + (2*16+1)*offsetSize + 2*16*offsetSize)
+
+	rootBTreeAddr, err := fw.Allocate(btreeSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate root B-tree: %w", err)
+	}
+
+	// Write B-tree
+	if err := rootBTree.WriteAt(fw, rootBTreeAddr, uint8(offsetSize), 16, binary.LittleEndian); err != nil {
+		return nil, fmt.Errorf("failed to write root B-tree: %w", err)
+	}
+
+	// 2d. Write local heap (after B-tree and symbol table addresses are known)
+	if err := rootHeap.WriteTo(fw, rootHeapAddr); err != nil {
+		return nil, fmt.Errorf("failed to write root heap: %w", err)
+	}
+
+	// 2e. Create root group object header with Symbol Table message
+	stMsg := core.EncodeSymbolTableMessage(rootBTreeAddr, rootHeapAddr, offsetSize, 8)
+
+	rootGroupHeader := &core.ObjectHeaderWriter{
+		Version: 2,
+		Flags:   0,
+		Messages: []core.MessageWriter{
+			{Type: core.MsgSymbolTable, Data: stMsg},
+		},
+	}
+
+	// Calculate root group object header size
+	rootGroupSize := rootGroupHeader.Size()
+
+	// Allocate space for root group object header
+	rootGroupAddr, err := fw.Allocate(rootGroupSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate root group header: %w", err)
+	}
+
+	// Write root group object header
 	writtenSize, err := rootGroupHeader.WriteTo(fw, rootGroupAddr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to write root group: %w", err)
+		return nil, fmt.Errorf("failed to write root group header: %w", err)
 	}
 
 	if writtenSize != rootGroupSize {
@@ -236,9 +309,13 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 	}
 
 	return &FileWriter{
-		file:     fileObj,
-		writer:   fw,
-		filename: filename,
+		file:           fileObj,
+		writer:         fw,
+		filename:       filename,
+		rootGroupAddr:  rootGroupAddr,
+		rootBTreeAddr:  rootBTreeAddr,
+		rootHeapAddr:   rootHeapAddr,
+		rootStNodeAddr: rootStNodeAddr,
 	}, nil
 }
 
@@ -380,9 +457,12 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 		return nil, fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
 	}
 
-	// TODO: Add dataset to parent group's link table
-	// For MVP, we'll defer this to Component 3 (Groups)
-	// For now, just create the dataset, but it won't be accessible via file.Root()
+	// Link dataset to parent group's symbol table
+	// Parse path to get parent and dataset name
+	parent, datasetName := parsePath(name)
+	if err := fw.linkToParent(parent, datasetName, headerAddress); err != nil {
+		return nil, fmt.Errorf("failed to link dataset to parent: %w", err)
+	}
 
 	// Create DatasetWriter
 	dsw := &DatasetWriter{

@@ -27,10 +27,10 @@ func TestLoadLocalHeap_Success(t *testing.T) {
 				buf[4] = 0
 				// Reserved (3 bytes)
 				buf[5], buf[6], buf[7] = 0, 0, 0
-				// Header size (8 bytes) - total size including header
-				binary.LittleEndian.PutUint64(buf[8:16], 32) // 16 bytes header + 16 bytes data
-				// Data follows at offset 16
-				copy(buf[16:32], "Hello, World!")
+				// Data segment size (8 bytes) - size of data segment ONLY (not including 32-byte header)
+				binary.LittleEndian.PutUint64(buf[8:16], 16) // Data segment is 16 bytes
+				// Data follows at offset 32 (after 32-byte header)
+				copy(buf[32:48], "Hello, World!")
 				return buf
 			}(),
 			address:      0,
@@ -47,18 +47,18 @@ func TestLoadLocalHeap_Success(t *testing.T) {
 				copy(buf[0:4], "HEAP")
 				buf[4] = 0
 				buf[5], buf[6], buf[7] = 0, 0, 0
-				// Header size: 16 + 100 = 116 bytes
-				binary.LittleEndian.PutUint64(buf[8:16], 116)
-				// Fill data section with test data
+				// Data segment size: 100 bytes (header is always 32 bytes, not included)
+				binary.LittleEndian.PutUint64(buf[8:16], 100)
+				// Fill data section with test data (starts at offset 32 after header)
 				for i := 0; i < 100; i++ {
-					buf[16+i] = byte(i % 256)
+					buf[32+i] = byte(i % 256)
 				}
 				return buf
 			}(),
 			address:      0,
-			expectedSize: 116,
+			expectedSize: 32,
 			checkData: func(t *testing.T, heap *LocalHeap) {
-				require.Equal(t, uint64(116), heap.HeaderSize)
+				require.Equal(t, uint64(32), heap.HeaderSize)
 				require.Len(t, heap.Data, 100)
 				// Verify data pattern
 				for i := 0; i < 100; i++ {
@@ -74,14 +74,16 @@ func TestLoadLocalHeap_Success(t *testing.T) {
 				copy(buf[offset:offset+4], "HEAP")
 				buf[offset+4] = 0
 				buf[offset+5], buf[offset+6], buf[offset+7] = 0, 0, 0
-				binary.LittleEndian.PutUint64(buf[offset+8:offset+16], 50)
-				copy(buf[offset+16:offset+50], "test data at offset")
+				// Data segment size: 34 bytes (string length)
+				binary.LittleEndian.PutUint64(buf[offset+8:offset+16], 34)
+				// Data starts at offset 32 after header start
+				copy(buf[offset+32:offset+32+34], "test data at offset")
 				return buf
 			}(),
 			address:      500,
-			expectedSize: 50,
+			expectedSize: 32,
 			checkData: func(t *testing.T, heap *LocalHeap) {
-				require.Equal(t, uint64(50), heap.HeaderSize)
+				require.Equal(t, uint64(32), heap.HeaderSize)
 				require.Len(t, heap.Data, 34)
 			},
 		},
@@ -92,14 +94,15 @@ func TestLoadLocalHeap_Success(t *testing.T) {
 				copy(buf[0:4], "HEAP")
 				buf[4] = 0
 				buf[5], buf[6], buf[7] = 0, 0, 0
+				// Data segment size: 64 bytes
 				binary.LittleEndian.PutUint64(buf[8:16], 64)
-				// Add some null-terminated strings
-				offset := 16
+				// Add some null-terminated strings (data starts at offset 32)
+				offset := 32
 				copy(buf[offset:], "string1\x00string2\x00string3\x00")
 				return buf
 			}(),
 			address:      0,
-			expectedSize: 64,
+			expectedSize: 32,
 			checkData: func(t *testing.T, heap *LocalHeap) {
 				require.Contains(t, string(heap.Data), "string1")
 				require.Contains(t, string(heap.Data), "string2")
@@ -182,10 +185,10 @@ func TestLoadLocalHeap_ReadErrors(t *testing.T) {
 		{
 			name: "data read error",
 			setup: func() (*mockReaderAt, *core.Superblock) {
-				buf := make([]byte, 16)
+				buf := make([]byte, 32) // Header is 32 bytes
 				copy(buf[0:4], "HEAP")
 				buf[4] = 0
-				// Header size claims 1000 bytes, but buffer is only 16
+				// Data segment size claims 1000 bytes, but buffer is only 32 (no room for data)
 				binary.LittleEndian.PutUint64(buf[8:16], 1000)
 				return &mockReaderAt{data: buf}, createMockSuperblock()
 			},
@@ -211,8 +214,10 @@ func TestLoadLocalHeap_BigEndian(t *testing.T) {
 	copy(buf[0:4], "HEAP")
 	buf[4] = 0
 	buf[5], buf[6], buf[7] = 0, 0, 0
+	// Data segment size: 100 bytes (header is 32 bytes, not included in this size)
 	binary.BigEndian.PutUint64(buf[8:16], 100)
-	copy(buf[16:100], "big endian test data")
+	// Data starts at offset 32 (after 32-byte header)
+	copy(buf[32:132], "big endian test data")
 
 	reader := &mockReaderAt{data: buf}
 	sb := createMockSuperblock()
@@ -221,8 +226,8 @@ func TestLoadLocalHeap_BigEndian(t *testing.T) {
 	heap, err := LoadLocalHeap(reader, 0, sb)
 	require.NoError(t, err)
 	require.NotNil(t, heap)
-	require.Equal(t, uint64(100), heap.HeaderSize)
-	require.Len(t, heap.Data, 84)
+	require.Equal(t, uint64(32), heap.HeaderSize)
+	require.Len(t, heap.Data, 100)
 }
 
 func TestLocalHeap_GetString_Success(t *testing.T) {
@@ -235,10 +240,9 @@ func TestLocalHeap_GetString_Success(t *testing.T) {
 		{
 			name: "simple string",
 			heapData: func() []byte {
-				// First 16 bytes are free list metadata
-				// Strings start after that
+				// Strings start at offset 0 in data segment (no metadata prefix)
 				buf := make([]byte, 256)
-				copy(buf[16:], "hello\x00")
+				copy(buf[0:], "hello\x00")
 				return buf
 			}(),
 			offset:         0,
@@ -248,9 +252,9 @@ func TestLocalHeap_GetString_Success(t *testing.T) {
 			name: "string at non-zero offset",
 			heapData: func() []byte {
 				buf := make([]byte, 256)
-				// Free list metadata in first 16 bytes
-				copy(buf[16:], "\x00\x00\x00\x00") // offset 0-3
-				copy(buf[20:], "world\x00")        // offset 4
+				// First string at offset 0, second at offset 4
+				copy(buf[0:], "\x00\x00\x00\x00") // offset 0-3 (padding/empty)
+				copy(buf[4:], "world\x00")        // offset 4
 				return buf
 			}(),
 			offset:         4,
@@ -260,7 +264,7 @@ func TestLocalHeap_GetString_Success(t *testing.T) {
 			name: "multiple strings",
 			heapData: func() []byte {
 				buf := make([]byte, 256)
-				copy(buf[16:], "first\x00second\x00third\x00")
+				copy(buf[0:], "first\x00second\x00third\x00")
 				return buf
 			}(),
 			offset:         0,
@@ -270,7 +274,7 @@ func TestLocalHeap_GetString_Success(t *testing.T) {
 			name: "string with special characters",
 			heapData: func() []byte {
 				buf := make([]byte, 256)
-				copy(buf[16:], "Hello, World! 123\x00")
+				copy(buf[0:], "Hello, World! 123\x00")
 				return buf
 			}(),
 			offset:         0,
@@ -280,7 +284,7 @@ func TestLocalHeap_GetString_Success(t *testing.T) {
 			name: "empty string",
 			heapData: func() []byte {
 				buf := make([]byte, 256)
-				copy(buf[16:], "\x00other\x00")
+				copy(buf[0:], "\x00other\x00")
 				return buf
 			}(),
 			offset:         0,
@@ -292,7 +296,7 @@ func TestLocalHeap_GetString_Success(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			heap := &LocalHeap{
 				Data:       tt.heapData,
-				HeaderSize: uint64(len(tt.heapData) + 16),
+				HeaderSize: 32, // Header is always 32 bytes
 			}
 
 			str, err := heap.GetString(tt.offset)
@@ -331,7 +335,7 @@ func TestLocalHeap_GetString_Errors(t *testing.T) {
 		{
 			name:     "offset at end of data",
 			heapData: make([]byte, 16),
-			offset:   0,
+			offset:   16, // Beyond end of data
 			wantErr:  "offset beyond heap data",
 		},
 	}
@@ -340,7 +344,7 @@ func TestLocalHeap_GetString_Errors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			heap := &LocalHeap{
 				Data:       tt.heapData,
-				HeaderSize: uint64(len(tt.heapData) + 16),
+				HeaderSize: 32, // Header is always 32 bytes
 			}
 
 			str, err := heap.GetString(tt.offset)
@@ -359,11 +363,11 @@ func TestLocalHeap_GetString_LongString(t *testing.T) {
 	}
 
 	heapData := make([]byte, 2048)
-	copy(heapData[16:], longString+"\x00")
+	copy(heapData[0:], longString+"\x00") // Strings start at offset 0
 
 	heap := &LocalHeap{
 		Data:       heapData,
-		HeaderSize: uint64(len(heapData) + 16),
+		HeaderSize: 32, // Header is always 32 bytes
 	}
 
 	str, err := heap.GetString(0)
@@ -373,12 +377,11 @@ func TestLocalHeap_GetString_LongString(t *testing.T) {
 
 func TestLocalHeap_GetString_MultipleConsecutiveStrings(t *testing.T) {
 	heapData := make([]byte, 256)
-	offset := 16
-	copy(heapData[offset:], "first\x00second\x00third\x00")
+	copy(heapData[0:], "first\x00second\x00third\x00") // Strings start at offset 0
 
 	heap := &LocalHeap{
 		Data:       heapData,
-		HeaderSize: uint64(len(heapData) + 16),
+		HeaderSize: 32, // Header is always 32 bytes
 	}
 
 	// Get first string at offset 0
