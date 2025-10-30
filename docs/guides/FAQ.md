@@ -577,13 +577,12 @@ See [ROADMAP.md](../../ROADMAP.md) for detailed plans.
 - Dataset resizing
 - Full write support with all features
 
-**Long-term** (v1.0.0+):
-- Virtual datasets
-- External links
-- SWMR (Single Writer Multiple Readers)
+**Long-term** (v1.1.0+):
+- Virtual datasets (VDS read support)
+- External file links
 - Parallel I/O
-- Performance optimizations
-- Thread-safe operations
+- Advanced performance optimizations
+- Thread-safe concurrent operations
 
 ### Will v1.0.0 break the API?
 
