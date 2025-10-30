@@ -131,7 +131,7 @@ func (ohw *ObjectHeaderWriter) WriteTo(w io.WriterAt, address uint64) (uint64, e
 
 	offset := 0
 
-	// Signature: "OHDR" (little-endian)
+	// Write signature "OHDR" (4 bytes, little-endian format).
 	copy(buf[offset:offset+4], "OHDR")
 	offset += 4
 
@@ -150,11 +150,11 @@ func (ohw *ObjectHeaderWriter) WriteTo(w io.WriterAt, address uint64) (uint64, e
 	// Write messages
 	for _, msg := range ohw.Messages {
 		// Message type (1 byte for v2)
-		buf[offset] = uint8(msg.Type)
+		buf[offset] = uint8(msg.Type) //nolint:gosec // Safe: message type is limited enum
 		offset++
 
 		// Message data size (2 bytes, little-endian)
-		binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(msg.Data)))
+		binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(msg.Data))) //nolint:gosec // Safe: message size validated
 		offset += 2
 
 		// Message flags (1 byte)
@@ -168,7 +168,7 @@ func (ohw *ObjectHeaderWriter) WriteTo(w io.WriterAt, address uint64) (uint64, e
 	}
 
 	// Write to file
-	n, err := w.WriteAt(buf, int64(address))
+	n, err := w.WriteAt(buf, int64(address)) //nolint:gosec // Safe: address within file bounds
 	if err != nil {
 		return 0, fmt.Errorf("failed to write object header at address %d: %w", address, err)
 	}

@@ -334,7 +334,7 @@ func TestFullWriteWorkflow_WithDiscovery(t *testing.T) {
 
 	// Verify Walk traverses the tree
 	visited := []string{}
-	f.Walk(func(path string, obj Object) {
+	f.Walk(func(path string, _ Object) {
 		visited = append(visited, path)
 	})
 	require.Contains(t, visited, "/")

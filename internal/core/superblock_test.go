@@ -161,7 +161,7 @@ func TestRealFileSuperblock(t *testing.T) {
 	}
 }
 
-// Test superblock writing
+// Test superblock writing.
 func TestSuperblockWrite(t *testing.T) {
 	t.Run("write superblock v2", func(t *testing.T) {
 		// Create a temporary file

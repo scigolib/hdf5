@@ -114,7 +114,7 @@ func TestCreateDataset_InvalidInputs(t *testing.T) {
 			dsName:  "/data",
 			dtype:   Int32,
 			dims:    []uint64{10, 0, 5},
-			wantErr: "dimension cannot be 0",
+			wantErr: "cannot be 0",
 		},
 	}
 

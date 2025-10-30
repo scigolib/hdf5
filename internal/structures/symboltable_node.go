@@ -229,9 +229,9 @@ func writeAddressToBytes(data []byte, addr uint64, size int, endianness binary.B
 	case 1:
 		data[0] = byte(addr)
 	case 2:
-		endianness.PutUint16(data[:2], uint16(addr))
+		endianness.PutUint16(data[:2], uint16(addr)) //nolint:gosec // Safe: address size matches offset size
 	case 4:
-		endianness.PutUint32(data[:4], uint32(addr))
+		endianness.PutUint32(data[:4], uint32(addr)) //nolint:gosec // Safe: address size matches offset size
 	case 8:
 		endianness.PutUint64(data[:8], addr)
 	default:

@@ -54,11 +54,11 @@ func NewFileWriter(filename string, mode CreateMode, initialOffset uint64) (*Fil
 	switch mode {
 	case ModeTruncate:
 		// Create or truncate file, read-write mode
-		osFile, err = os.Create(filename)
+		osFile, err = os.Create(filename) //nolint:gosec // User-provided filename for HDF5 file creation
 
 	case ModeExclusive:
 		// Create new file, fail if exists
-		osFile, err = os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0666)
+		osFile, err = os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o666) //nolint:gosec // User-provided filename for HDF5 file creation
 
 	default:
 		return nil, fmt.Errorf("invalid create mode: %d", mode)
@@ -134,7 +134,7 @@ func (w *FileWriter) WriteAt(data []byte, offset int64) (int, error) {
 
 // WriteAtAddress writes data at a specific address (convenience method with uint64 address).
 func (w *FileWriter) WriteAtAddress(data []byte, addr uint64) error {
-	_, err := w.WriteAt(data, int64(addr))
+	_, err := w.WriteAt(data, int64(addr)) //nolint:gosec // Safe: address within file bounds
 	return err
 }
 

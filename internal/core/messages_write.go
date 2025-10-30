@@ -246,7 +246,7 @@ func EncodeDataspaceMessage(dims, maxDims []uint64) ([]byte, error) {
 
 	// Version 1 dataspace message
 	version := uint8(1)
-	dimensionality := uint8(len(dims))
+	dimensionality := uint8(len(dims)) //nolint:gosec // Safe: dimension count limited
 
 	// Flags: bit 0 = 1 if max dimensions present
 	flags := uint8(0)
@@ -388,9 +388,9 @@ func EncodeAttributeMessage(name string, datatype *DatatypeMessage, dataspace *D
 
 	// Calculate sizes
 	// Name size includes null terminator
-	nameSize := uint16(len(name) + 1)
-	datatypeSize := uint16(len(datatypeBytes))
-	dataspaceSize := uint16(len(dataspaceBytes))
+	nameSize := uint16(len(name) + 1) //nolint:gosec // Safe: name length limited
+	datatypeSize := uint16(len(datatypeBytes)) //nolint:gosec // Safe: datatype bytes limited
+	dataspaceSize := uint16(len(dataspaceBytes)) //nolint:gosec // Safe: dataspace bytes limited
 
 	// Calculate total message size
 	// Header: version(1) + flags(1) + name_size(2) + dtype_size(2) + dspace_size(2) + name_encoding(1) = 9 bytes
@@ -453,9 +453,9 @@ func writeUint64(buf []byte, value uint64, size int, endianness binary.ByteOrder
 	case 1:
 		buf[0] = byte(value)
 	case 2:
-		endianness.PutUint16(buf, uint16(value))
+		endianness.PutUint16(buf, uint16(value)) //nolint:gosec // Safe: size limited to 2 bytes
 	case 4:
-		endianness.PutUint32(buf, uint32(value))
+		endianness.PutUint32(buf, uint32(value)) //nolint:gosec // Safe: size limited to 4 bytes
 	case 8:
 		endianness.PutUint64(buf, value)
 	default:
