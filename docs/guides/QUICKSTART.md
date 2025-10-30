@@ -344,7 +344,7 @@ python create_test.py
 - ✅ Chunked datasets
 
 ### Q: Can I write HDF5 files?
-**A**: Not yet in v0.10.0-beta. Write support is planned for v0.11.0+ (2-3 months). See [ROADMAP.md](../../ROADMAP.md) for details.
+**A**: Yes! v0.11.0-beta has MVP write support (contiguous datasets, all datatypes, groups). Chunked datasets and compression coming in v0.11.1-beta. See [ROADMAP.md](../../ROADMAP.md) for details.
 
 ### Q: Does it require CGo?
 **A**: **No!** This is a pure Go implementation with zero C dependencies. Works on all Go-supported platforms.
