@@ -256,12 +256,12 @@ func applyFletcher32(data []byte) ([]byte, error) {
 	}
 
 	// Fletcher32 checksum is appended at the end (4 bytes).
-	// Checksum verification deferred to v1.0.0 (stable release).
+	// Checksum verification deferred to v0.11.0-RC (feature-complete release).
 	// Current implementation strips checksum without validation.
 	// In practice, file system and HDF5 library corruption is extremely rare.
 	// For production use, consider external file integrity checks (SHA256, etc.).
 	// Reference: https://docs.hdfgroup.org/hdf5/latest/group___h5_z.html
-	// Target version: v1.0.0 (comprehensive data integrity features)
+	// Target version: v0.11.0-RC (comprehensive data integrity features)
 	return data[:len(data)-4], nil
 }
 
