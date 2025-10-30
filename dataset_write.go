@@ -572,6 +572,8 @@ func calculateTotalElements(dims []uint64) uint64 {
 //   - No compression
 //   - Dataset must be in root group (no nested groups yet)
 //   - No resizable datasets (maxDims not supported)
+//
+//nolint:gocyclo,cyclop // Complex by nature: dataset creation handles multiple layout types and options
 func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, opts ...DatasetOption) (*DatasetWriter, error) {
 	// Validate inputs
 	if err := validateDatasetName(name); err != nil {

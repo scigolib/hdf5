@@ -158,11 +158,11 @@ func (w *ChunkBTreeWriter) WriteToFile(writer Writer, allocator Allocator) (uint
 	// 2. Build node
 	node := &ChunkBTreeNode{
 		Signature:    [4]byte{'T', 'R', 'E', 'E'},
-		NodeType:     1, // Raw Data Chunk (NOT 0 like groups!)
-		NodeLevel:    0, // Leaf
-		EntriesUsed:  uint16(len(w.entries)),
-		LeftSibling:  0xFFFFFFFFFFFFFFFF, // Undefined (no siblings)
-		RightSibling: 0xFFFFFFFFFFFFFFFF, // Undefined (no siblings)
+		NodeType:     1,                      // Raw Data Chunk (NOT 0 like groups!)
+		NodeLevel:    0,                      // Leaf
+		EntriesUsed:  uint16(len(w.entries)), //nolint:gosec // G115: HDF5 limits B-tree entries to uint16
+		LeftSibling:  0xFFFFFFFFFFFFFFFF,     // Undefined (no siblings)
+		RightSibling: 0xFFFFFFFFFFFFFFFF,     // Undefined (no siblings)
 	}
 
 	// 3. Add keys and addresses

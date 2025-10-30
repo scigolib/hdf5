@@ -95,6 +95,7 @@ func TestNewWritableFractalHeap(t *testing.T) {
 	}
 }
 
+//nolint:gocognit // Complex test with multiple scenarios and validation steps
 func TestFractalHeapInsertObject(t *testing.T) {
 	tests := []struct {
 		name      string

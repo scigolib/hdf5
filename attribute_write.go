@@ -5,18 +5,26 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strings"
 	"unsafe"
 
 	"github.com/scigolib/hdf5/internal/core"
+	"github.com/scigolib/hdf5/internal/writer"
+)
+
+// Attribute storage threshold.
+const (
+	// MaxCompactAttributes is the threshold for transitioning to dense storage.
+	// When an object has 8+ attributes, dense storage (Fractal Heap + B-tree)
+	// is more efficient than compact storage (object header messages).
+	MaxCompactAttributes = 8
 )
 
 // WriteAttribute writes an attribute to a dataset.
-// Attributes are metadata stored in the object header (compact storage).
 //
-// For MVP (v0.11.0-beta):
-//   - Only compact storage (stored in object header)
-//   - No dense attributes (fractal heap storage)
-//   - Attributes must fit in object header space
+// Storage strategy (automatic):
+//   - 0-7 attributes: Compact storage (object header messages)
+//   - 8+ attributes: Dense storage (Fractal Heap + B-tree v2)
 //
 // Supported value types:
 //   - Scalars: int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64
@@ -38,39 +46,265 @@ import (
 //	ds.WriteAttribute("calibration", []float64{1.0, 0.0})
 //
 // Limitations:
-//   - Maximum ~1KB total attributes per object (object header space limit)
 //   - No variable-length strings
 //   - No compound types
 //   - Attributes cannot be modified after creation (write-once)
-//   - NOT YET IMPLEMENTED - planned for v0.11.0-RC
+//   - No attribute deletion
 func (ds *DatasetWriter) WriteAttribute(name string, value interface{}) error {
-	// Use fw field instead of objectHeaderAddr directly
 	return writeAttribute(ds.fileWriter, ds.address, name, value)
 }
 
 // writeAttribute is the internal implementation for writing attributes.
-// It encodes the attribute and adds it to the object header.
 //
-// For MVP, we have a significant limitation: we cannot easily modify object headers
-// after they are written to disk because:
-// 1. Object header size might change (need continuation blocks)
-// 2. File structure is complex (need to track free space)
+// Storage strategy:
+// - 0-7 attributes: Compact storage (object header messages)
+// - 8+ attributes: Dense storage (Fractal Heap + B-tree v2)
 //
-// Current approach for MVP:
-// - Return error (not yet implemented)
-// - In v0.11.0-RC, we'll implement proper object header modification with continuation blocks
+// Automatic transition:
+// - When adding the 8th attribute, all attributes are migrated to dense storage
+// - Compact attribute messages are removed from object header
+// - Attribute Info Message is added to object header
 //
-// NOTE: Object header modification with continuation blocks planned for v0.11.0-RC.
-func writeAttribute(_ *FileWriter, _ uint64, _ string, _ interface{}) error {
-	// For MVP, attributes are not yet supported
-	// This requires:
-	// 1. Reading existing object header from disk
-	// 2. Adding attribute message
-	// 3. Handling object header size growth (continuation blocks)
-	// 4. Writing updated object header back to disk
-	//
-	// This is deferred to v0.11.0-RC for proper implementation
-	return fmt.Errorf("attribute writing not yet implemented in MVP (v0.11.0-beta); will be available in v0.11.0-RC")
+// For MVP:
+// - Transition is one-way (compact → dense only, no dense → compact)
+// - No attribute deletion support
+//
+// Reference: H5Aint.c - H5A__dense_create().
+func writeAttribute(fw *FileWriter, objectAddr uint64, name string, value interface{}) error {
+	// Get superblock
+	sb := fw.file.Superblock()
+
+	// Read object header
+	reader := fw.writer.Reader()
+	oh, err := core.ReadObjectHeader(reader, objectAddr, sb)
+	if err != nil {
+		return fmt.Errorf("failed to read object header: %w", err)
+	}
+
+	// Count existing attributes
+	compactCount := 0
+	hasDenseStorage := false
+	for _, msg := range oh.Messages {
+		if msg.Type == core.MsgAttribute {
+			compactCount++
+		}
+		if msg.Type == core.MsgAttributeInfo {
+			hasDenseStorage = true
+		}
+	}
+
+	// Determine storage strategy
+	if hasDenseStorage {
+		// Already using dense storage → add to dense
+		return writeDenseAttribute(fw, objectAddr, oh, name, value, sb)
+	}
+
+	if compactCount < MaxCompactAttributes {
+		// Still compact → add compact attribute
+		return writeCompactAttribute(fw, objectAddr, oh, name, value, sb)
+	}
+
+	// Transition needed → migrate to dense
+	return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
+}
+
+// writeCompactAttribute writes attribute to object header (compact storage).
+// This is the Phase 1 code, extracted into separate function.
+func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
+	name string, value interface{}, sb *core.Superblock) error {
+	// 1. Infer datatype and encode attribute
+	datatype, dataspace, err := inferDatatypeFromValue(value)
+	if err != nil {
+		return fmt.Errorf("failed to infer datatype: %w", err)
+	}
+
+	data, err := encodeAttributeValue(value)
+	if err != nil {
+		return fmt.Errorf("failed to encode value: %w", err)
+	}
+
+	attr := &core.Attribute{
+		Name:      name,
+		Datatype:  datatype,
+		Dataspace: dataspace,
+		Data:      data,
+	}
+
+	// 2. Check for duplicate attribute name
+	for _, msg := range oh.Messages {
+		if msg.Type == core.MsgAttribute {
+			existingAttr, err := core.ParseAttributeMessage(msg.Data, sb.Endianness)
+			if err == nil && existingAttr.Name == name {
+				return fmt.Errorf("attribute %q already exists (overwrite not yet supported)", name)
+			}
+		}
+	}
+
+	// 3. Encode attribute message
+	attrMsg, err := core.EncodeAttributeFromStruct(attr, sb)
+	if err != nil {
+		return fmt.Errorf("failed to encode attribute message: %w", err)
+	}
+
+	// 4. Add attribute message to header
+	err = core.AddMessageToObjectHeader(oh, core.MsgAttribute, attrMsg)
+	if err != nil {
+		// If object header is full, transition to dense storage
+		// This can happen before reaching MaxCompactAttributes if attributes are large
+		if strings.Contains(err.Error(), "object header full") {
+			// Trigger transition by calling transitionToDenseAttributes
+			return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
+		}
+		return fmt.Errorf("failed to add message to header: %w", err)
+	}
+
+	// 5. Write updated header back to disk
+	err = core.WriteObjectHeader(fw.writer, objectAddr, oh, sb)
+	if err != nil {
+		return fmt.Errorf("failed to write object header: %w", err)
+	}
+
+	return nil
+}
+
+// writeDenseAttribute writes attribute to existing dense storage (heap + B-tree).
+//
+// MVP Limitation (v0.11.1-beta):
+// Adding attributes to EXISTING dense storage is not yet supported.
+// This will be implemented in v0.11.2-beta when we add read-modify-write support.
+//
+// Current workaround:
+// Write all attributes in a single session before closing the file.
+// After file is closed and reopened, adding more attributes requires reading
+// the entire heap and B-tree from disk, which needs additional infrastructure.
+//
+// What works now (Phase 2):
+// - Create dataset
+// - Add 8+ attributes → automatic dense storage creation
+// - All attributes written in one session
+//
+// What doesn't work yet (Phase 3 - planned for v0.11.2-beta):
+// - Reopen file and add more attributes to existing dense storage.
+//
+// Reference: H5Adense.c - H5A__dense_insert().
+func writeDenseAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
+	name string, value interface{}, sb *core.Superblock) error {
+	// Avoid unused parameter warnings
+	_ = fw
+	_ = objectAddr
+	_ = oh
+	_ = name
+	_ = value
+	_ = sb
+
+	// For v0.11.2-beta: Implement read-modify-write
+	// 1. Read existing Attribute Info Message
+	// 2. Read WritableFractalHeap from file
+	// 3. Read WritableBTreeV2 from file
+	// 4. Add new attribute
+	// 5. Write updated structures back
+
+	return fmt.Errorf("adding attributes to existing dense storage not yet implemented (v0.11.2-beta planned feature)")
+}
+
+// transitionToDenseAttributes migrates all compact attributes to dense storage.
+//
+// Process:
+// 1. Read all compact attributes from object header
+// 2. Create DenseAttributeWriter
+// 3. Add all existing attributes to dense storage
+// 4. Add new attribute to dense storage
+// 5. Write dense storage (heap + B-tree)
+// 6. Get Attribute Info Message
+// 7. Remove all compact attribute messages from object header
+// 8. Add Attribute Info Message to object header
+// 9. Write updated object header
+//
+// Reference: H5Aint.c - H5A__dense_create().
+func transitionToDenseAttributes(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
+	name string, value interface{}, sb *core.Superblock) error {
+	// 1. Read all existing compact attributes
+	var compactAttrs []*core.Attribute
+	for _, msg := range oh.Messages {
+		if msg.Type == core.MsgAttribute {
+			attr, err := core.ParseAttributeMessage(msg.Data, sb.Endianness)
+			if err != nil {
+				return fmt.Errorf("failed to parse existing attribute: %w", err)
+			}
+			compactAttrs = append(compactAttrs, attr)
+		}
+	}
+
+	// 2. Infer datatype and encode new attribute
+	datatype, dataspace, err := inferDatatypeFromValue(value)
+	if err != nil {
+		return fmt.Errorf("failed to infer datatype: %w", err)
+	}
+
+	data, err := encodeAttributeValue(value)
+	if err != nil {
+		return fmt.Errorf("failed to encode value: %w", err)
+	}
+
+	newAttr := &core.Attribute{
+		Name:      name,
+		Datatype:  datatype,
+		Dataspace: dataspace,
+		Data:      data,
+	}
+
+	// 3. Create DenseAttributeWriter
+	daw := writer.NewDenseAttributeWriter(objectAddr)
+
+	// 4. Add all existing attributes
+	for _, attr := range compactAttrs {
+		err = daw.AddAttribute(attr, sb)
+		if err != nil {
+			return fmt.Errorf("failed to add existing attribute: %w", err)
+		}
+	}
+
+	// 5. Add new attribute
+	err = daw.AddAttribute(newAttr, sb)
+	if err != nil {
+		return fmt.Errorf("failed to add new attribute: %w", err)
+	}
+
+	// 6. Write dense storage
+	allocator := fw.writer.Allocator()
+	attrInfo, err := daw.WriteToFile(fw.writer, allocator, sb)
+	if err != nil {
+		return fmt.Errorf("failed to write dense storage: %w", err)
+	}
+
+	// 7. Encode Attribute Info Message
+	attrInfoMsg, err := core.EncodeAttributeInfoMessage(attrInfo, sb)
+	if err != nil {
+		return fmt.Errorf("failed to encode attribute info: %w", err)
+	}
+
+	// 8. Remove all compact attribute messages from object header
+	var newMessages []*core.HeaderMessage
+	for _, msg := range oh.Messages {
+		if msg.Type != core.MsgAttribute {
+			newMessages = append(newMessages, msg)
+		}
+	}
+	oh.Messages = newMessages
+
+	// 9. Add Attribute Info Message
+	err = core.AddMessageToObjectHeader(oh, core.MsgAttributeInfo, attrInfoMsg)
+	if err != nil {
+		return fmt.Errorf("failed to add attribute info message: %w", err)
+	}
+
+	// 10. Write updated object header
+	err = core.WriteObjectHeader(fw.writer, objectAddr, oh, sb)
+	if err != nil {
+		return fmt.Errorf("failed to write object header: %w", err)
+	}
+
+	return nil
 }
 
 // inferDatatypeFromValue infers HDF5 datatype and dimensions from a Go value.

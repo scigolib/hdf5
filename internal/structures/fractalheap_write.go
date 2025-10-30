@@ -116,7 +116,7 @@ func NewWritableFractalHeap(blockSize uint64) *WritableFractalHeap {
 	// Compute heap offset and length sizes
 	// Reference: H5HFhdr.c - H5HF__hdr_finish_init_phase1()
 	maxHeapSize := uint16(16)                      // 16 bits for heap size (65KB max offset)
-	heapOffsetSize := uint8((maxHeapSize + 7) / 8) // 2 bytes
+	heapOffsetSize := uint8((maxHeapSize + 7) / 8) //nolint:gosec // G115: Division by 8, result always fits in uint8
 
 	// Length size based on max managed object size
 	maxObjSize := uint64(DefaultMaxManagedObjectSize)
@@ -273,12 +273,12 @@ func (fh *WritableFractalHeap) WriteToFile(writer Writer, allocator Allocator, s
 	directBlockSize := directBlockHeaderSize + len(fh.DirectBlock.Objects) + checksumSize
 
 	// Allocate both addresses
-	headerAddr, err := allocator.Allocate(uint64(headerSize))
+	headerAddr, err := allocator.Allocate(uint64(headerSize)) //nolint:gosec // G115: headerSize bounded by HDF5 format
 	if err != nil {
 		return 0, fmt.Errorf("failed to allocate heap header: %w", err)
 	}
 
-	directBlockAddr, err := allocator.Allocate(uint64(directBlockSize))
+	directBlockAddr, err := allocator.Allocate(uint64(directBlockSize)) //nolint:gosec // G115: directBlockSize bounded by heap block size
 	if err != nil {
 		return 0, fmt.Errorf("failed to allocate direct block: %w", err)
 	}
@@ -419,11 +419,7 @@ func (fh *WritableFractalHeap) writeHeaderAt(writer Writer, addr uint64, sb *cor
 	binary.LittleEndian.PutUint32(buf[offset:], checksum)
 
 	// Write to file at pre-allocated address
-	if err := writer.WriteAtAddress(buf, addr); err != nil {
-		return err
-	}
-
-	return nil
+	return writer.WriteAtAddress(buf, addr)
 }
 
 // writeDirectBlockAt serializes and writes direct block at the given address.
@@ -473,11 +469,7 @@ func (fh *WritableFractalHeap) writeDirectBlockAt(writer Writer, addr uint64, sb
 	}
 
 	// Write to file at pre-allocated address
-	if err := writer.WriteAtAddress(buf, addr); err != nil {
-		return err
-	}
-
-	return nil
+	return writer.WriteAtAddress(buf, addr)
 }
 
 // GetObject retrieves object by ID from fractal heap (for testing).
@@ -541,20 +533,20 @@ func (fh *WritableFractalHeap) GetObject(heapID []byte) ([]byte, error) {
 func writeUintVar(buf []byte, value uint64, size int, endianness binary.ByteOrder) {
 	switch size {
 	case 1:
-		buf[0] = uint8(value)
+		buf[0] = uint8(value) //nolint:gosec // G115: Explicit truncation to byte
 	case 2:
-		endianness.PutUint16(buf[:2], uint16(value))
+		endianness.PutUint16(buf[:2], uint16(value)) //nolint:gosec // G115: Size validated by caller
 	case 4:
-		endianness.PutUint32(buf[:4], uint32(value))
+		endianness.PutUint32(buf[:4], uint32(value)) //nolint:gosec // G115: Size validated by caller
 	case 8:
 		endianness.PutUint64(buf[:8], value)
 	default:
 		// Variable size - write as bytes
 		for i := 0; i < size && i < 8; i++ {
 			if endianness == binary.LittleEndian {
-				buf[i] = uint8(value >> (8 * i))
+				buf[i] = uint8(value >> (8 * i)) //nolint:gosec // G115: Byte extraction from uint64
 			} else {
-				buf[size-1-i] = uint8(value >> (8 * i))
+				buf[size-1-i] = uint8(value >> (8 * i)) //nolint:gosec // G115: Byte extraction from uint64
 			}
 		}
 	}

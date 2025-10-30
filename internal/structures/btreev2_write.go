@@ -209,6 +209,28 @@ func (bt *WritableBTreeV2) InsertRecord(linkName string, heapID uint64) error {
 	return nil
 }
 
+// HasKey checks if a key (link/attribute name) exists in the B-tree.
+//
+// Parameters:
+//   - name: name to check
+//
+// Returns:
+//   - bool: true if name exists (hash found), false otherwise
+//
+// For MVP: searches single leaf node by name hash.
+func (bt *WritableBTreeV2) HasKey(name string) bool {
+	hash := jenkinsHash(name)
+
+	// Search in records
+	for _, record := range bt.records {
+		if record.NameHash == hash {
+			return true
+		}
+	}
+
+	return false
+}
+
 // WriteToFile writes B-tree v2 to file and returns header address.
 //
 // Writes:
@@ -284,6 +306,8 @@ func (bt *WritableBTreeV2) WriteToFile(writer Writer, allocator Allocator, sb *c
 //   - Number of Records in Root: 2 bytes
 //   - Total Records: 8 bytes
 //   - Checksum: CRC32 (4 bytes)
+//
+//nolint:unparam // error return reserved for future validation
 func (bt *WritableBTreeV2) encodeHeader(sb *core.Superblock) ([]byte, error) {
 	size := bt.calculateHeaderSize(sb)
 	buf := make([]byte, size)
@@ -348,6 +372,8 @@ func (bt *WritableBTreeV2) encodeHeader(sb *core.Superblock) ([]byte, error) {
 //   - Type: 5 (1 byte)
 //   - Records: Array of link name records (numRecords * 11 bytes)
 //   - Checksum: CRC32 (4 bytes)
+//
+//nolint:unparam // error return reserved for future validation
 func (bt *WritableBTreeV2) encodeLeafNode(sb *core.Superblock) ([]byte, error) {
 	size := bt.calculateLeafSize(sb)
 	buf := make([]byte, size)
@@ -458,7 +484,7 @@ func jenkinsHash(name string) uint32 {
 	// This is a simplified version for MVP; full implementation matches C library
 
 	length := len(name)
-	a, b, c := uint32(0xdeadbeef)+uint32(length), uint32(0xdeadbeef)+uint32(length), uint32(0xdeadbeef)+uint32(length)
+	a, b, c := uint32(0xdeadbeef)+uint32(length), uint32(0xdeadbeef)+uint32(length), uint32(0xdeadbeef)+uint32(length) //nolint:gosec // G115: Jenkins hash algorithm, length is string length
 
 	// Process 12-byte chunks
 	i := 0
@@ -494,7 +520,6 @@ func jenkinsHash(name string) uint32 {
 	remaining := length - i
 	switch remaining {
 	case 11:
-		//nolint:gosec // G115: Jenkins hash algorithm, safe conversion
 		c += uint32(name[i+10]) << 16
 		fallthrough
 	case 10:

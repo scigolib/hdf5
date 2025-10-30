@@ -10,6 +10,7 @@ import (
 // FilterID represents HDF5 standard filter identifiers.
 type FilterID uint16
 
+// HDF5 standard filter constants.
 const (
 	FilterNone        FilterID = 0 // No filter
 	FilterGZIP        FilterID = 1 // GZIP compression (deflate)
@@ -144,10 +145,12 @@ func (fp *FilterPipeline) EncodePipelineMessage() ([]byte, error) {
 	//   Name (variable, padded to 8-byte boundary) - only if name length > 0
 	//   CD values (4 bytes each)
 
-	buf := make([]byte, 8) // Header
-	buf[0] = 2             // Version 2
-	buf[1] = byte(len(fp.filters))
+	buf := make([]byte, 0, 8+len(fp.filters)*32) // Pre-allocate for header + filters
+	header := make([]byte, 8)
+	header[0] = 2 // Version 2
+	header[1] = byte(len(fp.filters))
 	// Reserved bytes 2-7 are already zero
+	buf = append(buf, header...)
 
 	for _, filter := range fp.filters {
 		filterBuf := encodeFilter(filter)
@@ -161,7 +164,7 @@ func (fp *FilterPipeline) EncodePipelineMessage() ([]byte, error) {
 func encodeFilter(f Filter) []byte {
 	flags, cdValues := f.Encode()
 	name := f.Name()
-	nameLen := uint16(len(name))
+	nameLen := uint16(len(name)) //nolint:gosec // G115: Filter names are short (<256), always fit in uint16
 
 	// Calculate padded name length (align to 8-byte boundary)
 	var paddedNameLen uint16
@@ -177,7 +180,7 @@ func encodeFilter(f Filter) []byte {
 	binary.LittleEndian.PutUint16(buf[0:2], uint16(f.ID()))
 	binary.LittleEndian.PutUint16(buf[2:4], nameLen)
 	binary.LittleEndian.PutUint16(buf[4:6], flags)
-	binary.LittleEndian.PutUint16(buf[6:8], uint16(len(cdValues)))
+	binary.LittleEndian.PutUint16(buf[6:8], uint16(len(cdValues))) //nolint:gosec // G115: HDF5 limits CD values array to uint16
 
 	offset := 8
 

@@ -290,6 +290,8 @@ func TestGetChunkSize(t *testing.T) {
 }
 
 // TestExtractChunkData tests chunk data extraction from dataset.
+//
+//nolint:gocognit // Complex test with multiple dimensions and validation scenarios
 func TestExtractChunkData(t *testing.T) {
 	t.Run("1D extraction", func(t *testing.T) {
 		// Dataset: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] (10 uint32)

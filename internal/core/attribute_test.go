@@ -40,15 +40,17 @@ func TestParseAttributeInfoMessage(t *testing.T) {
 		{
 			name: "with creation order tracking",
 			data: func() []byte {
-				d := make([]byte, 20) // 2 + 2 (max idx) + 8 + 8
+				d := make([]byte, 22) // 2 + 2 (max compact) + 2 (min dense) + 8 + 8
 				d[0] = 0              // version
 				d[1] = 0x01           // flags: track creation order
-				// Max creation index (2 bytes)
+				// Max compact (2 bytes)
 				binary.LittleEndian.PutUint16(d[2:4], 42)
+				// Min dense (2 bytes)
+				binary.LittleEndian.PutUint16(d[4:6], 8)
 				// Fractal heap address
-				binary.LittleEndian.PutUint64(d[4:12], 0x3000)
+				binary.LittleEndian.PutUint64(d[6:14], 0x3000)
 				// B-tree name index address
-				binary.LittleEndian.PutUint64(d[12:20], 0x4000)
+				binary.LittleEndian.PutUint64(d[14:22], 0x4000)
 				return d
 			}(),
 			offsetSize:  8,
@@ -564,6 +566,190 @@ func TestAttributeReadValue_Errors(t *testing.T) {
 			require.Error(t, err)
 			require.Nil(t, val)
 			require.Contains(t, err.Error(), tt.wantError)
+		})
+	}
+}
+
+func TestEncodeAttributeInfoMessage(t *testing.T) {
+	tests := []struct {
+		name       string
+		msg        *AttributeInfoMessage
+		offsetSize uint8
+		wantSize   int
+		wantErr    bool
+	}{
+		{
+			name: "basic message - no creation order (MVP case)",
+			msg: &AttributeInfoMessage{
+				Version:            0,
+				Flags:              0, // No creation order tracking
+				FractalHeapAddr:    0x1000,
+				BTreeNameIndexAddr: 0x2000,
+			},
+			offsetSize: 8,
+			wantSize:   18, // 2 (version+flags) + 8 (heap) + 8 (btree)
+			wantErr:    false,
+		},
+		{
+			name: "with creation order tracking",
+			msg: &AttributeInfoMessage{
+				Version:            0,
+				Flags:              0x01, // Track creation order
+				MaxCreationIndex:   42,
+				FractalHeapAddr:    0x3000,
+				BTreeNameIndexAddr: 0x4000,
+			},
+			offsetSize: 8,
+			wantSize:   22, // 2 + 4 (max/min) + 8 + 8
+			wantErr:    false,
+		},
+		{
+			name: "with creation order indexing",
+			msg: &AttributeInfoMessage{
+				Version:             0,
+				Flags:               0x02, // Index creation order
+				FractalHeapAddr:     0x5000,
+				BTreeNameIndexAddr:  0x6000,
+				BTreeOrderIndexAddr: 0x7000,
+			},
+			offsetSize: 8,
+			wantSize:   26, // 2 + 8 + 8 + 8
+			wantErr:    false,
+		},
+		{
+			name: "with both flags",
+			msg: &AttributeInfoMessage{
+				Version:             0,
+				Flags:               0x03, // Track + Index
+				MaxCreationIndex:    100,
+				FractalHeapAddr:     0x8000,
+				BTreeNameIndexAddr:  0x9000,
+				BTreeOrderIndexAddr: 0xA000,
+			},
+			offsetSize: 8,
+			wantSize:   30, // 2 + 4 + 8 + 8 + 8
+			wantErr:    false,
+		},
+		{
+			name: "4-byte offsets",
+			msg: &AttributeInfoMessage{
+				Version:            0,
+				Flags:              0,
+				FractalHeapAddr:    0x1000,
+				BTreeNameIndexAddr: 0x2000,
+			},
+			offsetSize: 4,
+			wantSize:   10, // 2 + 4 + 4
+			wantErr:    false,
+		},
+		{
+			name:       "nil message",
+			msg:        nil,
+			offsetSize: 8,
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sb := &Superblock{
+				OffsetSize: tt.offsetSize,
+				Endianness: binary.LittleEndian,
+			}
+
+			encoded, err := EncodeAttributeInfoMessage(tt.msg, sb)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantSize, len(encoded), "encoded size mismatch")
+
+			// Verify encoding correctness
+			if tt.msg != nil {
+				require.Equal(t, tt.msg.Version, encoded[0], "version mismatch")
+				require.Equal(t, tt.msg.Flags, encoded[1], "flags mismatch")
+			}
+		})
+	}
+}
+
+func TestEncodeAttributeInfoMessage_RoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  *AttributeInfoMessage
+	}{
+		{
+			name: "MVP case - no creation order",
+			msg: &AttributeInfoMessage{
+				Version:            0,
+				Flags:              0,
+				FractalHeapAddr:    0x1234,
+				BTreeNameIndexAddr: 0x5678,
+			},
+		},
+		{
+			name: "with creation order tracking",
+			msg: &AttributeInfoMessage{
+				Version:            0,
+				Flags:              0x01,
+				MaxCreationIndex:   42,
+				FractalHeapAddr:    0xABCD,
+				BTreeNameIndexAddr: 0xEF01,
+			},
+		},
+		{
+			name: "with creation order indexing",
+			msg: &AttributeInfoMessage{
+				Version:             0,
+				Flags:               0x02,
+				FractalHeapAddr:     0x1111,
+				BTreeNameIndexAddr:  0x2222,
+				BTreeOrderIndexAddr: 0x3333,
+			},
+		},
+		{
+			name: "both flags set",
+			msg: &AttributeInfoMessage{
+				Version:             0,
+				Flags:               0x03,
+				MaxCreationIndex:    99,
+				FractalHeapAddr:     0x4444,
+				BTreeNameIndexAddr:  0x5555,
+				BTreeOrderIndexAddr: 0x6666,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sb := &Superblock{
+				OffsetSize: 8,
+				Endianness: binary.LittleEndian,
+			}
+
+			// Encode
+			encoded, err := EncodeAttributeInfoMessage(tt.msg, sb)
+			require.NoError(t, err)
+
+			// Parse back
+			parsed, err := ParseAttributeInfoMessage(encoded, sb)
+			require.NoError(t, err)
+
+			// Compare
+			require.Equal(t, tt.msg.Version, parsed.Version)
+			require.Equal(t, tt.msg.Flags, parsed.Flags)
+			require.Equal(t, tt.msg.FractalHeapAddr, parsed.FractalHeapAddr)
+			require.Equal(t, tt.msg.BTreeNameIndexAddr, parsed.BTreeNameIndexAddr)
+
+			// Check optional fields based on flags
+			if tt.msg.Flags&0x01 != 0 {
+				require.Equal(t, tt.msg.MaxCreationIndex, parsed.MaxCreationIndex)
+			}
+			if tt.msg.Flags&0x02 != 0 {
+				require.Equal(t, tt.msg.BTreeOrderIndexAddr, parsed.BTreeOrderIndexAddr)
+			}
 		})
 	}
 }

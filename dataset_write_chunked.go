@@ -23,6 +23,8 @@ import (
 // - No compression (filter pipeline empty)
 // - B-tree v1 for chunk indexing
 // - Single-level B-tree (no splits).
+//
+//nolint:gocognit,gocyclo,cyclop,funlen // Complex by nature: chunked dataset creation involves many steps
 func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []uint64, config *datasetConfig) (*DatasetWriter, error) {
 	// 1. Validate chunk dimensions
 	if len(config.chunkDims) != len(dims) {

@@ -102,5 +102,5 @@ func (f *GZIPFilter) Remove(data []byte) ([]byte, error) {
 // For GZIP, the client data contains a single value: the compression level.
 // Flags are always 0 for GZIP.
 func (f *GZIPFilter) Encode() (flags uint16, cdValues []uint32) {
-	return 0, []uint32{uint32(f.level)}
+	return 0, []uint32{uint32(f.level)} //nolint:gosec // G115: Compression level is 1-9, always fits in uint32
 }

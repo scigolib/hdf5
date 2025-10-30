@@ -179,3 +179,171 @@ func (ohw *ObjectHeaderWriter) WriteTo(w io.WriterAt, address uint64) (uint64, e
 
 	return headerSize, nil
 }
+
+// AddMessageToObjectHeader adds a message to an object header.
+// For MVP (v0.11.1-beta): Only supports object header v2 without continuation blocks.
+//
+// Parameters:
+//   - oh: Object header to modify
+//   - msgType: Message type (e.g., MsgAttribute = 0x000C)
+//   - msgData: Encoded message bytes
+//
+// Returns:
+//   - error: Non-nil if header full or add fails
+//
+// Limitations:
+//   - No continuation blocks (returns error if header would overflow)
+//   - Only object header v2 supported
+//   - No message flags (always 0)
+//
+// Reference: H5O.c - H5O_msg_append().
+func AddMessageToObjectHeader(oh *ObjectHeader, msgType MessageType, msgData []byte) error {
+	if oh == nil {
+		return fmt.Errorf("object header is nil")
+	}
+
+	if oh.Version != 2 {
+		return fmt.Errorf("only object header version 2 is supported for modification, got version %d", oh.Version)
+	}
+
+	// For MVP: We don't support continuation blocks
+	// Calculate the space needed for the new message
+	// Message format in v2: Type(1) + Size(2) + Flags(1) + Data(variable)
+	messageHeaderSize := 4 // Type(1) + Size(2) + Flags(1)
+	totalMessageSize := messageHeaderSize + len(msgData)
+
+	// For MVP: We check if adding this message would exceed a reasonable header size
+	// HDF5 typically limits object header chunk 0 to 255 bytes (1-byte size encoding)
+	// We'll check the total size of all messages
+	currentMessagesSize := 0
+	for _, msg := range oh.Messages {
+		currentMessagesSize += 4 + len(msg.Data)
+	}
+
+	newTotalSize := currentMessagesSize + totalMessageSize
+
+	// For MVP: Limit to 255 bytes (max size for 1-byte chunk size encoding)
+	// In practice, headers with continuation blocks can be larger,
+	// but we're not implementing that yet
+	if newTotalSize > 255 {
+		return fmt.Errorf("object header full (current: %d bytes, new message: %d bytes, max: 255 bytes); continuation blocks not yet supported",
+			currentMessagesSize, totalMessageSize)
+	}
+
+	// Create new message
+	newMessage := &HeaderMessage{
+		Type:   msgType,
+		Offset: 0, // Will be calculated during write
+		Data:   make([]byte, len(msgData)),
+	}
+	copy(newMessage.Data, msgData)
+
+	// Add to messages list
+	oh.Messages = append(oh.Messages, newMessage)
+
+	return nil
+}
+
+// WriteObjectHeader writes an object header back to disk at a given address.
+// This is used when modifying object headers (e.g., adding attributes).
+//
+// For MVP (v0.11.1-beta):
+//   - Only object header v2 supported
+//   - No continuation blocks
+//   - Overwrites existing header at the same address
+//
+// Parameters:
+//   - w: Writer with WriteAt capability
+//   - addr: File address where header is located
+//   - oh: Object header to write
+//   - sb: Superblock for encoding parameters
+//
+// Returns:
+//   - error: Non-nil if write fails
+//
+// Reference: H5O.c - H5O_flush().
+func WriteObjectHeader(w io.WriterAt, addr uint64, oh *ObjectHeader, sb *Superblock) error {
+	_ = sb // Reserved for future use (v1 headers or encoding parameters)
+
+	if oh == nil {
+		return fmt.Errorf("object header is nil")
+	}
+
+	if oh.Version != 2 {
+		return fmt.Errorf("only object header version 2 is supported for writing, got version %d", oh.Version)
+	}
+
+	// Build object header writer from the object header
+	ohw := &ObjectHeaderWriter{
+		Version:  oh.Version,
+		Flags:    oh.Flags,
+		Messages: make([]MessageWriter, len(oh.Messages)),
+	}
+
+	// Convert messages
+	for i, msg := range oh.Messages {
+		ohw.Messages[i] = MessageWriter{
+			Type: msg.Type,
+			Data: msg.Data,
+		}
+	}
+
+	// Write the header
+	_, err := ohw.WriteTo(w, addr)
+	if err != nil {
+		return fmt.Errorf("failed to write object header at address %d: %w", addr, err)
+	}
+
+	return nil
+}
+
+// RewriteObjectHeaderV2 rewrites an object header v2 with updated messages.
+// This handles the case where we need to modify an existing object header
+// by reading it, modifying it, and writing it back.
+//
+// For MVP (v0.11.1-beta):
+//   - Only supports v2 headers without continuation blocks
+//   - Overwrites header at original location if size permits
+//   - Returns error if new header doesn't fit in original space
+//
+// Parameters:
+//   - w: Writer with WriteAt capability
+//   - r: Reader for reading current header
+//   - addr: File address of object header
+//   - sb: Superblock
+//   - newMessages: Additional messages to add
+//
+// Returns:
+//   - error: Non-nil if operation fails
+//
+// Note: This is a simplified version for MVP. Full implementation would:
+//   - Support continuation blocks
+//   - Handle header relocation if needed
+//   - Support v1 headers
+func RewriteObjectHeaderV2(w io.WriterAt, r io.ReaderAt, addr uint64, sb *Superblock, newMessages []*HeaderMessage) error {
+	// Read existing object header
+	oh, err := ReadObjectHeader(r, addr, sb)
+	if err != nil {
+		return fmt.Errorf("failed to read object header: %w", err)
+	}
+
+	if oh.Version != 2 {
+		return fmt.Errorf("only v2 headers supported for rewrite, got version %d", oh.Version)
+	}
+
+	// Add new messages
+	for _, msg := range newMessages {
+		err = AddMessageToObjectHeader(oh, msg.Type, msg.Data)
+		if err != nil {
+			return fmt.Errorf("failed to add message: %w", err)
+		}
+	}
+
+	// Write back to same location
+	err = WriteObjectHeader(w, addr, oh, sb)
+	if err != nil {
+		return fmt.Errorf("failed to write object header: %w", err)
+	}
+
+	return nil
+}

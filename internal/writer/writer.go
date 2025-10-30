@@ -185,6 +185,23 @@ func (w *FileWriter) File() *os.File {
 	return w.file
 }
 
+// Reader returns an io.ReaderAt interface for reading from the file.
+// This is the preferred method for reading operations as it returns an interface
+// rather than a concrete type, improving testability and following Go best practices.
+//
+// Use this for:
+//   - Reading back written data
+//   - Object header modifications
+//   - Integration tests (can be mocked)
+//
+// Example:
+//
+//	reader := fw.Reader()
+//	oh, err := core.ReadObjectHeader(reader, addr, sb)
+func (w *FileWriter) Reader() io.ReaderAt {
+	return w.file
+}
+
 // Allocator returns the space allocator.
 // Useful for debugging and testing allocation patterns.
 func (w *FileWriter) Allocator() *Allocator {

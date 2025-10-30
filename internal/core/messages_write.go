@@ -45,7 +45,7 @@ func EncodeLayoutMessage(
 		return encodeContiguousLayout(dataSize, dataAddress, sb)
 
 	case LayoutChunked:
-		if chunkDims == nil || len(chunkDims) == 0 {
+		if len(chunkDims) == 0 {
 			return nil, fmt.Errorf("chunk dimensions required for chunked layout")
 		}
 		return encodeChunkedLayout(chunkDims, dataAddress, sb)
@@ -140,7 +140,7 @@ func encodeChunkedLayout(chunkDims []uint64, btreeAddress uint64, sb *Superblock
 
 	// Chunk dimensions (each 4 bytes, uint32)
 	for _, dim := range chunkDims {
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(dim))
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(dim)) //nolint:gosec // G115: HDF5 limits dimensions to uint32
 		offset += 4
 	}
 

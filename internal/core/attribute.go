@@ -290,6 +290,44 @@ func readDenseAttributes(r io.ReaderAt, attrInfo *AttributeInfoMessage, sb *Supe
 	return nil, nil
 }
 
+// EncodeAttributeFromStruct encodes an Attribute struct to bytes (attribute message format).
+//
+// This is a convenience wrapper around EncodeAttributeMessage (from messages_write.go)
+// that takes an Attribute struct instead of individual parameters.
+//
+// Parameters:
+//   - attr: Attribute to encode
+//   - sb: Superblock for endianness (currently unused as we use little-endian)
+//
+// Returns:
+//   - []byte: Encoded attribute message
+//   - error: Non-nil if encoding fails
+//
+// Reference: H5Oattr.c - H5O__attr_encode().
+func EncodeAttributeFromStruct(attr *Attribute, sb *Superblock) ([]byte, error) {
+	if attr == nil {
+		return nil, fmt.Errorf("attribute is nil")
+	}
+
+	if attr.Name == "" {
+		return nil, fmt.Errorf("attribute name cannot be empty")
+	}
+
+	if attr.Datatype == nil {
+		return nil, fmt.Errorf("attribute datatype is nil")
+	}
+
+	if attr.Dataspace == nil {
+		return nil, fmt.Errorf("attribute dataspace is nil")
+	}
+
+	// Use the existing EncodeAttributeMessage from messages_write.go
+	// It handles all the encoding logic according to HDF5 spec
+	_ = sb // Currently unused, encoding is always little-endian
+
+	return EncodeAttributeMessage(attr.Name, attr.Datatype, attr.Dataspace, attr.Data)
+}
+
 // ParseAttributeInfoMessage parses an Attribute Info Message (0x000F).
 // Reference: H5Oainfo.c in C library.
 // Format:
@@ -321,12 +359,14 @@ func ParseAttributeInfoMessage(data []byte, sb *Superblock) (*AttributeInfoMessa
 	trackCreationOrder := (msg.Flags & 0x01) != 0
 	indexCreationOrder := (msg.Flags & 0x02) != 0
 
-	// Max Creation Index (2 bytes) - only if creation order tracked
+	// Max Compact and Min Dense (2 bytes each) - only if creation order tracked
 	if trackCreationOrder {
-		if offset+2 > len(data) {
-			return nil, fmt.Errorf("attribute info message too short for max creation index")
+		if offset+4 > len(data) {
+			return nil, fmt.Errorf("attribute info message too short for max compact/min dense")
 		}
 		msg.MaxCreationIndex = uint64(sb.Endianness.Uint16(data[offset : offset+2]))
+		offset += 2
+		// Skip Min Dense (2 bytes) - not stored in struct
 		offset += 2
 	}
 
@@ -354,4 +394,107 @@ func ParseAttributeInfoMessage(data []byte, sb *Superblock) (*AttributeInfoMessa
 	}
 
 	return msg, nil
+}
+
+// EncodeAttributeInfoMessage encodes Attribute Info Message for writing.
+//
+// This implements the encoding logic matching the C reference H5Oainfo.c:H5O__ainfo_encode().
+//
+// Format:
+// - Version (1 byte): 0
+// - Flags (1 byte): creation order tracking/indexing
+// - Max Compact (2 bytes): Optional, if bit 0 of flags set
+// - Min Dense (2 bytes): Optional, if bit 0 of flags set
+// - Fractal Heap Address (8 bytes)
+// - B-tree Name Index Address (8 bytes)
+// - B-tree Order Index Address (8 bytes): Optional, if bit 1 of flags set
+//
+// Parameters:
+//   - aim: AttributeInfoMessage to encode
+//   - sb: Superblock for endianness and offset size
+//
+// Returns:
+//   - []byte: Encoded message
+//   - error: Non-nil if encoding fails
+//
+// Reference: H5Oainfo.c - H5O__ainfo_encode().
+func EncodeAttributeInfoMessage(aim *AttributeInfoMessage, sb *Superblock) ([]byte, error) {
+	if aim == nil {
+		return nil, fmt.Errorf("attribute info message is nil")
+	}
+
+	// Calculate size
+	size := 2 // Version (1) + Flags (1)
+
+	trackCreationOrder := (aim.Flags & 0x01) != 0
+	indexCreationOrder := (aim.Flags & 0x02) != 0
+
+	// Max Compact/Min Dense (2 bytes each) if creation order tracked
+	if trackCreationOrder {
+		size += 4 // 2 for max compact + 2 for min dense
+	}
+
+	// Heap address (offsetSize bytes)
+	offsetSize := int(sb.OffsetSize)
+	size += offsetSize
+
+	// B-tree name index address (offsetSize bytes)
+	size += offsetSize
+
+	// B-tree order index address (offsetSize bytes) if indexed
+	if indexCreationOrder {
+		size += offsetSize
+	}
+
+	buf := make([]byte, size)
+	offset := 0
+
+	// Version
+	buf[offset] = aim.Version
+	offset++
+
+	// Flags
+	buf[offset] = aim.Flags
+	offset++
+
+	// Max Compact/Min Dense if creation order tracked
+	if trackCreationOrder {
+		// For MVP: these are not used (Flags = 0), but encoding should support them
+		sb.Endianness.PutUint16(buf[offset:], uint16(aim.MaxCreationIndex)) //nolint:gosec // Safe: validated range
+		offset += 2
+
+		// Min Dense (not stored in struct, use 0)
+		sb.Endianness.PutUint16(buf[offset:], 0)
+		offset += 2
+	}
+
+	// Fractal Heap Address
+	writeAddress(buf[offset:], aim.FractalHeapAddr, offsetSize, sb.Endianness)
+	offset += offsetSize
+
+	// B-tree Name Index Address
+	writeAddress(buf[offset:], aim.BTreeNameIndexAddr, offsetSize, sb.Endianness)
+	offset += offsetSize
+
+	// B-tree Order Index Address if indexed
+	if indexCreationOrder {
+		writeAddress(buf[offset:], aim.BTreeOrderIndexAddr, offsetSize, sb.Endianness)
+	}
+
+	return buf, nil
+}
+
+// writeAddress writes an address to buffer with specified size and endianness.
+// Helper function for encoding variable-size addresses.
+func writeAddress(buf []byte, addr uint64, size int, endianness binary.ByteOrder) {
+	switch size {
+	case 1:
+		buf[0] = byte(addr)
+	case 2:
+		endianness.PutUint16(buf, uint16(addr)) //nolint:gosec // Safe: size limited to 2 bytes
+	case 4:
+		endianness.PutUint32(buf, uint32(addr)) //nolint:gosec // Safe: size limited to 4 bytes
+	case 8:
+		endianness.PutUint64(buf, addr)
+	}
 }

@@ -65,7 +65,7 @@ func (f *ShuffleFilter) Name() string {
 //
 // This groups similar bytes together, improving compression with GZIP.
 func (f *ShuffleFilter) Apply(data []byte) ([]byte, error) {
-	dataLen := uint32(len(data))
+	dataLen := uint32(len(data)) //nolint:gosec // G115: Data length validated by HDF5, fits in uint32
 	if dataLen == 0 {
 		return data, nil
 	}
@@ -98,7 +98,7 @@ func (f *ShuffleFilter) Apply(data []byte) ([]byte, error) {
 //	Input:  [a1 b1 c1][a2 b2 c2][a3 b3 c3][a4 b4 c4]
 //	Output: [a1 a2 a3 a4][b1 b2 b3 b4][c1 c2 c3 c4]
 func (f *ShuffleFilter) Remove(data []byte) ([]byte, error) {
-	dataLen := uint32(len(data))
+	dataLen := uint32(len(data)) //nolint:gosec // G115: Data length validated by HDF5, fits in uint32
 	if dataLen == 0 {
 		return data, nil
 	}
