@@ -22,17 +22,17 @@ HDF5 uses its own type system that maps to native types in different programming
 
 ### Type Categories
 
-| Category | HDF5 Class | Go Representation | Status |
-|----------|------------|-------------------|---------|
-| **Fixed-point** | H5T_INTEGER | int32, int64 | ✅ Fully Supported |
-| **Floating-point** | H5T_FLOAT | float32, float64 | ✅ Fully Supported |
-| **String** | H5T_STRING | string, []string | ✅ Fully Supported |
-| **Compound** | H5T_COMPOUND | map[string]interface{} | ✅ Fully Supported |
-| **Array** | H5T_ARRAY | - | ❌ Not Implemented |
-| **Enum** | H5T_ENUM | - | ❌ Not Implemented |
-| **Reference** | H5T_REFERENCE | - | ❌ Not Implemented |
-| **Opaque** | H5T_OPAQUE | - | ❌ Not Implemented |
-| **Time** | H5T_TIME | - | ❌ Not Implemented |
+| Category | HDF5 Class | Go Representation | Read | Write |
+|----------|------------|-------------------|------|-------|
+| **Fixed-point** | H5T_INTEGER | int8-64, uint8-64 | ✅ | ✅ v0.11.0-beta |
+| **Floating-point** | H5T_FLOAT | float32, float64 | ✅ | ✅ v0.11.0-beta |
+| **String** | H5T_STRING | string, []string | ✅ | ✅ v0.11.0-beta |
+| **Compound** | H5T_COMPOUND | map[string]interface{} | ✅ | ❌ v0.11.0-RC |
+| **Array** | H5T_ARRAY | [N]T (fixed arrays) | ✅ | ✅ v0.11.0-beta |
+| **Enum** | H5T_ENUM | Named integer constants | ✅ | ✅ v0.11.0-beta |
+| **Reference** | H5T_REFERENCE | uint64, [12]byte | ✅ | ✅ v0.11.0-beta |
+| **Opaque** | H5T_OPAQUE | []byte with tag | ✅ | ✅ v0.11.0-beta |
+| **Time** | H5T_TIME | - | ❌ | ❌ Deprecated in HDF5 |
 
 ---
 

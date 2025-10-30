@@ -337,32 +337,32 @@ func (g *Group) loadChildren() error {
 	}
 
 	for _, entry := range entries {
-		// Check if this is an unnamed SNOD (offset 0) - means we should inline its children.
-		if entry.LinkNameOffset == 0 {
-			sig := readSignature(g.file.osFile, entry.ObjectAddress)
-			if sig == SignatureSNOD {
-				// This is an unnamed SNOD container - load its children directly.
-				node, err := structures.ParseSymbolTableNode(g.file.osFile, entry.ObjectAddress, g.file.sb)
-				if err != nil {
-					return utils.WrapError("SNOD parse failed", err)
-				}
-
-				// Add each entry from the SNOD to this group.
-				for _, snodEntry := range node.Entries {
-					childName, err := heap.GetString(snodEntry.LinkNameOffset)
-					if err != nil {
-						return utils.WrapError("SNOD child name read failed", err)
-					}
-
-					child, err := loadObject(g.file, snodEntry.ObjectAddress, childName)
-					if err != nil {
-						return utils.WrapError("SNOD child load failed", err)
-					}
-
-					g.children = append(g.children, child)
-				}
-				continue
+		// Check if this is an unnamed SNOD (offset 0 AND object is SNOD) - means we should inline its children.
+		// Note: offset 0 alone is NOT sufficient - it's a valid offset for the first string in the heap!
+		// We must verify the object at the address is actually a SNOD, not a regular object with name at offset 0.
+		sig := readSignature(g.file.osFile, entry.ObjectAddress)
+		if entry.LinkNameOffset == 0 && sig == SignatureSNOD {
+			// This is an unnamed SNOD container - load its children directly.
+			node, err := structures.ParseSymbolTableNode(g.file.osFile, entry.ObjectAddress, g.file.sb)
+			if err != nil {
+				return utils.WrapError("SNOD parse failed", err)
 			}
+
+			// Add each entry from the SNOD to this group.
+			for _, snodEntry := range node.Entries {
+				childName, err := heap.GetString(snodEntry.LinkNameOffset)
+				if err != nil {
+					return utils.WrapError("SNOD child name read failed", err)
+				}
+
+				child, err := loadObject(g.file, snodEntry.ObjectAddress, childName)
+				if err != nil {
+					return utils.WrapError("SNOD child load failed", err)
+				}
+
+				g.children = append(g.children, child)
+			}
+			continue
 		}
 
 		linkName, err := heap.GetString(entry.LinkNameOffset)

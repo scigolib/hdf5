@@ -44,7 +44,7 @@ func demonstrateFile(filename string) {
 		fmt.Printf("   ⚠️  Could not open file: %v\n", err)
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Superblock info
 	sb := file.Superblock()

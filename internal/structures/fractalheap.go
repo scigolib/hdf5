@@ -499,10 +499,10 @@ func (fh *FractalHeap) readDirectBlock(address, blockSize uint64) (*DirectBlock,
 	offset += int(fh.Header.HeapOffsetSize)
 
 	// Checksum (4 bytes) - if enabled, at end of block
-	// Checksum validation deferred to v1.0.0 (stable release).
+	// Checksum validation deferred to v0.11.0-RC (feature-complete release).
 	// Current implementation reads but does not verify checksums.
 	// For production use, rely on file system integrity or external validation.
-	// Target version: v1.0.0 (comprehensive data integrity features)
+	// Target version: v0.11.0-RC (comprehensive data integrity features)
 	// dblock.Checksum = fh.endianness.Uint32(buf[totalSize-4 : totalSize])
 
 	// Data (remaining bytes, excluding checksum if present)

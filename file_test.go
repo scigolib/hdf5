@@ -121,7 +121,7 @@ func TestSuperblockVersions(t *testing.T) {
 		t.Run(v.file, func(t *testing.T) {
 			file, err := Open(v.file)
 			require.NoError(t, err)
-			defer file.Close()
+			defer func() { _ = file.Close() }()
 
 			require.Equal(t, v.version, file.SuperblockVersion())
 		})
@@ -132,7 +132,7 @@ func TestSuperblockVersions(t *testing.T) {
 func TestGroupChildren(t *testing.T) {
 	file, err := Open("testdata/with_groups.h5")
 	require.NoError(t, err)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var rootGroup *Group
 	file.Walk(func(path string, obj Object) {
@@ -161,7 +161,7 @@ func TestGroupChildren(t *testing.T) {
 func TestDatasetObject(t *testing.T) {
 	file, err := Open("testdata/with_groups.h5")
 	require.NoError(t, err)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var foundDataset bool
 	file.Walk(func(path string, obj Object) {
@@ -180,7 +180,7 @@ func TestDatasetObject(t *testing.T) {
 func TestGroupAttributes(t *testing.T) {
 	file, err := Open("testdata/with_groups.h5")
 	require.NoError(t, err)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var rootGroup *Group
 	file.Walk(func(path string, obj Object) {
@@ -210,7 +210,7 @@ func BenchmarkOpenFile(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		file.Close()
+		_ = file.Close()
 	}
 }
 
@@ -220,7 +220,7 @@ func BenchmarkWalk(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

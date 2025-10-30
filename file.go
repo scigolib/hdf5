@@ -69,6 +69,9 @@ func Open(filename string) (*File, error) {
 		return nil, utils.WrapError("root group load failed", err)
 	}
 
+	// Ensure root group always has name "/" (may be empty from object header)
+	file.root.name = "/"
+
 	return file, nil
 }
 

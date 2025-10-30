@@ -3,9 +3,11 @@ package core
 import (
 	"bytes"
 	"encoding/binary"
+	"hash/crc32"
 	"os"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -157,4 +159,169 @@ func TestRealFileSuperblock(t *testing.T) {
 				"root group address %d beyond file size %d", sb.RootGroup, fi.Size())
 		})
 	}
+}
+
+// Test superblock writing.
+func TestSuperblockWrite(t *testing.T) {
+	t.Run("write superblock v2", func(t *testing.T) {
+		// Create a temporary file
+		tmpFile, err := os.CreateTemp("", "test_superblock_*.h5")
+		require.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+		defer tmpFile.Close()
+
+		// Create superblock
+		sb := &Superblock{
+			Version:        Version2,
+			OffsetSize:     8,
+			LengthSize:     8,
+			BaseAddress:    0,
+			RootGroup:      48, // Assume root group starts after superblock
+			SuperExtension: 0,  // No extension (will be set to UNDEF)
+			Endianness:     binary.LittleEndian,
+		}
+
+		// Write superblock
+		eofAddress := uint64(1024)
+		err = sb.WriteTo(tmpFile, eofAddress)
+		require.NoError(t, err)
+
+		// Read back and verify
+		readSb, err := ReadSuperblock(tmpFile)
+		require.NoError(t, err)
+
+		// Verify fields
+		assert.Equal(t, uint8(2), readSb.Version)
+		assert.Equal(t, uint8(8), readSb.OffsetSize)
+		assert.Equal(t, uint8(8), readSb.LengthSize)
+		assert.Equal(t, uint64(0), readSb.BaseAddress)
+		assert.Equal(t, uint64(48), readSb.RootGroup)
+		// SuperExtension should be UNDEF (0xFFFFFFFFFFFFFFFF)
+		assert.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), readSb.SuperExtension)
+	})
+
+	t.Run("write then read round-trip", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp("", "test_roundtrip_*.h5")
+		require.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+		defer tmpFile.Close()
+
+		// Original superblock
+		original := &Superblock{
+			Version:        Version2,
+			OffsetSize:     8,
+			LengthSize:     8,
+			BaseAddress:    0,
+			RootGroup:      128,
+			SuperExtension: 0,
+			Endianness:     binary.LittleEndian,
+		}
+
+		// Write
+		err = original.WriteTo(tmpFile, 2048)
+		require.NoError(t, err)
+
+		// Read
+		read, err := ReadSuperblock(tmpFile)
+		require.NoError(t, err)
+
+		// Compare
+		assert.Equal(t, original.Version, read.Version)
+		assert.Equal(t, original.OffsetSize, read.OffsetSize)
+		assert.Equal(t, original.LengthSize, read.LengthSize)
+		assert.Equal(t, original.BaseAddress, read.BaseAddress)
+		assert.Equal(t, original.RootGroup, read.RootGroup)
+	})
+
+	t.Run("rejects unsupported version", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp("", "test_version_*.h5")
+		require.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+		defer tmpFile.Close()
+
+		sb := &Superblock{
+			Version:    Version0, // v0 not supported for writing
+			OffsetSize: 8,
+			LengthSize: 8,
+		}
+
+		err = sb.WriteTo(tmpFile, 1024)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "only superblock version 2 is supported")
+	})
+
+	t.Run("rejects invalid sizes", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp("", "test_sizes_*.h5")
+		require.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+		defer tmpFile.Close()
+
+		sb := &Superblock{
+			Version:    Version2,
+			OffsetSize: 4, // Only 8 is supported
+			LengthSize: 8,
+		}
+
+		err = sb.WriteTo(tmpFile, 1024)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "only 8-byte offsets")
+	})
+
+	t.Run("verify checksum", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp("", "test_checksum_*.h5")
+		require.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+		defer tmpFile.Close()
+
+		sb := &Superblock{
+			Version:        Version2,
+			OffsetSize:     8,
+			LengthSize:     8,
+			BaseAddress:    0,
+			RootGroup:      48,
+			SuperExtension: 0,
+		}
+
+		// Write superblock
+		err = sb.WriteTo(tmpFile, 1024)
+		require.NoError(t, err)
+
+		// Read raw bytes
+		buf := make([]byte, 48)
+		n, err := tmpFile.ReadAt(buf, 0)
+		require.NoError(t, err)
+		require.Equal(t, 48, n)
+
+		// Verify checksum
+		expectedChecksum := crc32.ChecksumIEEE(buf[0:44])
+		actualChecksum := binary.LittleEndian.Uint32(buf[44:48])
+		assert.Equal(t, expectedChecksum, actualChecksum,
+			"superblock checksum mismatch")
+	})
+
+	t.Run("verify signature", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp("", "test_signature_*.h5")
+		require.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+		defer tmpFile.Close()
+
+		sb := &Superblock{
+			Version:    Version2,
+			OffsetSize: 8,
+			LengthSize: 8,
+			RootGroup:  48,
+		}
+
+		err = sb.WriteTo(tmpFile, 1024)
+		require.NoError(t, err)
+
+		// Read signature
+		buf := make([]byte, 8)
+		n, err := tmpFile.ReadAt(buf, 0)
+		require.NoError(t, err)
+		require.Equal(t, 8, n)
+
+		// Verify signature
+		assert.Equal(t, Signature, string(buf))
+	})
 }
