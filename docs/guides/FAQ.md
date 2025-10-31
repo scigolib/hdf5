@@ -31,7 +31,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 - ✅ **Actively maintained** - Regular updates and improvements
 
 **Trade-offs**:
-- ⚠️ **Write support MVP** - v0.11.0-beta has basic write (contiguous only, more features in v0.11.1+)
+- ⚠️ **Write support advancing** - v0.11.1-beta has chunked/compression/attributes (more in v0.11.2+)
 - ⚠️ **Some advanced features missing** - Virtual datasets, parallel I/O, SWMR (planned)
 - ⚠️ **Slightly slower** - Pure Go is 2-3x slower than C for some operations (but fast enough for most use cases)
 
@@ -70,19 +70,20 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 
 **Write Support (v0.11.0-beta MVP)**:
 - ✅ File creation (Truncate/Exclusive modes)
-- ✅ Dataset writing (contiguous layout, all datatypes including advanced)
-- ✅ Group creation (symbol table format)
+- ✅ Dataset writing (contiguous + chunked layouts, all datatypes)
+- ✅ Chunked datasets (B-tree v1 indexing, chunk storage)
+- ✅ Compression (GZIP/deflate, Shuffle filter, Fletcher32 checksum)
+- ✅ Group creation (symbol table + dense groups with automatic transition)
+- ✅ Attribute writing (compact 0-7 + dense 8+ with automatic transition)
 - ✅ Advanced datatypes (arrays, enums, references, opaque)
-- ⏳ Chunked datasets (coming in v0.11.1-beta)
-- ⏳ Compression (coming in v0.11.1-beta)
-- ⏳ Attribute writing (coming in v0.11.1-beta)
 
-**Limitations**:
-- ⚠️ Dense attributes partial support (affects <10% of files) - read only
+**Limitations (v0.11.1-beta)**:
+- ⚠️ Dense storage read-modify-write (adding after file reopen - v0.11.2-beta)
+- ⚠️ Attribute modification/deletion (write-once only)
 - ⚠️ Other compression formats (SZIP, LZF) - planned for v1.1.0+
 
 **Quality metrics**:
-- Test coverage: 76.3%
+- Test coverage: 70.2%
 - Lint issues: 0 (34+ linters)
 - 57 reference test files
 - 200+ test cases
@@ -99,7 +100,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 **Not ideal for** (yet):
 - Applications requiring all advanced HDF5 features (virtual datasets, parallel I/O, SWMR)
 - Performance-critical loops requiring C-level speed
-- Complex write scenarios (chunked datasets with compression - coming in v0.11.1-beta)
+- Modifying existing dense storage after file reopen (coming in v0.11.2-beta)
 
 ---
 
@@ -154,14 +155,14 @@ enumDs, _ := fw.CreateDataset("/status", hdf5.EnumInt8, []uint64{5},
     hdf5.WithEnumValues([]string{"OK", "ERROR"}, []int64{0, 1}))
 ```
 
-**Current limitations (MVP)**:
-- Contiguous layout only (chunked in v0.11.1-beta)
-- No compression yet (coming in v0.11.1-beta)
-- Attributes infrastructure ready (write in v0.11.1-beta)
+**Current limitations (v0.11.1-beta)**:
+- Dense storage read-modify-write (adding after file reopen - v0.11.2-beta)
+- Attribute modification/deletion (write-once only)
+- h5dump compatibility (working on it)
 
 **Coming soon**:
-- **v0.11.1-beta**: Chunked datasets + compression (GZIP, Shuffle, Fletcher32)
-- **v0.11.0-RC**: Dense attributes, SWMR, API freeze
+- **v0.11.2-beta**: Dense storage read-modify-write, attribute modifications
+- **v0.11.0-RC**: API freeze, SWMR, community testing
 - **v1.0.0**: Production-ready write support
 
 See [ROADMAP.md](../../ROADMAP.md) for details.

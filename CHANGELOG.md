@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.11.1-beta] - 2025-10-31 (IN PROGRESS)
+## [0.11.1-beta] - 2025-10-31
 
 ### 🎉 Extended Write Support - Chunked Datasets, Dense Groups & Attributes!
 
@@ -55,8 +55,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 📊 Quality Metrics
 - **Test Coverage**: 70.2% overall (target: >70%) ✅
 - **All Tests**: 100% passing ✅
-- **Code Quality**: Lint issues reduced to 42 (from 47)
-- **Files Changed**: 14 files, ~2,000 insertions
+- **Code Quality**: 0 lint issues (34+ linters, golangci-lint) ✅
+- **Files Changed**: 26 files, ~2,100 insertions
+- **Clean History**: 6 commits (after rebase from 11)
 
 ### ⚠️ Known Limitations (v0.11.1-beta)
 - **Dense storage read-modify-write** - Adding to existing dense storage after file reopen (v0.11.2-beta)
