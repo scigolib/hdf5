@@ -98,9 +98,9 @@ func main() {
 
 ## 🎯 Current Status
 
-**Version**: v0.11.0-beta (RELEASED 2025-10-30 - 100% complete - 5/5 components) ✅
+**Version**: v0.11.1-beta (RELEASED 2025-10-31 - Extended write support) ✅
 
-**Production Readiness: Read support feature-complete! Write support MVP ready!** 🎉
+**Production Readiness: Read support feature-complete! Write support advancing rapidly!** 🎉
 
 ### ✅ Fully Implemented
 - **File Structure**:
@@ -143,30 +143,31 @@ func main() {
 ### ⚠️ Partial Support
 - **Dense Attributes**: Infrastructure ready, B-tree v2 iteration deferred to v0.11.0-RC (<10% of files affected)
 
-### ✍️ Write Support (v0.11.0-beta - MVP)
+### ✍️ Write Support (v0.11.1-beta)
 - ✅ **File creation** - CreateForWrite() with Truncate/Exclusive modes
-- ✅ **Dataset writing** - Contiguous layout, all basic + advanced datatypes
-- ✅ **Groups** - CreateGroup() with symbol table format
+- ✅ **Dataset writing** - Contiguous + chunked layouts, all datatypes
+- ✅ **Chunked datasets** - Chunk storage with B-tree v1 indexing
+- ✅ **Compression** - GZIP (deflate), Shuffle filter, Fletcher32 checksum
+- ✅ **Groups** - Symbol table + dense groups (automatic transition at 8+ links)
+- ✅ **Attributes** - Compact (0-7) + dense (8+) with automatic transition
 - ✅ **Advanced datatypes** - Arrays, Enums, References, Opaque
 - ✅ **Free space management** - End-of-file allocation (validated, 100% coverage)
-- 📋 **Attributes** - Infrastructure ready (write in v0.11.1-beta)
 
-**Known Limitations (MVP)**:
-- Contiguous layout only (chunked in next beta)
-- Symbol table groups (Link Info in next beta)
-- No compression yet (next beta)
-- Files not h5dump-readable (acceptable for MVP)
+**Known Limitations (v0.11.1-beta)**:
+- Dense storage read-modify-write (adding after file reopen - v0.11.2-beta)
+- Attribute modification/deletion (write-once only)
+- Files not h5dump-readable yet (working on compatibility)
 
 ### ❌ Planned Features
 
-**v0.11.1-beta (Next)** - Continue Write Support:
-- Chunked datasets + compression (GZIP, Shuffle, Fletcher32)
-- Dense groups (Link Info, B-tree v2)
-- Compact attributes write
+**v0.11.2-beta (Next)** - Continue Write Support:
+- Dense storage read-modify-write (add to existing after reopen)
+- Attribute modification/deletion
 - Hard/soft/external links
+- h5dump compatibility improvements
 
 **v0.11.0-RC (Q1 2026)** - Feature Complete:
-- Dense attributes (fractal heap write)
+- Compound datatypes for attributes
 - SWMR (Single Writer Multiple Reader)
 - API freeze
 - Community testing
@@ -287,10 +288,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Status**: Beta - Read complete, Write MVP ready
-**Version**: v0.11.0-beta (5/5 components complete)
-**Last Updated**: 2025-10-30
+**Status**: Beta - Read complete, Write support advancing
+**Version**: v0.11.1-beta (Chunked datasets, compression, dense storage)
+**Last Updated**: 2025-10-31
 
 ---
 
 *Built with ❤️ by the HDF5 Go community*
+*Recognized by [HDF Group Forum](https://forum.hdfgroup.org/t/loking-for-an-hdf5-version-compatible-with-go1-9-2/10021/7)* ⭐
