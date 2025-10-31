@@ -436,11 +436,11 @@ func (bt *WritableBTreeV2) calculateMaxRecords() int {
 
 // insertRecordSorted inserts a record into a sorted slice by hash.
 func insertRecordSorted(records []LinkNameRecord, newRecord LinkNameRecord) []LinkNameRecord {
-	// Find insertion point using safe loop pattern
+	// Find insertion point
 	insertPos := len(records) // Default: append at end
 
 	for i := 0; i < len(records); i++ {
-		if records[i].NameHash >= newRecord.NameHash {
+		if records[i].NameHash >= newRecord.NameHash { // #nosec G602 -- bounds checked by loop condition i < len(records)
 			insertPos = i
 			break
 		}
