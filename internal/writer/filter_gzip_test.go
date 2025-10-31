@@ -299,7 +299,7 @@ func TestGZIPFilter_BinaryData(t *testing.T) {
 		name string
 		data []byte
 	}{
-		{"all zeros", bytes.Repeat([]byte{0}, 1000)},
+		{"all zeros", make([]byte, 1000)}, // Using make instead of bytes.Repeat for zero slice
 		{"all ones", bytes.Repeat([]byte{0xFF}, 1000)},
 		{"alternating", func() []byte {
 			data := make([]byte, 1000)
