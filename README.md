@@ -5,9 +5,9 @@
 [![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat&logo=go)](https://golang.org)
 [![Go Report Card](https://goreportcard.com/badge/github.com/scigolib/hdf5)](https://goreportcard.com/report/github.com/scigolib/hdf5)
 [![CI](https://github.com/scigolib/hdf5/actions/workflows/test.yml/badge.svg)](https://github.com/scigolib/hdf5/actions)
-[![Coverage](https://img.shields.io/badge/coverage-70.2%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
+[![Coverage](https://img.shields.io/badge/coverage-89.7%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.11.1--beta-green.svg)](ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-v0.11.2--beta-green.svg)](ROADMAP.md)
 [![GoDoc](https://pkg.go.dev/badge/github.com/scigolib/hdf5.svg)](https://pkg.go.dev/github.com/scigolib/hdf5)
 
 A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. Read support is feature-complete, write support advancing rapidly!
@@ -135,7 +135,7 @@ func main() {
 - **Navigation**: Full file tree traversal via Walk()
 
 - **Code Quality**:
-  - Test coverage: 76.3% (target: >70%) ✅
+  - Test coverage: 89.7% in internal/ (target: >70%) ✅
   - Lint issues: 0 (34+ linters) ✅
   - TODO items: 0 (all resolved) ✅
   - 57 reference HDF5 test files ✅
