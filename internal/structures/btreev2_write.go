@@ -439,8 +439,8 @@ func insertRecordSorted(records []LinkNameRecord, newRecord LinkNameRecord) []Li
 	// Find insertion point
 	insertPos := len(records) // Default: append at end
 
-	for i := 0; i < len(records); i++ {
-		if records[i].NameHash >= newRecord.NameHash { // #nosec G602 -- bounds checked by loop condition i < len(records)
+	for i := range records {
+		if records[i].NameHash >= newRecord.NameHash {
 			insertPos = i
 			break
 		}
