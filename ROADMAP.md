@@ -3,8 +3,8 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2025-10-30
-**Current Version**: v0.11.0-beta (RELEASED 2025-10-30)
+**Last Updated**: 2025-10-31
+**Current Version**: v0.11.1-beta
 **Strategy**: Feature-complete at v0.11.0-RC, then community testing → v1.0.0 stable
 **Target**: v0.11.0-RC (2026-03-15) → v1.0.0 stable (2026-07-15)
 
@@ -99,10 +99,35 @@ v1.0.0 STABLE → Production release
 - ~3,500 LOC added (production + tests) ✅
 
 **Known Limitations (MVP)**:
-- Contiguous layout only (chunked in next beta)
-- Symbol table groups (Link Info in next beta)
-- Compact attributes deferred (object header modification in next beta)
-- No compression yet (next beta)
+- Contiguous layout only (chunked in v0.11.1-beta)
+- Symbol table groups only (dense groups in v0.11.1-beta)
+- Compact attributes infrastructure only (writing in v0.11.1-beta)
+- No compression yet (v0.11.1-beta)
+
+### ✅ v0.11.1-beta RELEASED (2025-10-31)
+
+**Sprint Duration**: 1 day
+
+**Completed Components** (3/3 - 100%):
+1. ✅ Chunked Datasets (~4 hours) - Chunk storage, GZIP compression, Shuffle filter
+2. ✅ Dense Groups (~6 hours, saved 4 by reuse!) - Fractal Heap, B-tree v2, Link Info, automatic transition
+3. ✅ Attribute Writing (~6 hours, saved 4 by reuse!) - Compact (0-7), dense (8+), automatic transition
+
+**Code Reuse Success** 🎉:
+- Dense Groups created Fractal Heap + B-tree v2
+- Attribute Writing REUSED these structures → saved ~8 hours!
+- Proof of modular architecture benefits
+
+**Quality Metrics**:
+- 70.2% test coverage (target: >70%) ✅
+- All tests passing (100%) ✅
+- Architecture improvements (Go 2025 best practices)
+
+**MVP Limitations (v0.11.1-beta)**:
+- Adding to existing dense storage after file reopen (v0.11.2-beta)
+- No attribute modification (write-once only)
+- No attribute deletion
+- No compound types
 
 ### ✅ v0.10.0-beta RELEASED (2025-10-29)
 

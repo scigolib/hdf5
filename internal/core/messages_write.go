@@ -5,14 +5,15 @@ import (
 	"fmt"
 )
 
-// EncodeLayoutMessage encodes a Data Layout message for contiguous storage.
+// EncodeLayoutMessage encodes a Data Layout message.
 // This creates a version 3 layout message (most common format).
 //
 // Parameters:
 //   - layoutClass: Type of layout (contiguous, compact, chunked)
-//   - dataSize: Size of the dataset data in bytes
-//   - dataAddress: File address where data is stored
+//   - dataSize: Size of the dataset data in bytes (for contiguous) or unused (for chunked)
+//   - dataAddress: File address where data is stored (for contiguous) or B-tree root (for chunked)
 //   - sb: Superblock for offset/length size encoding
+//   - chunkDims: Chunk dimensions (required for chunked layout, nil otherwise)
 //
 // Returns:
 //   - Encoded message bytes
@@ -20,17 +21,42 @@ import (
 //
 // Format (version 3, contiguous):
 //   - Version: 1 byte (3)
-//   - Class: 1 byte (1 for contiguous)
+//   - Class: 1 byte (1 for contiguous, 2 for chunked)
 //   - Data Address: offsetSize bytes
 //   - Data Size: lengthSize bytes
 //
+// Format (version 3, chunked):
+//   - Version: 1 byte (3)
+//   - Class: 1 byte (2 for chunked)
+//   - Dimensionality: 1 byte
+//   - B-tree Address: offsetSize bytes
+//   - Chunk Dimensions: dimensionality * 4 bytes (uint32 each)
+//
 // Reference: HDF5 spec III.D (Data Storage - Data Layout Message)
 // C Reference: H5Olayout.c - H5O__layout_encode()..
-func EncodeLayoutMessage(layoutClass DataLayoutClass, dataSize, dataAddress uint64, sb *Superblock) ([]byte, error) {
-	if layoutClass != LayoutContiguous {
-		return nil, fmt.Errorf("only contiguous layout is supported for writing, got class %d", layoutClass)
-	}
+func EncodeLayoutMessage(
+	layoutClass DataLayoutClass,
+	dataSize, dataAddress uint64,
+	sb *Superblock,
+	chunkDims []uint64,
+) ([]byte, error) {
+	switch layoutClass {
+	case LayoutContiguous:
+		return encodeContiguousLayout(dataSize, dataAddress, sb)
 
+	case LayoutChunked:
+		if len(chunkDims) == 0 {
+			return nil, fmt.Errorf("chunk dimensions required for chunked layout")
+		}
+		return encodeChunkedLayout(chunkDims, dataAddress, sb)
+
+	default:
+		return nil, fmt.Errorf("unsupported layout class for writing: %d", layoutClass)
+	}
+}
+
+// encodeContiguousLayout encodes contiguous layout message (version 3).
+func encodeContiguousLayout(dataSize, dataAddress uint64, sb *Superblock) ([]byte, error) {
 	// Version 3 layout message size:
 	// version (1) + class (1) + address (offsetSize) + size (lengthSize)
 	messageSize := 2 + int(sb.OffsetSize) + int(sb.LengthSize)
@@ -43,7 +69,7 @@ func EncodeLayoutMessage(layoutClass DataLayoutClass, dataSize, dataAddress uint
 	offset++
 
 	// Layout class (contiguous = 1)
-	buf[offset] = byte(layoutClass)
+	buf[offset] = byte(LayoutContiguous)
 	offset++
 
 	// Data address (variable size based on superblock)
@@ -52,6 +78,71 @@ func EncodeLayoutMessage(layoutClass DataLayoutClass, dataSize, dataAddress uint
 
 	// Data size (variable size based on superblock)
 	writeUint64(buf[offset:], dataSize, int(sb.LengthSize), sb.Endianness)
+
+	return buf, nil
+}
+
+// encodeChunkedLayout encodes chunked layout message (version 3).
+// This implements the HDF5 chunked storage layout format.
+//
+// Parameters:
+//   - chunkDims: Chunk dimensions
+//   - btreeAddress: Address of B-tree root for chunk index
+//   - sb: Superblock for encoding parameters
+//
+// Format (version 3):
+//   - Version: 1 byte (3)
+//   - Class: 1 byte (2 for chunked)
+//   - Dimensionality: 1 byte
+//   - B-tree Address: offsetSize bytes
+//   - Chunk Dimensions: dimensionality * 4 bytes (uint32 each)
+//
+// Reference: H5Olayout.c - H5O__layout_encode() for chunked case.
+func encodeChunkedLayout(chunkDims []uint64, btreeAddress uint64, sb *Superblock) ([]byte, error) {
+	if len(chunkDims) == 0 {
+		return nil, fmt.Errorf("chunk dimensions cannot be empty")
+	}
+
+	dimensionality := len(chunkDims)
+	if dimensionality > 255 {
+		return nil, fmt.Errorf("dimensionality %d exceeds maximum 255", dimensionality)
+	}
+
+	// Validate chunk dimensions fit in uint32 (HDF5 format limitation)
+	for i, dim := range chunkDims {
+		if dim > 0xFFFFFFFF {
+			return nil, fmt.Errorf("chunk dimension %d (%d) exceeds uint32 maximum", i, dim)
+		}
+	}
+
+	// Calculate total message size
+	// Version (1) + Class (1) + Dimensionality (1) + BTreeAddress (OffsetSize) + ChunkDims (4*N)
+	messageSize := 3 + int(sb.OffsetSize) + dimensionality*4
+	buf := make([]byte, messageSize)
+
+	offset := 0
+
+	// Version 3
+	buf[offset] = 3
+	offset++
+
+	// Class = LayoutChunked (2)
+	buf[offset] = byte(LayoutChunked)
+	offset++
+
+	// Dimensionality
+	buf[offset] = byte(dimensionality)
+	offset++
+
+	// B-tree root address (where chunk index is stored)
+	writeUint64(buf[offset:], btreeAddress, int(sb.OffsetSize), sb.Endianness)
+	offset += int(sb.OffsetSize)
+
+	// Chunk dimensions (each 4 bytes, uint32)
+	for _, dim := range chunkDims {
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(dim)) //nolint:gosec // G115: HDF5 limits dimensions to uint32
+		offset += 4
+	}
 
 	return buf, nil
 }

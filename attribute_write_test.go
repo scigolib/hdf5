@@ -217,26 +217,27 @@ func TestEncodeAttributeValue(t *testing.T) {
 	}
 }
 
-// Test WriteAttribute API (currently returns error as not yet implemented).
-func TestDatasetWriter_WriteAttribute(t *testing.T) {
+// TestWriteAttribute_Int32 tests writing int32 attribute (basic test - full integration in v0.11.2).
+func TestWriteAttribute_Int32(t *testing.T) {
 	// Create a temporary file for testing
-	fw, err := CreateForWrite("testdata/test_attributes.h5", CreateTruncate)
+	fw, err := CreateForWrite("testdata/test_attr_int32.h5", CreateTruncate)
 	require.NoError(t, err)
 	defer func() {
 		_ = fw.Close()
-		// Clean up test file
-		// os.Remove("testdata/test_attributes.h5")
 	}()
 
 	// Create a dataset
-	ds, err := fw.CreateDataset("/test_dataset", Int32, []uint64{10})
+	ds, err := fw.CreateDataset("/temperature", Float64, []uint64{10})
 	require.NoError(t, err)
 	require.NotNil(t, ds)
 
-	// Try to write an attribute (should return error for MVP)
-	err = ds.WriteAttribute("units", "meters")
-	assert.Error(t, err, "WriteAttribute should return error in MVP")
-	assert.Contains(t, err.Error(), "not yet implemented", "error should indicate MVP limitation")
+	// Write an int32 attribute
+	err = ds.WriteAttribute("sensor_id", int32(42))
+	require.NoError(t, err, "WriteAttribute should succeed for int32")
+
+	// For MVP: We can successfully write the attribute
+	// Full integration testing (reopening and reading) will be in v0.11.2
+	// when Dataset() method is implemented for read-mode files
 }
 
 // Test round-trip: encode value → decode with existing parser.

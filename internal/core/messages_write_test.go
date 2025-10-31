@@ -106,7 +106,7 @@ func TestEncodeLayoutMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			data, err := EncodeLayoutMessage(tt.layoutClass, tt.dataSize, tt.dataAddress, tt.sb)
+			data, err := EncodeLayoutMessage(tt.layoutClass, tt.dataSize, tt.dataAddress, tt.sb, nil)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -460,7 +460,7 @@ func TestEncodeDecodeRoundTrip_Layout(t *testing.T) {
 	originalSize := uint64(2048)
 
 	// Encode
-	encoded, err := EncodeLayoutMessage(LayoutContiguous, originalSize, originalAddress, sb)
+	encoded, err := EncodeLayoutMessage(LayoutContiguous, originalSize, originalAddress, sb, nil)
 	require.NoError(t, err)
 
 	// Decode
@@ -841,6 +841,178 @@ func TestEncodeAttributeMessage_RoundTrip(t *testing.T) {
 			assert.Equal(t, tt.datatype.Size, decoded.Datatype.Size)
 			assert.Equal(t, len(tt.dataspace.Dimensions), len(decoded.Dataspace.Dimensions))
 			assert.Equal(t, tt.data, decoded.Data)
+		})
+	}
+}
+
+// TestEncodeChunkedLayout tests encoding of chunked layout messages.
+func TestEncodeChunkedLayout(t *testing.T) {
+	sb := &Superblock{
+		OffsetSize: 8,
+		LengthSize: 8,
+		Endianness: binary.LittleEndian,
+	}
+
+	tests := []struct {
+		name          string
+		chunkDims     []uint64
+		btreeAddress  uint64
+		expectedSize  int
+		expectError   bool
+		validateBytes func(*testing.T, []byte)
+	}{
+		{
+			name:         "1D chunks [10]",
+			chunkDims:    []uint64{10},
+			btreeAddress: 0x1000,
+			expectedSize: 3 + 8 + 4, // Version + Class + Dim + BTree + 1*ChunkDim
+			validateBytes: func(t *testing.T, buf []byte) {
+				require.Equal(t, byte(3), buf[0], "version should be 3")
+				require.Equal(t, byte(LayoutChunked), buf[1], "class should be chunked (2)")
+				require.Equal(t, byte(1), buf[2], "dimensionality should be 1")
+
+				// B-tree address at offset 3 (8 bytes)
+				btreeAddr := binary.LittleEndian.Uint64(buf[3:11])
+				require.Equal(t, uint64(0x1000), btreeAddr, "B-tree address mismatch")
+
+				// Chunk dimension at offset 11 (4 bytes)
+				chunkDim := binary.LittleEndian.Uint32(buf[11:15])
+				require.Equal(t, uint32(10), chunkDim, "chunk dimension mismatch")
+			},
+		},
+		{
+			name:         "2D chunks [5, 10]",
+			chunkDims:    []uint64{5, 10},
+			btreeAddress: 0x2000,
+			expectedSize: 3 + 8 + 8, // Version + Class + Dim + BTree + 2*ChunkDim
+			validateBytes: func(t *testing.T, buf []byte) {
+				require.Equal(t, byte(3), buf[0], "version should be 3")
+				require.Equal(t, byte(LayoutChunked), buf[1], "class should be chunked (2)")
+				require.Equal(t, byte(2), buf[2], "dimensionality should be 2")
+
+				// B-tree address
+				btreeAddr := binary.LittleEndian.Uint64(buf[3:11])
+				require.Equal(t, uint64(0x2000), btreeAddr)
+
+				// Chunk dimensions
+				chunkDim0 := binary.LittleEndian.Uint32(buf[11:15])
+				chunkDim1 := binary.LittleEndian.Uint32(buf[15:19])
+				require.Equal(t, uint32(5), chunkDim0, "chunk dim 0 mismatch")
+				require.Equal(t, uint32(10), chunkDim1, "chunk dim 1 mismatch")
+			},
+		},
+		{
+			name:         "3D chunks [2, 3, 4]",
+			chunkDims:    []uint64{2, 3, 4},
+			btreeAddress: 0x3000,
+			expectedSize: 3 + 8 + 12, // Version + Class + Dim + BTree + 3*ChunkDim
+			validateBytes: func(t *testing.T, buf []byte) {
+				require.Equal(t, byte(3), buf[0], "version should be 3")
+				require.Equal(t, byte(LayoutChunked), buf[1], "class should be chunked")
+				require.Equal(t, byte(3), buf[2], "dimensionality should be 3")
+
+				// Chunk dimensions
+				chunkDim0 := binary.LittleEndian.Uint32(buf[11:15])
+				chunkDim1 := binary.LittleEndian.Uint32(buf[15:19])
+				chunkDim2 := binary.LittleEndian.Uint32(buf[19:23])
+				require.Equal(t, uint32(2), chunkDim0)
+				require.Equal(t, uint32(3), chunkDim1)
+				require.Equal(t, uint32(4), chunkDim2)
+			},
+		},
+		{
+			name:         "large chunks [1000, 2000]",
+			chunkDims:    []uint64{1000, 2000},
+			btreeAddress: 0xABCD1234,
+			expectedSize: 3 + 8 + 8,
+			validateBytes: func(t *testing.T, buf []byte) {
+				// Verify large chunk dimensions are encoded correctly
+				chunkDim0 := binary.LittleEndian.Uint32(buf[11:15])
+				chunkDim1 := binary.LittleEndian.Uint32(buf[15:19])
+				require.Equal(t, uint32(1000), chunkDim0)
+				require.Equal(t, uint32(2000), chunkDim1)
+			},
+		},
+		{
+			name:        "empty chunk dimensions",
+			chunkDims:   []uint64{},
+			expectError: true,
+		},
+		{
+			name:        "chunk dimension exceeds uint32",
+			chunkDims:   []uint64{0x100000000}, // 2^32
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf, err := EncodeLayoutMessage(LayoutChunked, 0, tt.btreeAddress, sb, tt.chunkDims)
+
+			if tt.expectError {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Len(t, buf, tt.expectedSize, "encoded size mismatch")
+
+			if tt.validateBytes != nil {
+				tt.validateBytes(t, buf)
+			}
+		})
+	}
+}
+
+// TestChunkedLayoutRoundTrip tests encoding then parsing chunked layout.
+func TestChunkedLayoutRoundTrip(t *testing.T) {
+	sb := &Superblock{
+		OffsetSize: 8,
+		LengthSize: 8,
+		Endianness: binary.LittleEndian,
+	}
+
+	tests := []struct {
+		name         string
+		chunkDims    []uint64
+		btreeAddress uint64
+	}{
+		{
+			name:         "1D chunks",
+			chunkDims:    []uint64{100},
+			btreeAddress: 0x1000,
+		},
+		{
+			name:         "2D chunks",
+			chunkDims:    []uint64{10, 20},
+			btreeAddress: 0x2000,
+		},
+		{
+			name:         "3D chunks",
+			chunkDims:    []uint64{4, 5, 6},
+			btreeAddress: 0x3000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Encode
+			encoded, err := EncodeLayoutMessage(LayoutChunked, 0, tt.btreeAddress, sb, tt.chunkDims)
+			require.NoError(t, err)
+
+			// Parse back
+			parsed, err := ParseDataLayoutMessage(encoded, sb)
+			require.NoError(t, err)
+
+			// Verify
+			require.Equal(t, uint8(3), parsed.Version)
+			require.Equal(t, LayoutChunked, parsed.Class)
+			require.Equal(t, tt.btreeAddress, parsed.DataAddress, "B-tree address mismatch")
+			require.Len(t, parsed.ChunkSize, len(tt.chunkDims), "dimensionality mismatch")
+
+			for i, dim := range tt.chunkDims {
+				require.Equal(t, uint32(dim), parsed.ChunkSize[i], "chunk dim %d mismatch", i)
+			}
 		})
 	}
 }

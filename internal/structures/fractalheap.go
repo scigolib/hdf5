@@ -529,9 +529,9 @@ func readUint(data []byte, size int, endianness binary.ByteOrder) uint64 {
 	case 2:
 		return uint64(endianness.Uint16(data[:2]))
 	case 4:
-		return uint64(endianness.Uint32(data[:4]))
+		return uint64(endianness.Uint32(data[:4])) //nolint:gosec // G602: Size validated by caller
 	case 8:
-		return endianness.Uint64(data[:8])
+		return endianness.Uint64(data[:8]) //nolint:gosec // G602: Size validated by caller
 	default:
 		// Variable size - read as little-endian bytes
 		var val uint64
