@@ -7,11 +7,14 @@ import (
 )
 
 // ObjectHeaderWriter provides functionality for writing HDF5 object headers.
-// For MVP (v0.11.0-beta), only object header v2 with minimal messages is supported.
+// Supports both v1 (legacy, for superblock v0) and v2 (modern) formats.
 type ObjectHeaderWriter struct {
 	Version  uint8
 	Flags    uint8
 	Messages []MessageWriter
+
+	// V1-specific fields (used only when Version == 1)
+	RefCount uint32 // Reference count (always 1 for new files)
 }
 
 // MessageWriter represents a message that can be written to an object header.
@@ -67,10 +70,63 @@ func NewMinimalRootGroupHeader() *ObjectHeaderWriter {
 // Returns:
 //   - Total size in bytes
 //
+// For object header v1:
+//   - Header: 16 bytes (version, reserved, num_messages, ref_count, header_size, padding)
+//   - Messages: sum of (2 + 2 + 1 + 3 + len(data)) for each message (8-byte aligned)
+//
 // For object header v2:
 //   - Header: 4 (signature) + 1 (version) + 1 (flags) + 1 (chunk size) = 7 bytes
 //   - Messages: sum of (1 + 2 + 1 + len(data)) for each message
 func (ohw *ObjectHeaderWriter) Size() uint64 {
+	switch ohw.Version {
+	case 1:
+		return ohw.sizeV1()
+	case 2:
+		return ohw.sizeV2()
+	default:
+		// Should never happen - validated at creation time
+		panic(fmt.Sprintf("unsupported object header version: %d", ohw.Version))
+	}
+}
+
+// sizeV1 calculates size for object header v1.
+// V1 format:
+//   - 16-byte header
+//   - Message headers (8 bytes each)
+//   - Message data (variable, 8-byte aligned)
+//
+// IMPORTANT: The "Object Header Size" field in v1 includes ONLY:
+//   - The 16-byte header
+//   - All message headers (8 bytes each)
+//   - It does NOT include message data!
+//
+// This function returns the TOTAL size (header + message headers + message data)
+// for allocation purposes, but writeToV1() calculates the "Object Header Size"
+// field separately.
+func (ohw *ObjectHeaderWriter) sizeV1() uint64 {
+	headerSize := uint64(16) // V1 header is always 16 bytes
+
+	// Calculate total message size with 8-byte alignment
+	var totalMessageSize uint64
+	for _, msg := range ohw.Messages {
+		// Each v1 message:
+		// - Header: Type (2) + Size (2) + Flags (1) + Reserved (3) = 8 bytes
+		// - Data: variable
+		// - Total aligned to 8-byte boundary
+		msgSize := 8 + uint64(len(msg.Data))
+		// Align to 8-byte boundary
+		if msgSize%8 != 0 {
+			msgSize += 8 - (msgSize % 8)
+		}
+		totalMessageSize += msgSize
+	}
+
+	// Return total size (header + all messages including data)
+	return headerSize + totalMessageSize
+}
+
+// sizeV2 calculates size for object header v2 (current implementation).
+func (ohw *ObjectHeaderWriter) sizeV2() uint64 {
 	// Calculate message data size
 	var messageDataSize uint64
 	for _, msg := range ohw.Messages {
@@ -85,24 +141,134 @@ func (ohw *ObjectHeaderWriter) Size() uint64 {
 // WriteTo writes the object header to the writer at the specified address.
 // Returns the total size written (useful for allocation tracking).
 //
+// Object Header v1 format:
+//   - Version (1 byte)
+//   - Reserved (1 byte)
+//   - Number of Messages (2 bytes)
+//   - Object Reference Count (4 bytes)
+//   - Object Header Size (4 bytes)
+//   - Padding to 8-byte alignment (4 bytes)
+//   - Messages (each 8-byte aligned)
+//
 // Object Header v2 format:
+//   - Signature: "OHDR" (4 bytes)
+//   - Version: 2 (1 byte)
+//   - Flags: (1 byte)
+//   - [Optional fields based on flags]
+//   - Size of Chunk 0: (1, 2, 4, or 8 bytes based on flags bits 0-1)
+//   - Messages: variable size
 //
-//	Signature: "OHDR" (4 bytes)
-//	Version: 2 (1 byte)
-//	Flags: (1 byte)
-//	[Optional fields based on flags]
-//	Size of Chunk 0: (1, 2, 4, or 8 bytes based on flags bits 0-1)
-//	Messages: variable size
-//
-// For MVP:
+// For MVP v2:
 //   - No timestamp fields (flags bit 5 = 0)
 //   - No attribute phase change (flags bit 4 = 0)
 //   - Chunk size in 1 byte (flags bits 0-1 = 0)
 func (ohw *ObjectHeaderWriter) WriteTo(w io.WriterAt, address uint64) (uint64, error) {
-	if ohw.Version != 2 {
-		return 0, fmt.Errorf("only object header version 2 is supported for writing, got version %d", ohw.Version)
+	switch ohw.Version {
+	case 1:
+		return ohw.writeToV1(w, address)
+	case 2:
+		return ohw.writeToV2(w, address)
+	default:
+		return 0, fmt.Errorf("unsupported object header version: %d", ohw.Version)
+	}
+}
+
+// writeToV1 writes an object header v1 to the writer.
+// V1 format (HDF5 spec III.A.1):
+//   - Version (1 byte) = 1
+//   - Reserved (1 byte) = 0
+//   - Number of Messages (2 bytes, little-endian)
+//   - Object Reference Count (4 bytes, little-endian)
+//   - Object Header Size (4 bytes, little-endian) - total size including header
+//   - Padding to 8-byte alignment (4 bytes of zeros)
+//   - Messages (each 8-byte aligned):
+//   - Type (2 bytes, little-endian)
+//   - Size (2 bytes, little-endian)
+//   - Flags (1 byte)
+//   - Reserved (3 bytes)
+//   - Data (variable, padded to 8-byte boundary)
+func (ohw *ObjectHeaderWriter) writeToV1(w io.WriterAt, address uint64) (uint64, error) {
+	// Calculate total size for buffer allocation
+	totalSize := ohw.sizeV1()
+	buf := make([]byte, totalSize)
+
+	// Calculate "Object Header Size" field value
+	// This field includes ONLY: 16-byte header + message headers (8 bytes each)
+	// It does NOT include message data!
+	objectHeaderSize := uint32(16 + (len(ohw.Messages) * 8)) //nolint:gosec // G115: Safe - message count limited by HDF5 spec
+
+	offset := 0
+
+	// Header (16 bytes)
+	buf[offset] = 1 // Version
+	offset++
+
+	buf[offset] = 0 // Reserved
+	offset++
+
+	// Number of messages (2 bytes)
+	binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(ohw.Messages))) //nolint:gosec // G115: Safe - message count limited by HDF5 spec
+	offset += 2
+
+	// Object reference count (4 bytes) - always 1 for new files
+	binary.LittleEndian.PutUint32(buf[offset:offset+4], ohw.RefCount)
+	offset += 4
+
+	// Object header size (4 bytes) - header + message headers ONLY (no message data!)
+	// For 1 message: 16 (header) + 8 (message header) = 24 bytes
+	binary.LittleEndian.PutUint32(buf[offset:offset+4], objectHeaderSize)
+	offset += 4
+
+	// Padding to 8-byte alignment (4 bytes of zeros)
+	// Already zero from make(), just advance offset
+	offset += 4
+
+	// Write messages
+	for _, msg := range ohw.Messages {
+		// Message type (2 bytes, little-endian)
+		binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(msg.Type))
+		offset += 2
+
+		// Message data size (2 bytes, little-endian)
+		binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(msg.Data))) //nolint:gosec // G115: Safe - message size validated
+		offset += 2
+
+		// Message flags (1 byte)
+		buf[offset] = 0 // For MVP: no flags
+		offset++
+
+		// Reserved (3 bytes) - already zero from make()
+		offset += 3
+
+		// Message data
+		copy(buf[offset:offset+len(msg.Data)], msg.Data)
+		offset += len(msg.Data)
+
+		// Pad to 8-byte boundary
+		msgSize := 8 + len(msg.Data) // Header (8 bytes) + Data
+		if msgSize%8 != 0 {
+			padding := 8 - (msgSize % 8)
+			// Padding bytes already zero from make()
+			offset += padding
+		}
 	}
 
+	// Write to file
+	n, err := w.WriteAt(buf, int64(address)) //nolint:gosec // Safe: address within file bounds
+	if err != nil {
+		return 0, fmt.Errorf("failed to write object header v1 at address %d: %w", address, err)
+	}
+
+	if n != len(buf) {
+		return 0, fmt.Errorf("incomplete object header v1 write: wrote %d bytes, expected %d", n, len(buf))
+	}
+
+	return totalSize, nil
+}
+
+// writeToV2 writes an object header v2 to the writer.
+// V2 format (current MVP implementation).
+func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64, error) {
 	// Calculate message data size
 	var messageDataSize uint64
 	for _, msg := range ohw.Messages {
@@ -170,11 +336,11 @@ func (ohw *ObjectHeaderWriter) WriteTo(w io.WriterAt, address uint64) (uint64, e
 	// Write to file
 	n, err := w.WriteAt(buf, int64(address)) //nolint:gosec // Safe: address within file bounds
 	if err != nil {
-		return 0, fmt.Errorf("failed to write object header at address %d: %w", address, err)
+		return 0, fmt.Errorf("failed to write object header v2 at address %d: %w", address, err)
 	}
 
 	if n != len(buf) {
-		return 0, fmt.Errorf("incomplete object header write: wrote %d bytes, expected %d", n, len(buf))
+		return 0, fmt.Errorf("incomplete object header v2 write: wrote %d bytes, expected %d", n, len(buf))
 	}
 
 	return headerSize, nil

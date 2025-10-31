@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.11.2-beta] - 2025-11-01
+
+### 🎉 Legacy Format Support - Superblock v0 & Object Header v1!
+
+**Duration**: 1 day (2025-11-01)
+**Goal**: Add HDF5 < 1.8 compatibility for maximum interoperability - ✅ **ACHIEVED**
+
+### ✨ Added
+
+#### Superblock v0 Write Support
+- **96-byte legacy format** - Symbol Table Entry format (HDF5 < 1.8)
+- **Maximum compatibility** - Files readable by oldest HDF5 tools
+- **Root group caching** - B-tree and heap addresses cached in superblock
+- **Version dispatch** - Automatic format selection based on superblock version
+- **Files**: `internal/core/superblock.go`, `dataset_write.go`
+- **Tests**: Integration test validates v0 file creation with h5dump
+
+#### Object Header v1 Write Support
+- **16-byte fixed header** - Legacy format (vs 4-byte minimum in v2)
+- **Fixed-size message headers** - 8 bytes per message header
+- **Reference count field** - Always 1 for new files
+- **Object Header Size calculation** - Fixed: includes header + message headers only (not message data)
+- **Version dispatch** - ObjectHeaderWriter supports both v1 and v2
+- **Binary compatibility** - Exact match with official HDF5 C library output
+- **Files**: `internal/core/objectheader_write.go`
+- **Tests**: Round-trip validation, h5dump verification
+
+### 🔧 Implementation Details
+- **Sequential write order** - Object Header → B-tree → Heap (prevents sparse files on Windows)
+- **Safe type conversions** - Added nolint comments for validated conversions
+- **Message size calculation** - Correctly excludes message data from Object Header Size field
+- **h5dump validation** - Files successfully open in official HDF5 tools
+
+### 📊 Quality Metrics
+- **Test Coverage**: 89.7% in internal/ (target: >70%) ✅
+- **All Tests**: 100% passing ✅
+- **Linter**: 0 issues (34+ linters) ✅
+- **Pre-release check**: PASSED ✅
+- **Binary match**: Exact match with HDF5 C library at byte level ✅
+
+### 🧹 Cleanup
+- **No Python dependencies** - Removed Python test file generator (pure Go project)
+- **Private proposals** - Moved internal planning docs to .gitignore
+
+### 🔗 Reference
+- H5Fsuper.c - Superblock v0 format
+- H5Oflush.c, H5Ocache.c - Object Header v1 format
+- testdata/v0.h5 - Official HDF5 C library generated reference file
+
+---
+
 ## [0.11.1-beta] - 2025-10-31
 
 ### 🎉 Extended Write Support - Chunked Datasets, Dense Groups & Attributes!

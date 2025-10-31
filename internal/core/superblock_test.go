@@ -240,14 +240,14 @@ func TestSuperblockWrite(t *testing.T) {
 		defer tmpFile.Close()
 
 		sb := &Superblock{
-			Version:    Version0, // v0 not supported for writing
+			Version:    1, // v1 not supported (only v0 and v2 are supported).
 			OffsetSize: 8,
 			LengthSize: 8,
 		}
 
 		err = sb.WriteTo(tmpFile, 1024)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "only superblock version 2 is supported")
+		assert.Contains(t, err.Error(), "only superblock version 0 and 2 are supported")
 	})
 
 	t.Run("rejects invalid sizes", func(t *testing.T) {

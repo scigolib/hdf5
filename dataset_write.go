@@ -420,18 +420,61 @@ type FileWriter struct {
 	rootStNodeAddr uint64 // Address of root group symbol table node
 }
 
+// Superblock version constants for file creation.
+const (
+	// SuperblockV0 (legacy format) - Maximum compatibility with older HDF5 tools.
+	// Use this if you need files to be readable by h5dump, older Python h5py, or legacy C library.
+	// This format doesn't have checksums but works with all HDF5 tools.
+	SuperblockV0 = core.Version0
+
+	// SuperblockV2 (modern format) - Default. Includes checksums for data integrity.
+	// This is the recommended format for new files. Supported by HDF5 1.10+.
+	SuperblockV2 = core.Version2
+
+	// SuperblockV3 (latest format) - Future format, not yet implemented for writing.
+	SuperblockV3 = core.Version3
+)
+
+// WriteOption is a functional option for configuring file creation.
+type WriteOption func(*FileWriteConfig)
+
+// FileWriteConfig holds configuration for file creation.
+type FileWriteConfig struct {
+	SuperblockVersion uint8 // HDF5 superblock version (0, 2, or 3)
+}
+
+// WithSuperblockVersion sets the HDF5 superblock version.
+//
+// Available versions:
+//   - SuperblockV0: Legacy format, maximum compatibility with older tools (h5dump, etc.)
+//   - SuperblockV2: Modern format with checksums (default)
+//   - SuperblockV3: Latest format (not yet implemented for writing)
+//
+// Default: SuperblockV2 (modern format)
+//
+// Example for maximum compatibility:
+//
+//	fw, err := hdf5.CreateForWrite("file.h5", hdf5.CreateTruncate,
+//	    hdf5.WithSuperblockVersion(hdf5.SuperblockV0))
+func WithSuperblockVersion(version uint8) WriteOption {
+	return func(cfg *FileWriteConfig) {
+		cfg.SuperblockVersion = version
+	}
+}
+
 // CreateForWrite creates a new HDF5 file for writing.
 // Unlike Create(), this keeps the file open in write mode.
 //
 // Parameters:
 //   - filename: Path to the file to create
 //   - mode: Creation mode (truncate or exclusive)
+//   - opts: Optional configuration (WithSuperblockVersion, etc.)
 //
 // Returns:
 //   - *FileWriter: Handle for writing datasets
 //   - error: If creation fails
 //
-// Example:
+// Example (default - modern format):
 //
 //	fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate)
 //	if err != nil {
@@ -439,12 +482,29 @@ type FileWriter struct {
 //	}
 //	defer fw.Close()
 //
-//	// Create datasets and write data
-//	ds, _ := fw.CreateDataset("/data", hdf5.Float64, []uint64{100})
-//	ds.Write(myData)
-func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
+// Example (legacy format for h5dump compatibility):
+//
+//	fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
+//	    hdf5.WithSuperblockVersion(core.Version0))
+func CreateForWrite(filename string, mode CreateMode, opts ...WriteOption) (*FileWriter, error) {
+	// Apply default configuration
+	cfg := &FileWriteConfig{
+		SuperblockVersion: core.Version2, // Modern format by default
+	}
+
+	// Apply user options
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	// Calculate superblock size based on version
+	superblockSize := uint64(48) // v2/v3
+	if cfg.SuperblockVersion == core.Version0 {
+		superblockSize = 96 // v0 is larger
+	}
+
 	// Map CreateMode to writer.CreateMode and create basic writer
-	fw, err := initializeFileWriter(filename, mode)
+	fw, err := initializeFileWriter(filename, mode, superblockSize)
 	if err != nil {
 		return nil, err
 	}
@@ -458,14 +518,14 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 	}()
 
 	// Create root group with Symbol Table structure
-	rootInfo, err := createRootGroupStructure(fw)
+	rootInfo, err := createRootGroupStructure(fw, cfg.SuperblockVersion)
 	if err != nil {
 		return nil, err
 	}
 
-	// Step 3: Create Superblock v2
+	// Step 3: Create Superblock with configured version
 	sb := &core.Superblock{
-		Version:        core.Version2,
+		Version:        cfg.SuperblockVersion, // Use configured version
 		OffsetSize:     8,
 		LengthSize:     8,
 		BaseAddress:    0,
@@ -473,10 +533,21 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 		Endianness:     binary.LittleEndian,
 		SuperExtension: 0,
 		DriverInfo:     0,
+		// V0-specific cached addresses (required for h5dump compatibility)
+		RootBTreeAddr: rootInfo.btreeAddr,
+		RootHeapAddr:  rootInfo.heapAddr,
 	}
 
 	// Calculate end-of-file address
-	eofAddress := uint64(48) + rootInfo.groupSize
+	var eofAddress uint64
+	if cfg.SuperblockVersion == core.Version0 {
+		// V0 uses fixed addresses - calculate from actual layout
+		// EOF = last structure address + its size
+		eofAddress = rootInfo.heapAddr + rootInfo.heapSize
+	} else {
+		// V2 uses allocator - get dynamic EOF
+		eofAddress = fw.EndOfFile()
+	}
 
 	// Step 4: Write superblock at offset 0
 	if err := sb.WriteTo(fw, eofAddress); err != nil {
@@ -1253,7 +1324,7 @@ func (fw *FileWriter) Close() error {
 }
 
 // initializeFileWriter creates and initializes a new FileWriter with the given mode.
-func initializeFileWriter(filename string, mode CreateMode) (*writer.FileWriter, error) {
+func initializeFileWriter(filename string, mode CreateMode, superblockSize uint64) (*writer.FileWriter, error) {
 	var writerMode writer.CreateMode
 	switch mode {
 	case CreateTruncate:
@@ -1264,8 +1335,8 @@ func initializeFileWriter(filename string, mode CreateMode) (*writer.FileWriter,
 		return nil, fmt.Errorf("invalid create mode: %d", mode)
 	}
 
-	// Superblock v2 is 48 bytes
-	fw, err := writer.NewFileWriter(filename, writerMode, 48)
+	// Superblock size passed from caller (48 for v2, 96 for v0)
+	fw, err := writer.NewFileWriter(filename, writerMode, superblockSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create writer: %w", err)
 	}
@@ -1280,11 +1351,23 @@ type rootGroupInfo struct {
 	btreeAddr  uint64 // B-tree address
 	heapAddr   uint64 // Local heap address
 	stNodeAddr uint64 // Symbol table node address
+	heapSize   uint64 // Local heap size (for v0 EOF calculation)
 }
 
 // createRootGroupStructure creates the root group with Symbol Table structure.
 // Returns information about the created root group structure.
-func createRootGroupStructure(fw *writer.FileWriter) (*rootGroupInfo, error) {
+// createRootGroupStructure creates the root group structures.
+// Dispatches to version-specific implementation based on superblock version.
+func createRootGroupStructure(fw *writer.FileWriter, superblockVersion uint8) (*rootGroupInfo, error) {
+	if superblockVersion == core.Version0 {
+		return createRootGroupStructureV0(fw)
+	}
+	return createRootGroupStructureV2(fw)
+}
+
+// createRootGroupStructureV2 creates root group for modern format (v2/v3).
+// Order: Heap → B-tree → Object Header (v2 doesn't cache addresses in superblock).
+func createRootGroupStructureV2(fw *writer.FileWriter) (*rootGroupInfo, error) {
 	const offsetSize = 8
 	const lengthSize = 8
 
@@ -1324,7 +1407,112 @@ func createRootGroupStructure(fw *writer.FileWriter) (*rootGroupInfo, error) {
 		btreeAddr:  rootBTreeAddr,
 		heapAddr:   rootHeapAddr,
 		stNodeAddr: rootStNodeAddr,
+		heapSize:   rootHeap.Size(), // For v0 EOF calculation (v2 uses allocator)
 	}, nil
+}
+
+// createRootGroupStructureV0 creates root group for legacy format (v0).
+// Order: Object Header → B-tree → Heap (as per C library H5Gobj.c)
+// This matches the reference implementation where:
+// 1. H5O_create() creates object header first
+// 2. H5G__stab_create_components() creates B-tree, then heap.
+func createRootGroupStructureV0(fw *writer.FileWriter) (*rootGroupInfo, error) {
+	const offsetSize = 8
+	const lengthSize = 8
+
+	// Step 1: Calculate sizes for pre-allocation
+	// We need to know addresses before writing, so allocate space first
+
+	// Object Header size for v0 group with symbol table message
+	// Header: 16 bytes (signature + version + reserved + messages)
+	// Symbol Table Message: 4 (type+size+flags+reserved) + 16 (btree_addr + heap_addr)
+	// NULL message: 4 (type+size+flags+reserved) for padding
+	objHeaderSize := uint64(16 + 20 + 4)
+
+	// B-tree node size: signature(4) + node_type(1) + node_level(1) + entries_used(2) +
+	//                   left_sibling(8) + right_sibling(8) + key+child pairs
+	// For root with 1 child: 24 + (8+8)*2 = 56 bytes (minimum)
+	btreeSize := uint64(56)
+
+	// Symbol table node size: signature(4) + version(1) + reserved(1) + num_symbols(2) +
+	//                          entries (40 bytes each, capacity 32)
+	stNodeSize := uint64(8 + 32*40)
+
+	// Local heap size: minimum ~256 bytes
+	heapSize := uint64(256)
+
+	// Step 2: Calculate fixed addresses (no Allocate - we write at fixed offsets)
+	// Superblock v0: 0x00-0x5F (96 bytes)
+	rootGroupAddr := uint64(96)                    // 0x60 - immediately after superblock
+	rootBTreeAddr := rootGroupAddr + objHeaderSize // After object header
+	rootStNodeAddr := rootBTreeAddr + btreeSize    // After B-tree
+	rootHeapAddr := rootStNodeAddr + stNodeSize    // After symbol table node
+
+	// Step 3: Write structures in ASCENDING ADDRESS ORDER
+	// CRITICAL: Sequential write order prevents sparse file holes on Windows!
+	// Order: Object Header (96) → B-tree (136) → SNOD (192) → Heap (1480)
+
+	// 1. Write root group object header (offset 96)
+	// V0 superblock requires Object Header v1 (not v2!)
+	const objectHeaderVersion = 1
+	actualObjHeaderSize, err := writeRootGroupHeaderAt(fw, rootGroupAddr, rootBTreeAddr, rootHeapAddr, offsetSize, lengthSize, objectHeaderVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Write B-tree (offset 136, immediately after object header)
+	if err := writeBTreeNodeAt(fw, rootBTreeAddr, rootStNodeAddr, offsetSize); err != nil {
+		return nil, err
+	}
+
+	// 3. Write symbol table node (offset 192, after B-tree)
+	if err := writeSymbolTableNodeAt(fw, rootStNodeAddr, offsetSize); err != nil {
+		return nil, err
+	}
+
+	// 4. Write local heap (offset 1480, after symbol table node)
+	rootHeap := structures.NewLocalHeap(256)
+	if err := rootHeap.WriteTo(fw, rootHeapAddr); err != nil {
+		return nil, fmt.Errorf("failed to write root heap: %w", err)
+	}
+
+	return &rootGroupInfo{
+		groupAddr:  rootGroupAddr,
+		groupSize:  actualObjHeaderSize,
+		btreeAddr:  rootBTreeAddr,
+		heapAddr:   rootHeapAddr,
+		stNodeAddr: rootStNodeAddr,
+		heapSize:   heapSize, // For v0 EOF calculation
+	}, nil
+}
+
+// writeSymbolTableNodeAt writes a symbol table node at the specified address.
+func writeSymbolTableNodeAt(fw *writer.FileWriter, addr uint64, offsetSize int) error {
+	rootStNode := structures.NewSymbolTableNode(32) // Standard capacity (2*K where K=16)
+
+	// Write symbol table node (empty initially)
+	if err := rootStNode.WriteAt(fw, addr, uint8(offsetSize), 32, binary.LittleEndian); err != nil { //nolint:gosec // Safe: offsetSize validated to be 8
+		return fmt.Errorf("failed to write symbol table node: %w", err)
+	}
+
+	return nil
+}
+
+// writeBTreeNodeAt writes a B-tree node at the specified address.
+func writeBTreeNodeAt(fw *writer.FileWriter, addr, stNodeAddr uint64, offsetSize int) error {
+	rootBTree := structures.NewBTreeNodeV1(0, 16) // Type 0 = group symbol table, K=16
+
+	// Add symbol table node address as child (with key 0 for empty group)
+	if err := rootBTree.AddKey(0, stNodeAddr); err != nil {
+		return fmt.Errorf("failed to add B-tree key: %w", err)
+	}
+
+	// Write B-tree
+	if err := rootBTree.WriteAt(fw, addr, uint8(offsetSize), 16, binary.LittleEndian); err != nil { //nolint:gosec // Safe: offsetSize validated to be 8
+		return fmt.Errorf("failed to write B-tree: %w", err)
+	}
+
+	return nil
 }
 
 // createSymbolTableNode creates and writes a symbol table node for a group.
@@ -1380,17 +1568,43 @@ func createBTreeNode(fw *writer.FileWriter, stNodeAddr uint64, offsetSize int) (
 	return rootBTreeAddr, nil
 }
 
-// writeRootGroupHeader creates and writes the root group object header.
-// Returns the address where the header was written and its size.
-func writeRootGroupHeader(fw *writer.FileWriter, btreeAddr, heapAddr uint64, offsetSize, lengthSize int) (uint64, uint64, error) {
+// writeRootGroupHeaderAt writes the root group object header at the specified address.
+// Returns the actual size written.
+// The objectHeaderVersion parameter determines which object header format to use (1 or 2).
+func writeRootGroupHeaderAt(fw *writer.FileWriter, addr, btreeAddr, heapAddr uint64, offsetSize, lengthSize int, objectHeaderVersion uint8) (uint64, error) {
 	stMsg := core.EncodeSymbolTableMessage(btreeAddr, heapAddr, offsetSize, lengthSize)
 
 	rootGroupHeader := &core.ObjectHeaderWriter{
-		Version: 2,
+		Version: objectHeaderVersion,
 		Flags:   0,
 		Messages: []core.MessageWriter{
 			{Type: core.MsgSymbolTable, Data: stMsg},
 		},
+		RefCount: 1, // Always 1 for new files (used by v1, ignored by v2)
+	}
+
+	// Write root group object header
+	writtenSize, err := rootGroupHeader.WriteTo(fw, addr)
+	if err != nil {
+		return 0, fmt.Errorf("failed to write root group header: %w", err)
+	}
+
+	return writtenSize, nil
+}
+
+// writeRootGroupHeader creates and writes the root group object header.
+// Returns the address where the header was written and its size.
+// Uses Object Header v2 (for superblock v2).
+func writeRootGroupHeader(fw *writer.FileWriter, btreeAddr, heapAddr uint64, offsetSize, lengthSize int) (uint64, uint64, error) {
+	stMsg := core.EncodeSymbolTableMessage(btreeAddr, heapAddr, offsetSize, lengthSize)
+
+	rootGroupHeader := &core.ObjectHeaderWriter{
+		Version: 2, // V2 superblock uses Object Header v2
+		Flags:   0,
+		Messages: []core.MessageWriter{
+			{Type: core.MsgSymbolTable, Data: stMsg},
+		},
+		RefCount: 1, // Always 1 for new files
 	}
 
 	// Calculate root group object header size

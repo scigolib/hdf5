@@ -28,6 +28,11 @@ type Superblock struct {
 	Endianness     binary.ByteOrder
 	SuperExtension uint64
 	DriverInfo     uint64
+
+	// V0-specific: Cached symbol table info for root group
+	// These are only used when Version == 0
+	RootBTreeAddr uint64 // B-tree address for root group (v0 only)
+	RootHeapAddr  uint64 // Local heap address for root group (v0 only)
 }
 
 // ReadSuperblock reads and parses the HDF5 superblock from the file.
@@ -227,13 +232,26 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 //   - w: Writer (typically a FileWriter)
 //   - eofAddress: Current end-of-file address
 //
-// Returns error if write fails or if superblock version is not 2.
+// Returns error if write fails or if superblock version is not supported.
 func (sb *Superblock) WriteTo(w io.WriterAt, eofAddress uint64) error {
-	// For MVP, only support writing v2 superblocks
-	if sb.Version != Version2 {
-		return fmt.Errorf("only superblock version 2 is supported for writing, got version %d", sb.Version)
+	// Support v0 (legacy) and v2 (modern)
+	if sb.Version != Version0 && sb.Version != Version2 {
+		return fmt.Errorf("only superblock version 0 and 2 are supported for writing, got version %d", sb.Version)
 	}
 
+	// Dispatch to version-specific writer
+	switch sb.Version {
+	case Version0:
+		return sb.writeV0(w, eofAddress)
+	case Version2:
+		return sb.writeV2(w, eofAddress)
+	default:
+		return fmt.Errorf("unsupported superblock version: %d", sb.Version)
+	}
+}
+
+// writeV2 writes superblock version 2 (modern format with checksums).
+func (sb *Superblock) writeV2(w io.WriterAt, eofAddress uint64) error {
 	// Validate required fields
 	if sb.OffsetSize != 8 || sb.LengthSize != 8 {
 		return fmt.Errorf("only 8-byte offsets and lengths are supported for writing, got offset=%d, length=%d",
@@ -287,6 +305,128 @@ func (sb *Superblock) WriteTo(w io.WriterAt, eofAddress uint64) error {
 
 	if n != 48 {
 		return fmt.Errorf("incomplete superblock write: wrote %d bytes, expected 48", n)
+	}
+
+	return nil
+}
+
+// writeV0 writes superblock version 0 (legacy format for maximum compatibility).
+// This format is used by older HDF5 tools and is the most widely supported.
+//
+// Superblock v0 structure (96 bytes minimum):
+//
+//	Bytes 0-7: Format Signature (\211HDF\r\n\032\n)
+//	Byte 8: Superblock Version (0)
+//	Byte 9: Free-space Storage Version (0)
+//	Byte 10: Root Group Symbol Table Entry Version (0)
+//	Byte 11: Reserved (0)
+//	Byte 12: Shared Header Message Format Version (0)
+//	Byte 13: Size of Offsets (8)
+//	Byte 14: Size of Lengths (8)
+//	Byte 15: Reserved (0)
+//	Bytes 16-17: Group Leaf Node K (4)
+//	Bytes 18-19: Group Internal Node K (16)
+//	Bytes 20-23: File Consistency Flags (0)
+//	Bytes 24-31: Base Address (0)
+//	Bytes 32-39: Free Space Info Address (UNDEF)
+//	Bytes 40-47: End of File Address
+//	Bytes 48-55: Driver Info Block Address (UNDEF)
+//	Bytes 56-95: Root Group Symbol Table Entry (40 bytes)
+func (sb *Superblock) writeV0(w io.WriterAt, eofAddress uint64) error {
+	// Validate required fields
+	if sb.OffsetSize != 8 || sb.LengthSize != 8 {
+		return fmt.Errorf("only 8-byte offsets and lengths are supported for writing, got offset=%d, length=%d",
+			sb.OffsetSize, sb.LengthSize)
+	}
+
+	// Allocate buffer for superblock v0 (96 bytes)
+	buf := make([]byte, 96)
+
+	// Bytes 0-7: Signature
+	copy(buf[0:8], Signature)
+
+	// Byte 8: Version 0
+	buf[8] = 0
+
+	// Byte 9: Free-space Storage Version (0)
+	buf[9] = 0
+
+	// Byte 10: Root Group Symbol Table Entry Version (0)
+	buf[10] = 0
+
+	// Byte 11: Reserved
+	buf[11] = 0
+
+	// Byte 12: Shared Header Message Format Version (0)
+	buf[12] = 0
+
+	// Byte 13: Size of offsets (8 bytes)
+	buf[13] = 8
+
+	// Byte 14: Size of lengths (8 bytes)
+	buf[14] = 8
+
+	// Byte 15: Reserved
+	buf[15] = 0
+
+	// Bytes 16-17: Group Leaf Node K (default: 4)
+	binary.LittleEndian.PutUint16(buf[16:18], 4)
+
+	// Bytes 18-19: Group Internal Node K (default: 16)
+	binary.LittleEndian.PutUint16(buf[18:20], 16)
+
+	// Bytes 20-23: File Consistency Flags (0 = file is closed properly)
+	binary.LittleEndian.PutUint32(buf[20:24], 0)
+
+	// Bytes 24-31: Base address (typically 0)
+	binary.LittleEndian.PutUint64(buf[24:32], sb.BaseAddress)
+
+	// Bytes 32-39: Free Space Info Address (UNDEF for now)
+	binary.LittleEndian.PutUint64(buf[32:40], 0xFFFFFFFFFFFFFFFF)
+
+	// Bytes 40-47: End-of-file address
+	binary.LittleEndian.PutUint64(buf[40:48], eofAddress)
+
+	// Bytes 48-55: Driver Info Block Address (UNDEF)
+	binary.LittleEndian.PutUint64(buf[48:56], 0xFFFFFFFFFFFFFFFF)
+
+	// Bytes 56-95: Root Group Symbol Table Entry (40 bytes)
+	// This is a Symbol Table Entry with cached B-tree/Heap addresses
+	//
+	// Symbol Table Entry structure (from C library H5Gent.c):
+	//   Bytes 0-7: Link Name Offset (in local heap) - 0 for root
+	//   Bytes 8-15: Object Header Address
+	//   Bytes 16-19: Cache Type (1 = H5G_CACHED_STAB for symbol table)
+	//   Bytes 20-23: Reserved
+	//   Bytes 24-39: Scratch-pad space (16 bytes):
+	//     - Bytes 24-31: B-tree address (for H5G_CACHED_STAB)
+	//     - Bytes 32-39: Local heap address (for H5G_CACHED_STAB)
+
+	// Link Name Offset (0 for root group)
+	binary.LittleEndian.PutUint64(buf[56:64], 0)
+
+	// Object Header Address (root group address)
+	binary.LittleEndian.PutUint64(buf[64:72], sb.RootGroup)
+
+	// Cache Type (1 = H5G_CACHED_STAB, meaning symbol table with cached addresses)
+	binary.LittleEndian.PutUint32(buf[72:76], 1)
+
+	// Reserved
+	binary.LittleEndian.PutUint32(buf[76:80], 0)
+
+	// Scratch-pad space (16 bytes): Cached B-tree and Heap addresses
+	// This is CRITICAL for v0 - h5dump needs these to find the root group!
+	binary.LittleEndian.PutUint64(buf[80:88], sb.RootBTreeAddr) // B-tree address
+	binary.LittleEndian.PutUint64(buf[88:96], sb.RootHeapAddr)  // Heap address
+
+	// Write superblock at offset 0
+	n, err := w.WriteAt(buf, 0)
+	if err != nil {
+		return fmt.Errorf("failed to write superblock v0: %w", err)
+	}
+
+	if n != 96 {
+		return fmt.Errorf("incomplete superblock v0 write: wrote %d bytes, expected 96", n)
 	}
 
 	return nil

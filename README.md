@@ -18,12 +18,12 @@ A modern, pure Go library for reading and writing HDF5 files without CGo depende
 
 - ✅ **Pure Go** - No CGo, no C dependencies, cross-platform
 - ✅ **Modern Design** - Built with Go 1.25+ best practices
-- ✅ **HDF5 Compatibility** - Supports superblock versions 0, 2, 3
+- ✅ **HDF5 Compatibility** - Read: v0, v2, v3 superblocks | Write: v0, v2 superblocks
 - ✅ **Full Dataset Reading** - Compact, contiguous, chunked layouts with GZIP
 - ✅ **Rich Datatypes** - Integers, floats, strings (fixed/variable), compounds
 - ✅ **Memory Efficient** - Buffer pooling and smart memory management
 - ✅ **Production Ready** - Read support feature-complete (v0.10.0-beta)
-- ✍️ **Write Support Advancing** - v0.11.1-beta: Chunked datasets, dense groups, attribute writing!
+- ✍️ **Write Support Advancing** - v0.11.2-beta: Legacy format support (v0 superblock + Object Header v1)!
 
 ---
 
@@ -98,14 +98,14 @@ func main() {
 
 ## 🎯 Current Status
 
-**Version**: v0.11.1-beta (RELEASED 2025-10-31 - Extended write support) ✅
+**Version**: v0.11.2-beta (RELEASED 2025-11-01 - Legacy format support) ✅
 
 **Production Readiness: Read support feature-complete! Write support advancing rapidly!** 🎉
 
 ### ✅ Fully Implemented
 - **File Structure**:
   - Superblock parsing (v0, v2, v3)
-  - Object headers v1 (legacy HDF5 < 1.8) with continuations ✨ NEW
+  - Object headers v1 (legacy HDF5 < 1.8) with continuations
   - Object headers v2 (modern HDF5 >= 1.8) with continuations
   - Groups (traditional symbol tables + modern object headers)
   - B-trees (leaf + non-leaf nodes for large files)
@@ -143,8 +143,10 @@ func main() {
 ### ⚠️ Partial Support
 - **Dense Attributes**: Infrastructure ready, B-tree v2 iteration deferred to v0.11.0-RC (<10% of files affected)
 
-### ✍️ Write Support (v0.11.1-beta)
+### ✍️ Write Support (v0.11.2-beta)
 - ✅ **File creation** - CreateForWrite() with Truncate/Exclusive modes
+- ✅ **Superblock formats** - v0 (legacy, HDF5 < 1.8) + v2 (modern, HDF5 >= 1.8) ✨ NEW
+- ✅ **Object headers** - v1 (legacy, 16-byte) + v2 (modern, 4-byte min) ✨ NEW
 - ✅ **Dataset writing** - Contiguous + chunked layouts, all datatypes
 - ✅ **Chunked datasets** - Chunk storage with B-tree v1 indexing
 - ✅ **Compression** - GZIP (deflate), Shuffle filter, Fletcher32 checksum
@@ -152,15 +154,16 @@ func main() {
 - ✅ **Attributes** - Compact (0-7) + dense (8+) with automatic transition
 - ✅ **Advanced datatypes** - Arrays, Enums, References, Opaque
 - ✅ **Free space management** - End-of-file allocation (validated, 100% coverage)
+- ✅ **Legacy compatibility** - Files readable by HDF5 1.0+ tools ✨ NEW
 
-**Known Limitations (v0.11.1-beta)**:
-- Dense storage read-modify-write (adding after file reopen - v0.11.2-beta)
+**Known Limitations (v0.11.2-beta)**:
+- Dense storage read-modify-write (adding after file reopen - v0.11.3-beta)
 - Attribute modification/deletion (write-once only)
-- Files not h5dump-readable yet (working on compatibility)
+- Some files not h5dump-readable yet (working on full compatibility)
 
 ### ❌ Planned Features
 
-**v0.11.2-beta (Next)** - Continue Write Support:
+**v0.11.3-beta (Next)** - Continue Write Support:
 - Dense storage read-modify-write (add to existing after reopen)
 - Attribute modification/deletion
 - Hard/soft/external links
@@ -187,7 +190,6 @@ See [ROADMAP.md](ROADMAP.md) for detailed timeline.
 ### Requirements
 - Go 1.25 or later
 - No external dependencies for the library
-- Testing requires: Python 3 with h5py (for generating test files)
 
 ### Building
 
@@ -289,8 +291,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Status**: Beta - Read complete, Write support advancing
-**Version**: v0.11.1-beta (Chunked datasets, compression, dense storage)
-**Last Updated**: 2025-10-31
+**Version**: v0.11.2-beta (Legacy format support: v0 superblock + Object Header v1)
+**Last Updated**: 2025-11-01
 
 ---
 
