@@ -123,7 +123,7 @@ func TestObjectHeaderWriter_WriteTo(t *testing.T) {
 		{
 			name: "unsupported version",
 			header: &ObjectHeaderWriter{
-				Version:  1,
+				Version:  3, // Invalid version (only 1 and 2 are supported)
 				Flags:    0,
 				Messages: []MessageWriter{},
 			},
