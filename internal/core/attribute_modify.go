@@ -112,18 +112,14 @@ func ModifyCompactAttribute(writer io.WriterAt, objectAddr uint64, name string, 
 	}
 
 	// 5. Write back object header
-	// MVP Limitation: Object header write-back not yet implemented.
-	// This requires:
-	//  1. Re-encoding the entire object header (v1 or v2 format)
-	//  2. Updating checksums
-	//  3. Writing to file at objectAddr
-	//
-	// Reference: H5O.c - H5O__msg_write(), H5O_touch_oh()
-	// Future work tracked in: docs/dev/backlog/object-header-modification.md
-
 	_ = existingAttr // Mark as used for future logic
 
-	return fmt.Errorf("object header write-back not yet implemented (MVP limitation)")
+	err = WriteObjectHeader(writer, objectAddr, oh, sb)
+	if err != nil {
+		return fmt.Errorf("failed to write object header: %w", err)
+	}
+
+	return nil
 }
 
 // FindCompactAttribute searches for an attribute by name in compact storage.
@@ -226,9 +222,12 @@ func DeleteCompactAttribute(writer io.WriterAt, objectAddr uint64, name string, 
 	oh.Messages = append(oh.Messages[:msgIndex], oh.Messages[msgIndex+1:]...)
 
 	// 4. Write back object header
-	// MVP Limitation: Object header write-back not yet implemented (same as ModifyCompactAttribute)
-	// Future work tracked in: docs/dev/backlog/object-header-modification.md
-	return fmt.Errorf("object header write-back not yet implemented (MVP limitation)")
+	err = WriteObjectHeader(writer, objectAddr, oh, sb)
+	if err != nil {
+		return fmt.Errorf("failed to write object header: %w", err)
+	}
+
+	return nil
 }
 
 // ModifyDenseAttribute modifies an existing dense attribute.

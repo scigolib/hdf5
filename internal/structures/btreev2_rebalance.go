@@ -222,6 +222,7 @@ func (bt *WritableBTreeV2) mergeNodes(left, right *BTreeV2LeafNode) error {
 //   - error: if redistribution fails
 //
 // Reference: H5B2int.c - H5B2__redistribute2().
+//
 //nolint:unparam // error reserved for future validation
 func (bt *WritableBTreeV2) redistributeRecords(left, right *BTreeV2LeafNode) error {
 	// Combine all records
@@ -357,5 +358,41 @@ func (bt *WritableBTreeV2) getSiblings(_ *BTreeV2LeafNode) (*BTreeV2LeafNode, *B
 func (bt *WritableBTreeV2) updateAncestors(_ *BTreeV2LeafNode) error {
 	// MVP: No ancestors (single leaf)
 	// Future: Implement parent update recursion
+	return nil
+}
+
+// RebalanceAll manually triggers rebalancing for the entire B-tree.
+//
+// This method is useful when:
+//   - Rebalancing was disabled during batch deletions
+//   - B-tree became sparse after many deletions
+//   - Periodic maintenance to optimize tree structure
+//
+// For MVP (single-leaf B-tree, depth=0):
+//   - This is a no-op (no multi-level structure to rebalance)
+//   - Records are already compact in single leaf
+//   - Future: When multi-level trees exist, this will traverse and rebalance all nodes
+//
+// Performance:
+//   - MVP: O(1) - instant (no-op)
+//   - Future multi-level: O(N) where N = number of nodes
+//
+// Returns:
+//   - error: if rebalancing fails (MVP: always nil)
+//
+// Reference: Similar to H5B2_rebalance in C library (hypothetical - not exposed in HDF5 API).
+func (bt *WritableBTreeV2) RebalanceAll() error {
+	// MVP: Single-leaf B-tree doesn't need rebalancing
+	// The leaf is already optimal (all records in one node)
+
+	// Future implementation for multi-level trees:
+	// 1. Traverse tree from root to leaves
+	// 2. For each node, check occupancy
+	// 3. Merge nodes if <50% full
+	// 4. Redistribute if unbalanced
+	// 5. Update parent pointers
+	// 6. Decrease depth if root empty
+
+	// For now, this is a no-op
 	return nil
 }
