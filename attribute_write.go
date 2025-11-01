@@ -137,12 +137,16 @@ func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHea
 		Data:      data,
 	}
 
-	// 2. Check for duplicate attribute name
-	for _, msg := range oh.Messages {
+	// 2. Check if attribute exists (for upsert semantics)
+	// If exists → modify (replace data)
+	// If not exists → create (add new message)
+	existingIndex := -1
+	for i, msg := range oh.Messages {
 		if msg.Type == core.MsgAttribute {
-			existingAttr, err := core.ParseAttributeMessage(msg.Data, sb.Endianness)
-			if err == nil && existingAttr.Name == name {
-				return fmt.Errorf("attribute %q already exists (overwrite not yet supported)", name)
+			existingAttr, parseErr := core.ParseAttributeMessage(msg.Data, sb.Endianness)
+			if parseErr == nil && existingAttr.Name == name {
+				existingIndex = i
+				break
 			}
 		}
 	}
@@ -153,16 +157,23 @@ func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHea
 		return fmt.Errorf("failed to encode attribute message: %w", err)
 	}
 
-	// 4. Add attribute message to header
-	err = core.AddMessageToObjectHeader(oh, core.MsgAttribute, attrMsg)
-	if err != nil {
-		// If object header is full, transition to dense storage
-		// This can happen before reaching MaxCompactAttributes if attributes are large
-		if strings.Contains(err.Error(), "object header full") {
-			// Trigger transition by calling transitionToDenseAttributes
-			return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
+	// 4. Upsert logic: modify if exists, add if not exists
+	if existingIndex >= 0 {
+		// Attribute exists → Replace (upsert semantics)
+		// Simply replace the message data in-place
+		oh.Messages[existingIndex].Data = attrMsg
+	} else {
+		// Attribute doesn't exist → Add new message
+		err = core.AddMessageToObjectHeader(oh, core.MsgAttribute, attrMsg)
+		if err != nil {
+			// If object header is full, transition to dense storage
+			// This can happen before reaching MaxCompactAttributes if attributes are large
+			if strings.Contains(err.Error(), "object header full") {
+				// Trigger transition by calling transitionToDenseAttributes
+				return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
+			}
+			return fmt.Errorf("failed to add message to header: %w", err)
 		}
-		return fmt.Errorf("failed to add message to header: %w", err)
 	}
 
 	// 5. Write updated header back to disk
