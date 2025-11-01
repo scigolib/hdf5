@@ -16,13 +16,13 @@ import (
 // - H5Aint.c:H5A__write() - Main write function
 //
 // Algorithm:
-// 1. Find existing attribute message by name
-// 2. Encode new attribute value
-// 3. Compare sizes:
-//    a. Same size → Overwrite in-place (modify message data)
-//    b. Different size → Mark old as deleted, add new message
-// 4. Update object header checksum
-// 5. Write back to file
+//  1. Find existing attribute message by name
+//  2. Encode new attribute value
+//  3. Compare sizes:
+//     a. Same size → Overwrite in-place (modify message data)
+//     b. Different size → Mark old as deleted, add new message
+//  4. Update object header checksum
+//  5. Write back to file
 //
 // Parameters:
 //   - writer: Writer for file I/O
@@ -239,13 +239,13 @@ func DeleteCompactAttribute(writer io.WriterAt, objectAddr uint64, name string, 
 // modifying attributes stored in dense storage (fractal heap + B-tree v2).
 //
 // Algorithm (matching H5Adense.c:H5A__dense_write):
-// 1. Search B-tree v2 for attribute name → get heap ID
-// 2. Read old attribute from fractal heap
-// 3. Encode new attribute value
-// 4. Check sizes:
-//    a. Same size → Overwrite in heap (in-place, fast path)
-//    b. Different size → Delete old, insert new, update B-tree
-// 5. Write updated heap and B-tree back to file
+//  1. Search B-tree v2 for attribute name → get heap ID
+//  2. Read old attribute from fractal heap
+//  3. Encode new attribute value
+//  4. Check sizes:
+//     a. Same size → Overwrite in heap (in-place, fast path)
+//     b. Different size → Delete old, insert new, update B-tree
+//  5. Write updated heap and B-tree back to file
 //
 // Parameters:
 //   - heap: Writable fractal heap (loaded from file)
