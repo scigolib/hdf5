@@ -112,17 +112,14 @@ func ModifyCompactAttribute(writer io.WriterAt, objectAddr uint64, name string, 
 	}
 
 	// 5. Write back object header
-	// For MVP: We don't have a proper object header write-back function yet
-	// This is a limitation - we need to implement object header modification
-	// For now, return an error indicating this is not yet supported
-
-	// TODO: Implement object header write-back
+	// MVP Limitation: Object header write-back not yet implemented.
 	// This requires:
-	// 1. Re-encoding the entire object header (v1 or v2 format)
-	// 2. Updating checksums
-	// 3. Writing to file at objectAddr
+	//  1. Re-encoding the entire object header (v1 or v2 format)
+	//  2. Updating checksums
+	//  3. Writing to file at objectAddr
 	//
 	// Reference: H5O.c - H5O__msg_write(), H5O_touch_oh()
+	// Future work tracked in: docs/dev/backlog/object-header-modification.md
 
 	_ = existingAttr // Mark as used for future logic
 
@@ -229,7 +226,8 @@ func DeleteCompactAttribute(writer io.WriterAt, objectAddr uint64, name string, 
 	oh.Messages = append(oh.Messages[:msgIndex], oh.Messages[msgIndex+1:]...)
 
 	// 4. Write back object header
-	// TODO: Implement object header write-back (same as ModifyCompactAttribute)
+	// MVP Limitation: Object header write-back not yet implemented (same as ModifyCompactAttribute)
+	// Future work tracked in: docs/dev/backlog/object-header-modification.md
 	return fmt.Errorf("object header write-back not yet implemented (MVP limitation)")
 }
 
