@@ -420,6 +420,12 @@ type FileWriter struct {
 	rootBTreeAddr  uint64 // Address of root group B-tree
 	rootHeapAddr   uint64 // Address of root group local heap
 	rootStNodeAddr uint64 // Address of root group symbol table node
+
+	// Rebalancing configurations (Phase 3)
+	// These are set via functional options: WithLazyRebalancing(), WithIncrementalRebalancing(), WithSmartRebalancing()
+	lazyRebalancingConfig        *structures.LazyRebalancingConfig
+	incrementalRebalancingConfig *structures.IncrementalRebalancingConfig
+	smartRebalancingConfig       *SmartRebalancingConfig
 }
 
 // Superblock version constants for file creation.
@@ -521,16 +527,28 @@ func WithBTreeRebalancing(enable bool) WriteOption {
 //
 //	fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 //	    hdf5.WithSuperblockVersion(core.Version0))
-func CreateForWrite(filename string, mode CreateMode, opts ...WriteOption) (*FileWriter, error) {
+func CreateForWrite(filename string, mode CreateMode, opts ...interface{}) (*FileWriter, error) {
 	// Apply default configuration
 	cfg := &FileWriteConfig{
 		SuperblockVersion: core.Version2, // Modern format by default
 		BTreeRebalancing:  true,          // C library default behavior
 	}
 
-	// Apply user options
+	// Temporary FileWriter for applying FileWriterOptions
+	tempFW := &FileWriter{}
+
+	// Apply user options (support both WriteOption and FileWriterOption)
 	for _, opt := range opts {
-		opt(cfg)
+		switch o := opt.(type) {
+		case WriteOption:
+			o(cfg)
+		case FileWriterOption:
+			// Store FileWriterOption for later application (after FileWriter is fully initialized)
+			// For now, just apply it to temp FileWriter
+			_ = o(tempFW)
+		default:
+			return nil, fmt.Errorf("invalid option type: %T", opt)
+		}
 	}
 
 	// Calculate superblock size based on version
@@ -604,7 +622,7 @@ func CreateForWrite(filename string, mode CreateMode, opts ...WriteOption) (*Fil
 		sb: sb,
 	}
 
-	return &FileWriter{
+	fileWriter := &FileWriter{
 		file:           fileObj,
 		writer:         fw,
 		filename:       filename,
@@ -613,7 +631,13 @@ func CreateForWrite(filename string, mode CreateMode, opts ...WriteOption) (*Fil
 		rootBTreeAddr:  rootInfo.btreeAddr,
 		rootHeapAddr:   rootInfo.heapAddr,
 		rootStNodeAddr: rootInfo.stNodeAddr,
-	}, nil
+		// Copy rebalancing configs from tempFW
+		lazyRebalancingConfig:        tempFW.lazyRebalancingConfig,
+		incrementalRebalancingConfig: tempFW.incrementalRebalancingConfig,
+		smartRebalancingConfig:       tempFW.smartRebalancingConfig,
+	}
+
+	return fileWriter, nil
 }
 
 // validateDatasetName validates that dataset name is not empty and starts with '/'.
