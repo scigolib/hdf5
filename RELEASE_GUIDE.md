@@ -73,7 +73,7 @@ feature/*   - Feature branches
 - **Current default branch**
 
 #### `release/*` Branches
-- Format: `release/v0.10.0-beta`, `release/v1.0.0`
+- Format: `release/vX.Y.Z-beta`, `release/vX.Y.Z`
 - Created from `develop`
 - Only bug fixes and documentation updates allowed
 - No new features
@@ -168,7 +168,7 @@ bash scripts/pre-release-check.sh
 #### 3. Before Merging to Main (Mandatory)
 ```bash
 # Final validation on release branch
-git checkout release/v0.10.0-beta
+git checkout release/vX.Y.Z-beta
 bash scripts/pre-release-check.sh
 
 # If errors found, fix them before merging to main
@@ -207,7 +207,7 @@ bash scripts/pre-release-check.sh
 $ bash scripts/pre-release-check.sh
 
 ========================================
-  HDF5 Go Library - Pre-Release Check
+  Your Project - Pre-Release Check
 ========================================
 
 [INFO] Checking Go version...
@@ -228,7 +228,7 @@ $ bash scripts/pre-release-check.sh
 [SUCCESS] All checks passed! Ready for release.
 
 Next steps (from RELEASE_GUIDE.md):
-  1. Create release branch: git checkout -b release/v0.10.0-beta
+  1. Create release branch: git checkout -b release/vX.Y.Z-beta
   2. Update CHANGELOG.md with version details
   ...
 ```
@@ -260,13 +260,11 @@ Next steps (from RELEASE_GUIDE.md):
 Format: `MAJOR.MINOR.PATCH[-PRERELEASE]`
 
 Examples:
-- `v0.9.0-beta` - Current version (read-only beta)
-- `v0.10.0-beta` - Next version (feature-complete read)
-- `v0.11.0-beta` - Write support MVP
-- `v1.0.0-rc.1` - Release candidate 1
-- `v1.0.0` - First stable release (full read/write)
-- `v1.1.0` - Minor feature update
-- `v1.1.1` - Patch/bugfix
+- `vX.Y.Z-beta` - Beta releases (testing phase)
+- `vX.Y.Z-rc.N` - Release candidate N (final testing)
+- `vX.Y.Z` - Stable release
+- `vX.Y+1.0` - Minor feature update
+- `vX.Y.Z+1` - Patch/bugfix
 
 ### Version Increment Rules
 
@@ -295,16 +293,16 @@ Examples:
 
 ### HDF5 Library Versioning Strategy
 
-**Current Path**: `v0.x.x-beta` until `v1.0.0`
+**Current Path**: `vX.Y.Z-beta` until `v1.0.0`
 
-- `v0.9.0-beta`: Basic read support (current)
-- `v0.10.0-beta`: Feature-complete read support (in progress)
-- `v0.11.0-beta`: Basic write support (MVP)
-- `v0.12.0-beta`: Full write support
+- `vX.Y.Z-beta`: Basic read support (current)
+- `vX.Y.Z-beta`: Feature-complete read support (in progress)
+- `vX.Y.Z-beta`: Basic write support (MVP)
+- `vX.Y.Z-beta`: Full write support
 - `v1.0.0-rc.1`: Release candidate (API stable)
 - `v1.0.0`: First stable release
 
-**Rationale**: Avoid `v2.0.0` approach (requires new import path). Use `v0.x.x` beta progression until feature-complete, then `v1.0.0` stable.
+**Rationale**: Avoid `v2.0.0` approach (requires new import path). Use `vX.Y.Z` beta progression until feature-complete, then `v1.0.0` stable.
 
 ---
 
@@ -404,7 +402,7 @@ go list -m all | grep -v indirect
 ### 5. Project-Specific Checks
 
 **HDF5 Library Requirements**:
-- [ ] All v0.10.0-beta sprint tasks complete (6/6)
+- [ ] All vX.Y.Z-beta sprint tasks complete (6/6)
 - [ ] Test coverage >70% for internal packages
 - [ ] All HDF5 format features documented
 - [ ] C library references cited in code
@@ -455,12 +453,12 @@ git status
 ### Step 2: Create Release Branch
 
 ```bash
-# Create release branch from develop (example: v0.11.3-beta)
-git checkout -b release/v0.11.3-beta develop
+# Create release branch from develop (example: vX.Y.Z-beta)
+git checkout -b release/vX.Y.Z-beta develop
 
 # ⚠️ IMPORTANT: Now update ALL documentation IN THIS BRANCH:
-# - README.md (version badges: v0.11.2-beta → v0.11.3-beta)
-# - CHANGELOG.md (add v0.11.3-beta section with date)
+# - README.md (version badges: vX.Y.Z-beta → vX.Y.Z-beta)
+# - CHANGELOG.md (add vX.Y.Z-beta section with date)
 # - ROADMAP.md (update current version, status)
 # - docs/guides/*.md (update all version footers)
 # - docs/guides/FAQ.md (update version references)
@@ -476,23 +474,23 @@ git checkout -b release/v0.11.3-beta develop
 
 # Commit ALL documentation changes in release branch
 git add .
-git commit -m "chore: prepare v0.11.3-beta release
+git commit -m "chore: prepare vX.Y.Z-beta release
 
 - Update README.md version badges and features
-- Add CHANGELOG.md entry for v0.11.3-beta
+- Add CHANGELOG.md entry for vX.Y.Z-beta
 - Update ROADMAP.md current version and status
 - Update all docs/guides/ version footers
 - Update version references throughout documentation"
 
 # Push release branch
-git push origin release/v0.11.3-beta
+git push origin release/vX.Y.Z-beta
 ```
 
 ### Step 2: Wait for CI (CRITICAL!)
 
 ```bash
 # Go to GitHub Actions and WAIT for green CI
-# URL: https://github.com/scigolib/hdf5/actions
+# URL: https://github.com/YOUR-ORG/YOUR-PROJECT/actions
 ```
 
 **⏸️ STOP HERE! Do NOT proceed until CI is GREEN!**
@@ -505,7 +503,7 @@ git push origin release/v0.11.3-beta
 - Race detector
 
 ❌ **If CI fails:**
-1. Fix issues in `release/v0.10.0-beta` branch
+1. Fix issues in `release/vX.Y.Z-beta` branch
 2. Commit fixes
 3. Push and wait for CI again
 4. Repeat until GREEN
@@ -531,7 +529,7 @@ git checkout main
 git pull origin main
 
 # ⚠️ IMPORTANT: Use --no-ff (NOT --squash) for release merges!
-git merge --no-ff release/v0.11.3-beta -m "Release v0.11.3-beta
+git merge --no-ff release/vX.Y.Z-beta -m "Release vX.Y.Z-beta
 
 Dense Storage RMW - Complete write/read cycle for dense attributes
 
@@ -568,7 +566,7 @@ git push origin main
 
 ```bash
 # Go to GitHub Actions and verify main branch CI
-# https://github.com/scigolib/hdf5/actions
+# https://github.com/YOUR-ORG/YOUR-PROJECT/actions
 
 # WAIT for green CI on main branch!
 ```
@@ -581,9 +579,9 @@ git push origin main
 # ONLY after main CI is green!
 
 # Create annotated tag
-git tag -a v0.10.0-beta -m "Release v0.10.0-beta
+git tag -a vX.Y.Z-beta -m "Release vX.Y.Z-beta
 
-HDF5 Go Library v0.10.0-beta - Feature-Complete Read Support
+Your Project vX.Y.Z - Feature-Complete Read Support
 
 Features:
 - Complete HDF5 read support (all datatypes, layouts, compression)
@@ -609,19 +607,19 @@ Quality:
 - C library references throughout
 
 Known Limitations:
-- Dense attributes require B-tree v2 iteration (v0.11.0)
-- Read-only (write support in v0.11.0+)
+- Dense attributes require B-tree v2 iteration (vNext)
+- Read-only (write support in vNext+)
 - Affects <10% of real-world HDF5 files
 
 API Stability:
 - Read API stable and production-ready
 - No breaking changes expected for read operations
-- Write API will be added in v0.11.0
+- Write API will be added in vNext
 
 See CHANGELOG.md for complete details."
 
 # Push tag
-git push origin v0.10.0-beta
+git push origin vX.Y.Z-beta
 ```
 
 ### Step 6: Merge Back to Develop
@@ -629,19 +627,19 @@ git push origin v0.10.0-beta
 ```bash
 # Keep develop in sync
 git checkout develop
-git merge --no-ff release/v0.10.0-beta -m "Merge release v0.10.0-beta back to develop"
+git merge --no-ff release/vX.Y.Z-beta -m "Merge release vX.Y.Z-beta back to develop"
 git push origin develop
 
 # Delete release branch (optional, after confirming release is good)
-git branch -d release/v0.10.0-beta
-git push origin --delete release/v0.10.0-beta
+git branch -d release/vX.Y.Z-beta
+git push origin --delete release/vX.Y.Z-beta
 ```
 
 ### Step 7: Create GitHub Release
 
-1. Go to: https://github.com/scigolib/hdf5/releases/new
-2. Select tag: `v0.10.0-beta`
-3. Release title: `v0.10.0-beta - Feature-Complete Read Support`
+1. Go to: https://github.com/YOUR-ORG/YOUR-PROJECT/releases/new
+2. Select tag: `vX.Y.Z-beta`
+3. Release title: `vX.Y.Z-beta - Feature-Complete Read Support`
 4. Description: Copy from CHANGELOG.md
 5. Check "Set as a pre-release" (beta releases)
 6. Click "Publish release"
@@ -656,7 +654,7 @@ For critical bugs in production (`main` branch):
 # Create hotfix branch from main
 git checkout main
 git pull origin main
-git checkout -b hotfix/v0.10.1-beta
+git checkout -b hotfix/vX.Y.Z+1-beta
 
 # Fix the bug
 # ... make changes ...
@@ -671,29 +669,29 @@ git add .
 git commit -m "fix: critical bug in attribute parsing"
 
 # Push and wait for CI
-git push origin hotfix/v0.10.1-beta
+git push origin hotfix/vX.Y.Z+1-beta
 
 # WAIT FOR GREEN CI!
 
 # Merge to main
 git checkout main
-git merge --no-ff hotfix/v0.10.1-beta -m "Hotfix v0.10.1-beta"
+git merge --no-ff hotfix/vX.Y.Z+1-beta -m "Hotfix vX.Y.Z+1-beta"
 git push origin main
 
 # WAIT FOR GREEN CI ON MAIN!
 
 # Create tag
-git tag -a v0.10.1-beta -m "Hotfix v0.10.1-beta - Fix critical attribute parsing bug"
-git push origin v0.10.1-beta
+git tag -a vX.Y.Z+1-beta -m "Hotfix vX.Y.Z+1-beta - Fix critical attribute parsing bug"
+git push origin vX.Y.Z+1-beta
 
 # Merge back to develop
 git checkout develop
-git merge --no-ff hotfix/v0.10.1-beta -m "Merge hotfix v0.10.1-beta"
+git merge --no-ff hotfix/vX.Y.Z+1-beta -m "Merge hotfix vX.Y.Z+1-beta"
 git push origin develop
 
 # Delete hotfix branch
-git branch -d hotfix/v0.10.1-beta
-git push origin --delete hotfix/v0.10.1-beta
+git branch -d hotfix/vX.Y.Z+1-beta
+git push origin --delete hotfix/vX.Y.Z+1-beta
 ```
 
 ---
@@ -744,8 +742,8 @@ git push origin main  # ❌ WAIT for CI first!
 ❌ **NEVER create tags before CI passes**
 ```bash
 # WRONG!
-git tag v0.10.0-beta  # ❌ WAIT for green CI on main!
-git push origin v0.10.0-beta
+git tag vX.Y.Z-beta  # ❌ WAIT for green CI on main!
+git push origin vX.Y.Z-beta
 ```
 
 ❌ **NEVER force push to main or develop**
@@ -795,23 +793,23 @@ git push
 ✅ **ALWAYS wait for green CI before proceeding**
 ```bash
 # Correct workflow:
-git push origin release/v0.10.0-beta
+git push origin release/vX.Y.Z-beta
 # ⏸️ WAIT for green CI
 git checkout main
-git merge --no-ff release/v0.10.0-beta
+git merge --no-ff release/vX.Y.Z-beta
 git push origin main
 # ⏸️ WAIT for green CI on main
-git tag -a v0.10.0-beta -m "..."
-git push origin v0.10.0-beta
+git tag -a vX.Y.Z-beta -m "..."
+git push origin vX.Y.Z-beta
 ```
 
 ✅ **ALWAYS use annotated tags**
 ```bash
 # Good
-git tag -a v0.10.0-beta -m "Release v0.10.0-beta"
+git tag -a vX.Y.Z-beta -m "Release vX.Y.Z-beta"
 
 # Bad
-git tag v0.10.0-beta  # Lightweight tag
+git tag vX.Y.Z-beta  # Lightweight tag
 ```
 
 ✅ **ALWAYS update CHANGELOG.md**
@@ -841,7 +839,7 @@ go mod verify
 Copy this for each release:
 
 ```markdown
-## Release v0.10.0-beta Checklist
+## Release vX.Y.Z-beta Checklist
 
 ### Pre-Release
 - [ ] All tests passing locally (`go test ./...`)
@@ -856,7 +854,7 @@ Copy this for each release:
 - [ ] Sprint tasks complete (X/6)
 
 ### Release Branch
-- [ ] Created release/v0.10.0-beta from develop
+- [ ] Created release/vX.Y.Z-beta from develop
 - [ ] Pushed to GitHub
 - [ ] CI GREEN on release branch
 - [ ] All checks passed (tests, lint, format, coverage)
@@ -868,7 +866,7 @@ Copy this for each release:
 - [ ] All checks passed
 
 ### Tagging
-- [ ] Created annotated tag v0.10.0-beta
+- [ ] Created annotated tag vX.Y.Z-beta
 - [ ] Tag message includes full changelog
 - [ ] Pushed tag to origin
 - [ ] GitHub release created (set as pre-release for beta)
@@ -929,5 +927,5 @@ Copy this for each release:
 ---
 
 *Last Updated: 2025-11-01*
-*HDF5 Go Library v0.11.3-beta Release Process*
+*Your Project vX.Y.Z Release Process*
 *Git-Flow Standard 2025 - Researched and Updated*
