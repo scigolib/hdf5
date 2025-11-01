@@ -235,7 +235,9 @@ Contributions are welcome! This is an early-stage project and we'd love your hel
 | HDF5 1.8+ | ✅ Yes | ⚠️ Limited | ❌ No |
 | Advanced Datatypes | ✅ Yes (v0.11.0) | ✅ Yes | ❌ No |
 | Maintained | ✅ Active | ⚠️ Slow | ❌ Inactive |
-| Thread-safe | 📋 Planned | ⚠️ Conditional | ❌ No |
+| Thread-safe | ⚠️ User must sync* | ⚠️ Conditional | ❌ No |
+
+\* Different `File` instances are independent. Concurrent access to same `File` requires user synchronization (standard Go practice). Full thread-safety with mutexes + SWMR mode planned for v0.12.0-rc.1.
 
 ---
 
