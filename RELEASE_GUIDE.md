@@ -70,7 +70,56 @@ feature/*   - Feature branches
 #### `feature/*` Branches
 - Format: `feature/dense-attributes`, `feature/write-support`
 - Created from `develop`
-- Merged back to `develop` with `--no-ff`
+- Merged back to `develop` with `--squash` (1 clean commit per feature)
+
+---
+
+## 🔀 Merge Strategy (Git-Flow Standard)
+
+### When to Use --squash vs --no-ff
+
+**Use `--squash` (feature → develop)**:
+```bash
+# Feature branches: many WIP commits → 1 clean commit
+git checkout develop
+git merge --squash feature/my-feature
+git commit -m "feat: implement my feature
+
+- Component 1
+- Component 2
+- Component 3"
+```
+
+**Why squash features?**:
+- Keeps develop history clean (5-10 commits per release)
+- Prevents 100+ WIP commits cluttering develop
+- Each feature = 1 logical commit
+- Makes git log readable
+
+**Use `--no-ff` (release → main, main → develop)**:
+```bash
+# Release branches: preserve complete history
+git checkout main
+git merge --no-ff release/vX.Y.Z-beta
+# Note: -m message is optional here, git will auto-generate merge commit
+
+# Merge back to develop
+git checkout develop
+git merge --no-ff main -m "Merge release vX.Y.Z back to develop"
+```
+
+**Why --no-ff for releases?**:
+- Standard git-flow practice (official workflow)
+- Preserves all release preparation commits
+- Allows proper tag placement
+- Enables clean merge back to develop
+- Shows clear release boundaries in history
+
+**NEVER Use --squash (release → main)**:
+- ❌ Breaks git-flow (main ← develop merge conflicts)
+- ❌ Loses release preparation history
+- ❌ Makes merge back to develop difficult
+- ❌ Not standard practice
 
 ---
 
@@ -354,35 +403,77 @@ go list -m all | grep -v indirect
 
 ---
 
-## 🚀 Release Process
+## 🚀 Release Process (Git-Flow Standard 2025)
 
-### Step 1: Create Release Branch
+### 🔴 CRITICAL: Documentation Updates Location
+
+**IMPORTANT**: All documentation updates (README.md, CHANGELOG.md, ROADMAP.md, docs/guides/*.md) **MUST be done in the release branch**, NOT in develop!
+
+**Why?**:
+- Release branch is for preparing the release (bumping versions, updating docs, bug fixes)
+- Develop is for feature development
+- This is standard git-flow practice
+
+**Workflow**:
+```
+develop (features only)
+   ↓
+release/vX.Y.Z (version bumps, docs, fixes ONLY)
+   ↓
+main (production)
+```
+
+### Step 1: Pre-Release Validation (In Develop)
 
 ```bash
-# Ensure you're on develop and up-to-date
+# BEFORE creating release branch, validate develop
 git checkout develop
 git pull origin develop
-
-# Verify develop is clean
-git status
-# Should show: "nothing to commit, working tree clean"
 
 # Run ALL pre-release checks (CRITICAL!)
 bash scripts/pre-release-check.sh
 # Script must exit with: "All checks passed! Ready for release."
-# If errors: FIX THEM before proceeding!
+# If errors: FIX THEM in develop before proceeding!
 
-# Create release branch (example: v0.10.0-beta)
-git checkout -b release/v0.10.0-beta
+# Verify develop is clean
+git status
+# Should show: "nothing to commit, working tree clean"
+```
 
-# Update version in files
-# - README.md (version badges)
-# - CHANGELOG.md (add version section)
-# - ROADMAP.md (update status)
+### Step 2: Create Release Branch
 
+```bash
+# Create release branch from develop (example: v0.11.3-beta)
+git checkout -b release/v0.11.3-beta develop
+
+# ⚠️ IMPORTANT: Now update ALL documentation IN THIS BRANCH:
+# - README.md (version badges: v0.11.2-beta → v0.11.3-beta)
+# - CHANGELOG.md (add v0.11.3-beta section with date)
+# - ROADMAP.md (update current version, status)
+# - docs/guides/*.md (update all version footers)
+# - docs/guides/FAQ.md (update version references)
+# - docs/guides/INSTALLATION.md (update examples)
+# - etc.
+
+# Example documentation updates:
+# 1. README.md - Update badge versions
+# 2. CHANGELOG.md - Add release section with date:
+#    ## [0.11.3-beta] - 2025-11-01
+# 3. ROADMAP.md - Update current version
+# 4. All guides - Update footers to current version and date
+
+# Commit ALL documentation changes in release branch
 git add .
-git commit -m "chore: prepare v0.10.0-beta release"
-git push origin release/v0.10.0-beta
+git commit -m "chore: prepare v0.11.3-beta release
+
+- Update README.md version badges and features
+- Add CHANGELOG.md entry for v0.11.3-beta
+- Update ROADMAP.md current version and status
+- Update all docs/guides/ version footers
+- Update version references throughout documentation"
+
+# Push release branch
+git push origin release/v0.11.3-beta
 ```
 
 ### Step 2: Wait for CI (CRITICAL!)
@@ -409,26 +500,53 @@ git push origin release/v0.10.0-beta
 
 ### Step 3: Merge to Main (After Green CI)
 
+**🔴 CRITICAL RULE**: Release branches merge to main with `--no-ff` (NOT --squash!)
+
+**Why `--no-ff` for releases?**:
+- Preserves complete release history
+- Standard git-flow practice
+- Allows proper merge back to develop
+- Tags point to actual release commits
+
+**Why NOT `--squash`?**:
+- Squash is for feature branches → develop
+- Release → main uses `--no-ff` to preserve history
+- This is the official git-flow standard
+
 ```bash
-# ONLY after CI is green!
+# ONLY after CI is green on release branch!
 git checkout main
 git pull origin main
 
-# Merge release branch (--no-ff ensures merge commit)
-git merge --no-ff release/v0.10.0-beta -m "Release v0.10.0-beta
+# ⚠️ IMPORTANT: Use --no-ff (NOT --squash) for release merges!
+git merge --no-ff release/v0.11.3-beta -m "Release v0.11.3-beta
 
-Complete v0.10.0-beta implementation:
-- Feature-complete read support for HDF5 files
-- Compact attribute reading (94.9% coverage)
-- Fractal heap infrastructure for dense attributes
-- Object header v1 & v2 support with continuation blocks
-- Test coverage >70% (76.3% achieved)
-- Zero production dependencies (pure Go)
-- Comprehensive test suite (45+ tests)
-- Production-ready documentation
+Dense Storage RMW - Complete write/read cycle for dense attributes
 
-Sprint Progress: 6/6 tasks complete (100%)
-Known Limitations: Dense attributes require B-tree v2 (v0.11.0)"
+Features:
+- Dense attribute reading (fractal heap + B-tree v2)
+- Complete RMW workflow (write → read → modify → verify)
+- Variable-length heap ID parsing
+- Type conversion via ReadValue()
+- String datatype support in attributes
+
+Bug Fixes:
+- Fixed address overlap (object header + fractal heap)
+- Fixed B-tree leaf growth (full node allocation)
+- Fixed all linter issues (27 → 0)
+- Fixed all test failures
+
+Quality Metrics:
+- Coverage: 86.1% (target: >70%) ✅
+- Linter: 0 issues ✅
+- Tests: All passing ✅
+- Build: Cross-platform ✅
+
+Technical Details:
+- ~1500 lines of new code
+- Self-contained implementation
+- Go 2025 best practices
+- Full h5dump validation"
 
 # Push to main
 git push origin main
@@ -798,5 +916,6 @@ Copy this for each release:
 
 ---
 
-*Last Updated: 2025-10-29*
-*HDF5 Go Library v0.10.0-beta Release Process*
+*Last Updated: 2025-11-01*
+*HDF5 Go Library v0.11.3-beta Release Process*
+*Git-Flow Standard 2025 - Researched and Updated*
