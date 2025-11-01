@@ -157,9 +157,10 @@ func main() {
 - ✅ **Legacy compatibility** - Files readable by HDF5 1.0+ tools ✨ NEW
 
 **Known Limitations (v0.11.2-beta)**:
-- Dense storage read-modify-write (adding after file reopen - v0.11.3-beta)
+- Dense storage read-modify-write (adding to existing after reopen)
 - Attribute modification/deletion (write-once only)
-- Some files not h5dump-readable yet (working on full compatibility)
+- Soft/external links not yet supported (hard links only)
+- Compound datatypes write support (planned for v0.12.0-rc.1)
 
 ### ❌ Planned Features
 
