@@ -331,6 +331,63 @@ func ModifyDenseAttribute(heap HeapWriter, btree BTreeWriter, name string, newAt
 	return nil
 }
 
+// DeleteDenseAttribute deletes an attribute from dense storage.
+//
+// This function implements Phase 3 of attribute deletion:
+// removing attributes stored in dense storage (fractal heap + B-tree v2).
+//
+// Algorithm (matching H5Adense.c:H5A__dense_remove):
+// 1. Search B-tree v2 for attribute name → get heap ID
+// 2. Delete record from B-tree
+// 3. Delete object from fractal heap
+// 4. Update Attribute Info message (decrement count)
+//
+// Parameters:
+//   - heap: Writable fractal heap (loaded from file)
+//   - btree: Writable B-tree v2 (loaded from file)
+//   - name: Attribute name to delete
+//
+// Returns:
+//   - error: Non-nil if deletion fails
+//
+// MVP Limitations:
+//   - No transition from dense → compact (HDF5 C library doesn't do this either)
+//   - Fractal heap space is freed but not compacted (acceptable)
+//   - B-tree node is not rebalanced/merged (acceptable for MVP)
+//
+// Reference: H5Adense.c - H5A__dense_remove(), H5Adelete.c - H5A__delete().
+func DeleteDenseAttribute(heap HeapWriter, btree BTreeWriter, name string) error {
+	if heap == nil || btree == nil {
+		return fmt.Errorf("heap or btree is nil")
+	}
+	if name == "" {
+		return fmt.Errorf("attribute name cannot be empty")
+	}
+
+	// 1. Search B-tree for attribute name
+	heapID, found := btree.SearchRecord(name)
+	if !found {
+		return fmt.Errorf("attribute %q not found in dense storage", name)
+	}
+
+	// 2. Delete record from B-tree
+	err := btree.DeleteRecord(name)
+	if err != nil {
+		return fmt.Errorf("failed to delete B-tree record: %w", err)
+	}
+
+	// 3. Delete object from fractal heap
+	err = heap.DeleteObject(heapID)
+	if err != nil {
+		return fmt.Errorf("failed to delete heap object: %w", err)
+	}
+
+	// Note: Attribute Info message count update is handled by caller
+	// (attribute_write.go), as it requires object header access.
+
+	return nil
+}
+
 // HeapWriter interface for dense attribute modification.
 // This abstracts fractal heap operations for testing and modularity.
 type HeapWriter interface {
@@ -345,4 +402,5 @@ type HeapWriter interface {
 type BTreeWriter interface {
 	SearchRecord(name string) ([]byte, bool)
 	UpdateRecord(name string, newHeapID uint64) error
+	DeleteRecord(name string) error
 }

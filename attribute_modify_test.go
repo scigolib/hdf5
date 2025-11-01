@@ -549,3 +549,311 @@ func TestAttributeModification_DenseDifferentSize(t *testing.T) {
 		t.Error("Attribute 'name' not found")
 	}
 }
+
+// TestAttributeDeletion_Dense tests deletion of attributes from dense storage.
+//
+// Verifies:
+//   - Creating 10 attributes (triggers dense storage)
+//   - Deleting 2 attributes
+//   - Remaining 8 attributes are intact
+//   - Deleted attributes are not found
+//
+// Reference: H5Adense.c - H5A__dense_remove(), H5Adelete.c.
+//
+//nolint:gocognit // Test function with multiple verification steps
+func TestAttributeDeletion_Dense(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "hdf5_test_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	testFile := filepath.Join(tempDir, "attr_delete_dense.h5")
+
+	// Step 1: Create file with dataset
+	fw, err := hdf5.CreateForWrite(testFile, hdf5.CreateTruncate)
+	if err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+
+	dims := []uint64{5}
+	ds, err := fw.CreateDataset("/data", hdf5.Int32, dims)
+	if err != nil {
+		t.Fatalf("Failed to create dataset: %v", err)
+	}
+
+	// Step 2: Create 10 attributes (triggers dense storage at attr 8)
+	for i := 0; i < 10; i++ {
+		attrName := fmt.Sprintf("attr%d", i)
+		err = ds.WriteAttribute(attrName, int32(i*10))
+		if err != nil {
+			t.Fatalf("Failed to write attribute %s: %v", attrName, err)
+		}
+	}
+
+	err = fw.Close()
+	if err != nil {
+		t.Fatalf("Failed to close file after creation: %v", err)
+	}
+
+	// Step 3: Reopen file in read-write mode
+	fw, err = hdf5.OpenForWrite(testFile, hdf5.OpenReadWrite)
+	if err != nil {
+		t.Fatalf("Failed to reopen file: %v", err)
+	}
+
+	dsw, err := fw.OpenDataset("/data")
+	if err != nil {
+		t.Fatalf("Failed to open dataset: %v", err)
+	}
+
+	// Step 4: Delete 2 attributes
+	err = dsw.DeleteAttribute("attr3")
+	if err != nil {
+		t.Fatalf("Failed to delete attr3: %v", err)
+	}
+
+	err = dsw.DeleteAttribute("attr7")
+	if err != nil {
+		t.Fatalf("Failed to delete attr7: %v", err)
+	}
+
+	err = fw.Close()
+	if err != nil {
+		t.Fatalf("Failed to close file after deletion: %v", err)
+	}
+
+	// Step 5: Read back and verify
+	f, err := hdf5.Open(testFile)
+	if err != nil {
+		t.Fatalf("Failed to reopen file for verification: %v", err)
+	}
+
+	// Access dataset through walk
+	var dataset *hdf5.Dataset
+	f.Walk(func(_ string, obj hdf5.Object) {
+		if ds, ok := obj.(*hdf5.Dataset); ok && ds.Name() == "data" {
+			dataset = ds
+		}
+	})
+	if dataset == nil {
+		t.Fatalf("Failed to find dataset 'data'")
+	}
+
+	attrs, err := dataset.Attributes()
+	if err != nil {
+		t.Fatalf("Failed to read attributes: %v", err)
+	}
+
+	// Should have 8 attributes remaining (10 - 2)
+	if len(attrs) != 8 {
+		t.Fatalf("Expected 8 attributes, got %d", len(attrs))
+	}
+
+	// Verify deleted attributes are not present
+	for _, attr := range attrs {
+		if attr.Name == "attr3" || attr.Name == "attr7" {
+			t.Errorf("Deleted attribute %s still exists", attr.Name)
+		}
+	}
+
+	// Verify remaining attributes are intact
+	expectedAttrs := map[string]int32{
+		"attr0": 0,
+		"attr1": 10,
+		"attr2": 20,
+		// attr3 deleted
+		"attr4": 40,
+		"attr5": 50,
+		"attr6": 60,
+		// attr7 deleted
+		"attr8": 80,
+		"attr9": 90,
+	}
+
+	for _, attr := range attrs {
+		expectedValue, exists := expectedAttrs[attr.Name]
+		if !exists {
+			t.Errorf("Unexpected attribute: %s", attr.Name)
+			continue
+		}
+
+		value, err := attr.ReadValue()
+		if err != nil {
+			t.Errorf("Failed to read attribute %s: %v", attr.Name, err)
+			continue
+		}
+
+		if intValue, ok := value.(int32); !ok || intValue != expectedValue {
+			t.Errorf("Attribute %s: expected %d, got %v (type %T)",
+				attr.Name, expectedValue, value, value)
+		}
+	}
+
+	// Close file before cleanup
+	if err := f.Close(); err != nil {
+		t.Errorf("Failed to close file: %v", err)
+	}
+}
+
+// TestAttributeDeletion_DenseDeleteAll tests deleting all attributes from dense storage.
+//
+// Verifies:
+//   - Creating 10 attributes (dense storage)
+//   - Deleting all 10 attributes
+//   - Attribute count becomes 0
+//
+// Reference: H5Adense.c - H5A__dense_remove().
+//
+//nolint:gocognit // Test function with loop over multiple deletions
+func TestAttributeDeletion_DenseDeleteAll(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "hdf5_test_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	testFile := filepath.Join(tempDir, "attr_delete_all.h5")
+
+	// Step 1: Create file with dataset
+	fw, err := hdf5.CreateForWrite(testFile, hdf5.CreateTruncate)
+	if err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+
+	dims := []uint64{5}
+	ds, err := fw.CreateDataset("/data", hdf5.Int32, dims)
+	if err != nil {
+		t.Fatalf("Failed to create dataset: %v", err)
+	}
+
+	// Step 2: Create 10 attributes
+	for i := 0; i < 10; i++ {
+		attrName := fmt.Sprintf("attr%d", i)
+		err = ds.WriteAttribute(attrName, int32(i))
+		if err != nil {
+			t.Fatalf("Failed to write attribute %s: %v", attrName, err)
+		}
+	}
+
+	err = fw.Close()
+	if err != nil {
+		t.Fatalf("Failed to close file after creation: %v", err)
+	}
+
+	// Step 3: Reopen and delete all attributes
+	fw, err = hdf5.OpenForWrite(testFile, hdf5.OpenReadWrite)
+	if err != nil {
+		t.Fatalf("Failed to reopen file: %v", err)
+	}
+
+	dsw, err := fw.OpenDataset("/data")
+	if err != nil {
+		t.Fatalf("Failed to open dataset: %v", err)
+	}
+
+	// Delete all attributes
+	for i := 0; i < 10; i++ {
+		attrName := fmt.Sprintf("attr%d", i)
+		err = dsw.DeleteAttribute(attrName)
+		if err != nil {
+			t.Fatalf("Failed to delete %s: %v", attrName, err)
+		}
+	}
+
+	err = fw.Close()
+	if err != nil {
+		t.Fatalf("Failed to close file after deletion: %v", err)
+	}
+
+	// Step 4: Verify no attributes remain
+	f, err := hdf5.Open(testFile)
+	if err != nil {
+		t.Fatalf("Failed to reopen file for verification: %v", err)
+	}
+
+	var dataset *hdf5.Dataset
+	f.Walk(func(_ string, obj hdf5.Object) {
+		if ds, ok := obj.(*hdf5.Dataset); ok && ds.Name() == "data" {
+			dataset = ds
+		}
+	})
+	if dataset == nil {
+		t.Fatalf("Failed to find dataset 'data'")
+	}
+
+	attrs, err := dataset.Attributes()
+	if err != nil {
+		t.Fatalf("Failed to read attributes: %v", err)
+	}
+
+	if len(attrs) != 0 {
+		t.Errorf("Expected 0 attributes, got %d", len(attrs))
+	}
+
+	// Close file before cleanup
+	if err := f.Close(); err != nil {
+		t.Errorf("Failed to close file: %v", err)
+	}
+}
+
+// TestAttributeDeletion_DenseNotFound tests error handling for deleting non-existent attribute.
+//
+// Verifies:
+//   - Attempting to delete non-existent attribute returns error
+//
+// Reference: H5Adelete.c - error handling.
+func TestAttributeDeletion_DenseNotFound(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "hdf5_test_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	testFile := filepath.Join(tempDir, "attr_delete_notfound.h5")
+
+	// Step 1: Create file with dataset and attributes
+	fw, err := hdf5.CreateForWrite(testFile, hdf5.CreateTruncate)
+	if err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+
+	dims := []uint64{5}
+	ds, err := fw.CreateDataset("/data", hdf5.Int32, dims)
+	if err != nil {
+		t.Fatalf("Failed to create dataset: %v", err)
+	}
+
+	// Create 8 attributes (dense storage)
+	for i := 0; i < 8; i++ {
+		attrName := fmt.Sprintf("attr%d", i)
+		err = ds.WriteAttribute(attrName, int32(i))
+		if err != nil {
+			t.Fatalf("Failed to write attribute %s: %v", attrName, err)
+		}
+	}
+
+	err = fw.Close()
+	if err != nil {
+		t.Fatalf("Failed to close file: %v", err)
+	}
+
+	// Step 2: Reopen and try to delete non-existent attribute
+	fw, err = hdf5.OpenForWrite(testFile, hdf5.OpenReadWrite)
+	if err != nil {
+		t.Fatalf("Failed to reopen file: %v", err)
+	}
+
+	dsw, err := fw.OpenDataset("/data")
+	if err != nil {
+		t.Fatalf("Failed to open dataset: %v", err)
+	}
+
+	// Try to delete non-existent attribute
+	err = dsw.DeleteAttribute("nonexistent")
+	if err == nil {
+		t.Error("Expected error when deleting non-existent attribute, got nil")
+	}
+
+	_ = fw.Close()
+}

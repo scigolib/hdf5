@@ -309,6 +309,46 @@ func (bt *WritableBTreeV2) UpdateRecord(name string, newHeapID uint64) error {
 	return fmt.Errorf("record not found for name: %s", name)
 }
 
+// DeleteRecord removes a record from the B-tree by name.
+//
+// This function is used for attribute deletion:
+// 1. Search for record by name (hash)
+// 2. Remove from records slice
+// 3. Update record counts
+//
+// Parameters:
+//   - name: attribute/link name to delete
+//
+// Returns:
+//   - error: if record not found or deletion fails
+//
+// For MVP: removes record from single leaf node.
+// No tree rebalancing or node merging (deferred to v0.12.0).
+//
+// Reference: H5B2.c - H5B2_remove(), H5Adelete.c - attribute deletion.
+func (bt *WritableBTreeV2) DeleteRecord(name string) error {
+	hash := jenkinsHash(name)
+
+	// Find record
+	for i, record := range bt.records {
+		if record.NameHash != hash {
+			continue
+		}
+
+		// Remove record (shift left)
+		bt.records = append(bt.records[:i], bt.records[i+1:]...)
+		bt.leaf.Records = bt.records
+
+		// Update counts
+		bt.header.TotalRecords--
+		bt.header.NumRecordsRoot--
+
+		return nil
+	}
+
+	return fmt.Errorf("record not found for name: %s", name)
+}
+
 // WriteToFile writes B-tree v2 to file and returns header address.
 //
 // Writes:
