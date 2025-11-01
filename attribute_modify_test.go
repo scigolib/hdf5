@@ -20,6 +20,8 @@ import (
 //   - Reading back modified attribute shows new value
 //
 // Reference: H5Oattribute.c - H5O__attr_write_cb().
+//
+//nolint:gocognit // Test function with multiple verification steps
 func TestAttributeModification_CompactUpsert(t *testing.T) {
 	tempDir := t.TempDir()
 	testFile := filepath.Join(tempDir, "attr_modify_compact.h5")
@@ -76,11 +78,15 @@ func TestAttributeModification_CompactUpsert(t *testing.T) {
 		_ = os.Remove(testFile)
 	}()
 
-	// Access dataset through root group
-	root := f.Root()
-	dataset, err := root.OpenDataset("temperature")
-	if err != nil {
-		t.Fatalf("Failed to open dataset: %v", err)
+	// Access dataset through walk
+	var dataset *hdf5.Dataset
+	f.Walk(func(_ string, obj hdf5.Object) {
+		if ds, ok := obj.(*hdf5.Dataset); ok && ds.Name() == "temperature" {
+			dataset = ds
+		}
+	})
+	if dataset == nil {
+		t.Fatalf("Failed to find dataset 'temperature'")
 	}
 
 	// Verify modified attributes
@@ -183,10 +189,15 @@ func TestAttributeModification_DifferentSize(t *testing.T) {
 		_ = os.Remove(testFile)
 	}()
 
-	root := f.Root()
-	dataset, err := root.OpenDataset("data")
-	if err != nil {
-		t.Fatalf("Failed to open dataset: %v", err)
+	// Access dataset through walk
+	var dataset *hdf5.Dataset
+	f.Walk(func(_ string, obj hdf5.Object) {
+		if ds, ok := obj.(*hdf5.Dataset); ok && ds.Name() == "data" {
+			dataset = ds
+		}
+	})
+	if dataset == nil {
+		t.Fatalf("Failed to find dataset 'data'")
 	}
 
 	attrs, err := dataset.Attributes()
@@ -254,10 +265,15 @@ func TestAttributeModification_MultipleModifications(t *testing.T) {
 		_ = os.Remove(testFile)
 	}()
 
-	root := f.Root()
-	dataset, err := root.OpenDataset("counter")
-	if err != nil {
-		t.Fatalf("Failed to open dataset: %v", err)
+	// Access dataset through walk
+	var dataset *hdf5.Dataset
+	f.Walk(func(_ string, obj hdf5.Object) {
+		if ds, ok := obj.(*hdf5.Dataset); ok && ds.Name() == "counter" {
+			dataset = ds
+		}
+	})
+	if dataset == nil {
+		t.Fatalf("Failed to find dataset 'counter'")
 	}
 
 	attrs, err := dataset.Attributes()

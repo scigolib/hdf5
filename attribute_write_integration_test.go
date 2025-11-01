@@ -79,14 +79,14 @@ func TestDenseAttributes_Integration_UTF8(t *testing.T) {
 	t.Skip("Phase 2 MVP: UTF-8 names work but full dense workflow not yet implemented")
 }
 
-// TestDenseAttributes_Integration_DuplicateError tests duplicate detection during transition.
-func TestDenseAttributes_Integration_DuplicateError(t *testing.T) {
-	testFile := filepath.Join(t.TempDir(), "dense_duplicate.h5")
+// TestDenseAttributes_Integration_UpsertSemantics tests upsert (modify) semantics for attributes.
+// Phase 1: Upsert is supported in compact storage - writing to existing attribute modifies it.
+func TestDenseAttributes_Integration_UpsertSemantics(t *testing.T) {
+	testFile := filepath.Join(t.TempDir(), "dense_upsert.h5")
 
 	fw, err := CreateForWrite(testFile, CreateTruncate)
 	require.NoError(t, err)
 	defer os.Remove(testFile)
-	defer fw.Close()
 
 	ds, err := fw.CreateDataset("/data", Int32, []uint64{10})
 	require.NoError(t, err)
@@ -97,8 +97,41 @@ func TestDenseAttributes_Integration_DuplicateError(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Try to write duplicate (should fail in compact storage)
+	// Write duplicate attribute (should succeed with upsert semantics)
 	err = ds.WriteAttribute("attr1", int32(999))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "already exists")
+	require.NoError(t, err, "upsert should succeed in Phase 1")
+
+	// Close and verify
+	err = fw.Close()
+	require.NoError(t, err)
+
+	// Reopen and verify modified value
+	f, err := Open(testFile)
+	require.NoError(t, err)
+	defer f.Close()
+
+	// Find dataset
+	var dataset *Dataset
+	f.Walk(func(_ string, obj Object) {
+		if ds, ok := obj.(*Dataset); ok && ds.Name() == "data" {
+			dataset = ds
+		}
+	})
+	require.NotNil(t, dataset, "dataset should exist")
+
+	// Verify attributes
+	attrs, err := dataset.Attributes()
+	require.NoError(t, err)
+	require.Equal(t, 3, len(attrs), "should still have 3 attributes (not 4)")
+
+	// Verify attr1 has new value (999, not 1)
+	for _, attr := range attrs {
+		if attr.Name == "attr1" {
+			val, err := attr.ReadValue()
+			require.NoError(t, err)
+			require.Equal(t, int32(999), val, "attr1 should have modified value")
+			return
+		}
+	}
+	t.Fatal("attr1 not found")
 }

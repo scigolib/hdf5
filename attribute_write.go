@@ -158,28 +158,40 @@ func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHea
 	}
 
 	// 4. Upsert logic: modify if exists, add if not exists
-	if existingIndex >= 0 {
-		// Attribute exists → Replace (upsert semantics)
-		// Simply replace the message data in-place
-		oh.Messages[existingIndex].Data = attrMsg
-	} else {
-		// Attribute doesn't exist → Add new message
-		err = core.AddMessageToObjectHeader(oh, core.MsgAttribute, attrMsg)
-		if err != nil {
-			// If object header is full, transition to dense storage
-			// This can happen before reaching MaxCompactAttributes if attributes are large
-			if strings.Contains(err.Error(), "object header full") {
-				// Trigger transition by calling transitionToDenseAttributes
-				return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
-			}
-			return fmt.Errorf("failed to add message to header: %w", err)
-		}
+	err = upsertAttributeMessage(fw, objectAddr, oh, existingIndex, attrMsg, name, value, sb)
+	if err != nil {
+		return err
 	}
 
 	// 5. Write updated header back to disk
 	err = core.WriteObjectHeader(fw.writer, objectAddr, oh, sb)
 	if err != nil {
 		return fmt.Errorf("failed to write object header: %w", err)
+	}
+
+	return nil
+}
+
+// upsertAttributeMessage handles the upsert logic for attribute messages in compact storage.
+// If attribute exists (existingIndex >= 0), it replaces the message data.
+// If attribute doesn't exist (existingIndex < 0), it adds a new message.
+// If object header is full, it triggers transition to dense storage.
+func upsertAttributeMessage(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
+	existingIndex int, attrMsg []byte, name string, value interface{}, sb *core.Superblock) error {
+	if existingIndex >= 0 {
+		// Attribute exists → Replace (upsert semantics)
+		oh.Messages[existingIndex].Data = attrMsg
+		return nil
+	}
+
+	// Attribute doesn't exist → Add new message
+	err := core.AddMessageToObjectHeader(oh, core.MsgAttribute, attrMsg)
+	if err != nil {
+		// If object header is full, transition to dense storage
+		if strings.Contains(err.Error(), "object header full") {
+			return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
+		}
+		return fmt.Errorf("failed to add message to header: %w", err)
 	}
 
 	return nil
