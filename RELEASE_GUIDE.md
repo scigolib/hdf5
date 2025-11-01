@@ -1,6 +1,8 @@
-# Release Guide - HDF5 Go Library
+# Release Guide - Git-Flow Standard Process
 
 **CRITICAL**: Read this guide BEFORE creating any release!
+
+> **Universal guide** for releasing Go projects using git-flow workflow
 
 ---
 
