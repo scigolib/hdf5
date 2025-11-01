@@ -298,16 +298,22 @@ file.Walk(func(path string, obj hdf5.Object) {
 3. Easier deployment and maintenance worth the trade-off
 4. Sufficient for scientific data analysis workflows
 
-**Typical Performance** (dataset reading):
-- C library (gonum/hdf5, Python h5py): ~100-150 MB/s (native C)
-- This library: ~30-80 MB/s (pure Go, 2-3x slower)
+**Performance**:
+- C-based libraries (gonum/hdf5, Python h5py): Fast (native C implementation)
+- This library: Slower (pure Go implementation)
 
-**Why the difference**:
-- Pure Go vs optimized C code
-- No SIMD/assembly optimizations (yet)
-- Trade-off: portability + easy deployment vs raw speed
+**Expected trade-off**:
+- Pure Go is typically 2-3x slower than C for I/O-heavy operations
+- For most scientific data analysis, file I/O is not the bottleneck
+- Decompression (GZIP) and computation dominate processing time
 
-**Optimization**: Buffer pooling, efficient memory management, future SIMD planned.
+**Why pure Go is still worth it**:
+- Cross-platform deployment (single binary, no dependencies)
+- Easier to build, maintain, and distribute
+- Sufficient for typical scientific workflows
+- Future optimization: SIMD, assembly, better algorithms
+
+**Note**: Formal benchmarks planned for future releases. Performance varies by operation type, dataset size, and compression.
 
 ### Is it thread-safe?
 
