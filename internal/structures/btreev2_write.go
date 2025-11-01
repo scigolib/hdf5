@@ -137,6 +137,9 @@ type WritableBTreeV2 struct {
 
 	// Lazy rebalancing state (nil if disabled)
 	lazyState *LazyRebalancingState
+
+	// Incremental rebalancing state (nil if disabled)
+	incrementalRebalancer *IncrementalRebalancer
 }
 
 // NewWritableBTreeV2 creates a new B-tree v2 for link name indexing.
