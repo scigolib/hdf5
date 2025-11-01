@@ -298,12 +298,16 @@ file.Walk(func(path string, obj hdf5.Object) {
 3. Easier deployment and maintenance worth the trade-off
 4. Sufficient for scientific data analysis workflows
 
-**Benchmarks** (typical dataset reading):
-- C library (gonum/hdf5): ~100 MB/s
-- This library: ~30-50 MB/s
-- Python h5py: ~60-80 MB/s
+**Typical Performance** (dataset reading):
+- C library (gonum/hdf5, Python h5py): ~100-150 MB/s (native C)
+- This library: ~30-80 MB/s (pure Go, 2-3x slower)
 
-**Optimization**: The library uses buffer pooling and efficient memory management.
+**Why the difference**:
+- Pure Go vs optimized C code
+- No SIMD/assembly optimizations (yet)
+- Trade-off: portability + easy deployment vs raw speed
+
+**Optimization**: Buffer pooling, efficient memory management, future SIMD planned.
 
 ### Is it thread-safe?
 
