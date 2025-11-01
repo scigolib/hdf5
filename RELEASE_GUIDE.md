@@ -10,15 +10,25 @@
 
 **ALWAYS create a backup before any serious operations!**
 
+**Linux/macOS**:
 ```bash
-# Create backup BEFORE any git operations with branches/tags
-cd /d/projects/scigolibs
-cp -r hdf5 hdf5-backup-$(date +%Y%m%d-%H%M%S)
+# Directory backup
+cp -r project-name project-name-backup-$(date +%Y%m%d-%H%M%S)
 
-# Or use git bundle (portable backup)
-cd hdf5
-git bundle create ../hdf5-backup.bundle --all
+# Git bundle (portable, cross-platform)
+git bundle create ../project-backup.bundle --all
 ```
+
+**Windows (PowerShell)**:
+```powershell
+# Directory backup
+Copy-Item -Recurse project-name "project-name-backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+
+# Git bundle (portable, cross-platform)
+git bundle create ..\project-backup.bundle --all
+```
+
+**Git bundle** is recommended - portable, cross-platform, space-efficient!
 
 **Dangerous operations (require backup)**:
 - `git reset --hard`
