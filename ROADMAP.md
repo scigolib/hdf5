@@ -5,8 +5,8 @@
 
 **Last Updated**: 2025-11-01
 **Current Version**: v0.11.2-beta
-**Strategy**: Feature-complete at v0.11.0-RC, then community testing → v1.0.0 stable
-**Target**: v0.11.0-RC (2026-03-15) → v1.0.0 stable (2026-07-15)
+**Strategy**: Feature-complete at v0.12.0-rc.1, then community testing → v1.0.0-rc.1 → v1.0.0 stable
+**Target**: v0.12.0-rc.1 (2026-03-15) → v1.0.0-rc.1 (after user validation) → v1.0.0 stable (2026-07+)
 
 ---
 
@@ -44,24 +44,30 @@ Build a **production-ready, pure Go HDF5 library** with full read/write capabili
 ```
 v0.10.0-beta (READ complete) ✅ RELEASED 2025-10-29
          ↓ (2-3 months)
-v0.11.0-beta (WRITE basic) → Basic write MVP
+v0.11.x-beta (WRITE features) → Incremental write features
          ↓ (1-2 months)
-v0.11.0-RC (FEATURE COMPLETE) 🎯 KEY MILESTONE
+v0.12.0-rc.1 (FEATURE COMPLETE) 🎯 KEY MILESTONE
          ↓ (2-3 months community testing)
-v0.11.x-RC (bug fixes) → Patch releases based on feedback
-         ↓ (proven stable)
-v1.0.0-RC → Final validation
-         ↓ (production validated)
-v1.0.0 STABLE → Production release
+v0.12.x-rc.x (bug fixes) → Patch releases based on feedback
+         ↓ (proven stable + user validation)
+v1.0.0-rc.1 → Final validation (API proven in production)
+         ↓ (community approval)
+v1.0.0 STABLE → Production release (all HDF5 formats supported!)
 ```
 
 ### Critical Milestones
 
-**v0.11.0-RC** = ALL features done + API stable
+**v0.12.0-rc.1** = ALL features done + API stable
 - This is where we freeze API
 - This is where community testing begins
 - After this: ONLY bug fixes, no new features
-- Path to v1.0.0 is just validation and stability
+- Path to v1.0.0 is validation and stability
+
+**v1.0.0** = Production with ALL HDF5 format support
+- Supports HDF5 v0, v2, v3 superblocks ✅
+- Ready for their future HDF5 2.0.0 format (will be added in v1.x.x updates)
+- Ultra-modern library = all formats from day one!
+- Our v2.0.0 = only if WE change Go API (not HDF5 formats!)
 
 **See**: `docs/dev/notes/VERSIONING_STRATEGY.md` for complete strategy
 
@@ -213,8 +219,8 @@ v1.0.0 STABLE → Production release
 - ✅ Comprehensive tests (57 reference files)
 - ✅ Complete documentation
 
-**Known Limitations** (to be fixed in v0.11.0-RC):
-- Read-only (write in v0.11.0)
+**Known Limitations** (to be fixed in v0.12.0-rc.1):
+- Read-only (write in v0.11.x-beta)
 - Dense attributes need B-tree v2 iteration (<10% files affected)
 - Soft links deferred
 - Fletcher32 checksum not verified (stripped but not validated)
@@ -297,7 +303,7 @@ h5diff output.h5 reference.h5
 
 ---
 
-### **v0.11.0-RC - FEATURE COMPLETE** 🎯 (3-5 months total)
+### **v0.12.0-rc.1 - FEATURE COMPLETE** 🎯 (3-5 months total)
 
 **Status**: 📋 Planned
 **Target**: ~March 2026
@@ -306,12 +312,14 @@ h5diff output.h5 reference.h5
 **THIS IS THE KEY MILESTONE!**
 
 After this release:
-- ✅ API is FROZEN (no breaking changes until v2.0.0)
+- ✅ API is FROZEN (no breaking changes until our v2.0.0)
 - ✅ Community testing begins
 - ✅ Only bug fixes and performance improvements
-- ✅ Path to v1.0.0 is just stability validation
+- ✅ Path to v1.0.0 is validation and user approval
 
-**See**: `docs/dev/notes/v0.11.0-RC-FEATURE-COMPLETE-PLAN.md` for complete checklist
+**Note**: Our v1.0.0 will support ALL modern HDF5 formats (v0, v2, v3, and future 2.0.0)!
+
+**See**: `docs/dev/notes/v0.12.0-RC-FEATURE-COMPLETE-PLAN.md` for complete checklist
 
 #### Complete Feature Set
 
@@ -387,7 +395,7 @@ After this release:
 
 ---
 
-### **v0.11.x-RC - Bug Fixes & Stability** (2-3 months)
+### **v0.12.x-rc.x - Bug Fixes & Stability** (2-3 months)
 
 **Status**: 🔮 Future
 **Goal**: Community testing phase, fix all reported issues
@@ -395,35 +403,38 @@ After this release:
 **Activities**:
 - 👥 Community testing in real projects
 - 🐛 Bug reports collection and prioritization
-- 🔧 Patch releases (v0.11.1-RC, v0.11.2-RC, etc.)
+- 🔧 Patch releases (v0.12.1-rc.1, v0.12.2-rc.1, etc.)
 - 📊 Performance optimization based on feedback
 - 📝 Documentation improvements
-- ⛔ **NO breaking API changes** (API frozen at v0.11.0-RC)
+- ⛔ **NO breaking API changes** (API frozen at v0.12.0-rc.1)
 - ⛔ **NO new features** (wait for v1.1.0)
 
 **Exit Criteria**:
-- No critical bugs for 1 month
-- Positive community feedback
-- API proven stable in production projects
+- No critical bugs for 2+ months
+- Positive community feedback from real projects
+- API proven stable in production usage
 - Performance acceptable for real workloads
+- Ready for v1.0.0-rc.1
 
 ---
 
-### **v1.0.0-RC - Pre-Production** (After community validation)
+### **v1.0.0-rc.1 - Pre-Production** (After community validation)
 
 **Status**: 🔮 Future
-**Target**: ~June 2026
-**Goal**: Final validation before stable release
+**Target**: Mid-2026 (after v0.12.x-rc.x proven stable)
+**Goal**: Final validation before v1.0.0 stable release
 
 **Prerequisites**:
-- v0.11.x-RC stable for 1+ months
-- Positive community feedback
+- v0.12.x-rc.x stable for 2+ months
+- Positive community feedback from real projects
 - No critical bugs reported
-- API proven in production projects
+- API proven in production usage
+- User approval and trust established
 
 **Scope**:
-- Same features as v0.11.0-RC (feature-complete)
+- Same features as v0.12.0-rc.1 (feature-complete)
 - Proven stability in real-world usage
+- **ALL HDF5 formats supported** (v0, v2, v3, ready for their 2.0.0)
 - Final documentation review
 - Performance optimization complete
 - Migration guide finalized
@@ -432,15 +443,16 @@ After this release:
 
 ### **v1.0.0 - Production Stable** (After RC validation)
 
-**Status**: 🎯 Long-term goal
-**Target**: ~July 2026 (8-9 months from now)
-**Goal**: Stable production-ready library with API guarantee
+**Status**: 🎯 Ultimate Goal
+**Target**: Mid-late 2026 (after v1.0.0-rc.1 validation)
+**Goal**: Stable production-ready library with ALL HDF5 format support + API guarantee
 
 **Prerequisites**:
-- v1.0.0-RC validated in production by early adopters
+- v1.0.0-rc.1 validated in production by early adopters
 - 6+ months of real-world usage total
 - User community established
 - Success stories documented
+- Community approval and trust
 
 **Guarantees**:
 - ✅ **API contract** (no breaking changes in v1.x.x)
@@ -448,12 +460,14 @@ After this release:
 - ✅ **Semantic versioning** strictly followed
 - ✅ **Production recommended**
 - ✅ **Security updates** and bug fixes
+- ✅ **ALL HDF5 formats** (v0, v2, v3, their future 2.0.0 in v1.x.x updates)
 
 **Validation**:
 - 100% interoperability with C library
 - All files readable by `h5dump`
 - Stress testing in production environments
 - Performance benchmarks published
+- Ultra-modern library = all formats supported from day one!
 
 ---
 
@@ -610,9 +624,9 @@ func BenchmarkWriteDataset(b *testing.B) {
 | Data Structures | 10-14 weeks | 6-8 weeks | **1-1.5 months** | MEDIUM |
 | Production Features | 8-12 weeks | 6-8 weeks | **1-1.5 months** | MEDIUM |
 | Testing & Docs | 4-6 weeks | 3-4 weeks | **2-4 weeks** | HIGH |
-| **Total to v0.11.0-RC** | **34-48 weeks** | **23-32 weeks** | **5-8 months** | REALISTIC |
+| **Total to v0.12.0-rc.1** | **34-48 weeks** | **23-32 weeks** | **5-8 months** | REALISTIC |
 
-**Conservative Estimate**: 6 months (realistic with agent)
+**Conservative Estimate**: 6 months to v0.12.0-rc.1 (realistic with agent)
 **Aggressive Target**: 5 months (March 2026)
 **Best Case**: 4 months (if all goes perfectly)
 
@@ -620,25 +634,24 @@ func BenchmarkWriteDataset(b *testing.B) {
 
 ## 🎯 Current Priorities
 
-### **Immediate (Now - January 2026) - v0.11.0-beta**
+### **Immediate (Now - January 2026) - v0.11.x-beta**
 
-**Goal**: Basic write support MVP
+**Goal**: Continue adding write features incrementally
 
 **Priorities**:
-1. ⭐ Free space management (foundation)
-2. ⭐ File creation (superblock writing)
-3. ⭐ Contiguous dataset writing
-4. ⭐ Basic group creation
-5. ⭐ Compact attribute writing
-6. ⭐ Validation with h5dump
+1. ⭐ Read-modify-write for dense storage
+2. ⭐ Attribute modification/deletion
+3. ⭐ Links support (soft/external)
+4. ⭐ h5dump compatibility improvements
+5. ⭐ Advanced datatypes refinement
 
-**Success Metric**: Can create simple HDF5 files that C library can read
+**Success Metric**: Most common write operations work reliably
 
 ---
 
-### **Short Term (January - March 2026) - v0.11.0-RC**
+### **Short Term (January - March 2026) - v0.12.0-rc.1**
 
-**Goal**: Feature-complete + API stable
+**Goal**: Feature-complete + API stable + ALL HDF5 formats supported
 
 **Priorities**:
 1. ⭐ Chunked datasets with compression
@@ -652,11 +665,11 @@ func BenchmarkWriteDataset(b *testing.B) {
 9. ⭐ Complete testing (100+ reference files)
 10. ⭐ Complete documentation
 
-**Success Metric**: API frozen, all features done, ready for community testing
+**Success Metric**: API frozen, all features done, all HDF5 formats supported, ready for community testing
 
 ---
 
-### **Medium Term (March - June 2026) - v0.11.x-RC**
+### **Medium Term (March - June 2026) - v0.12.x-rc.x**
 
 **Goal**: Community testing and stability
 
@@ -667,13 +680,38 @@ func BenchmarkWriteDataset(b *testing.B) {
 4. 📝 Improve documentation based on user questions
 5. ✅ Maintain API stability (no breaking changes)
 
-**Success Metric**: Proven stable in production projects
+**Success Metric**: Proven stable in production projects, ready for v1.0.0-rc.1
 
 ---
 
-### **Long Term (June - July 2026) - v1.0.0**
+### **Long Term (After user validation) - v1.0.0-rc.1**
 
-**Goal**: Production stable release
+**Status**: 🔮 Future
+**Target**: After v0.12.x-rc.x proven stable (2+ months)
+**Goal**: Final validation before v1.0.0 stable release
+
+**Prerequisites**:
+- v0.12.x-rc.x stable for 2+ months
+- Positive community feedback from real projects
+- No critical bugs reported
+- API proven in production usage
+- User approval and trust established
+
+**Scope**:
+- Same features as v0.12.0-rc.1 (feature-complete)
+- Proven stability in real-world usage
+- **ALL HDF5 formats supported** (v0, v2, v3, ready for their 2.0.0)
+- Final documentation review
+- Performance optimization complete
+- Migration guide finalized
+
+---
+
+### **Long Term (After RC validation) - v1.0.0 STABLE**
+
+**Status**: 🎯 Ultimate Goal
+**Target**: Mid-late 2026 (after v1.0.0-rc.1 validation)
+**Goal**: Production stable release with ALL format support
 
 **Priorities**:
 1. 🎯 Final validation and polish
@@ -750,29 +788,33 @@ func BenchmarkWriteDataset(b *testing.B) {
 - ✅ 76.3% test coverage
 - ✅ 57 reference files tested
 
-### **v0.11.0-beta (Basic Write)**
+### **v0.11.x-beta (Write Features)** ✅ IN PROGRESS
 - ✅ Creates files readable by C library
 - ✅ h5dump works on Go-generated files
 - ✅ Basic datatypes written correctly
-- ✅ Contiguous datasets work
-- ✅ Simple groups and attributes work
+- ✅ Contiguous and chunked datasets work
+- ✅ Groups and attributes work
+- ✅ Superblock v0 and v2 support
 
-### **v0.11.0-RC (Feature Complete)** 🎯
+### **v0.12.0-rc.1 (Feature Complete)** 🎯
 - ✅ ALL features implemented
 - ✅ API frozen and documented
 - ✅ Test coverage >80%
 - ✅ 100+ reference files tested
 - ✅ Performance within 2x of C library
 - ✅ Round-trip: Go write → C read → Go read (identical)
+- ✅ **ALL HDF5 formats supported** (v0, v2, v3)
 - ✅ Ready for community testing
 
-### **v1.0.0 (Stable)**
+### **v1.0.0 (Stable)** 🎯
 - ✅ Community validated (production usage)
-- ✅ No critical bugs for 1+ month
+- ✅ No critical bugs for 2+ months
 - ✅ API stable for 6+ months
 - ✅ Performance acceptable
 - ✅ Complete documentation
 - ✅ Long-term support commitment
+- ✅ **Ultra-modern: ALL HDF5 formats from day one!**
+- ✅ Ready for their future HDF5 2.0.0 (will be v1.x.x update)
 
 ---
 
@@ -795,12 +837,13 @@ func BenchmarkWriteDataset(b *testing.B) {
 
 ---
 
-**Version**: 2.0 (Updated 2025-10-30)
+**Version**: 3.0 (Updated 2025-11-01)
 **Status**: Living Document (updated as we progress)
-**Next Update**: After v0.11.0-beta release
+**Next Update**: After v0.11.3-beta release
 
 ---
 
 *Built with reference to the battle-tested HDF5 C library*
 *Developed with Senior Go Developer & Architect mindset*
-*Path to production: v0.11.0-RC (feature-complete) → Community testing → v1.0.0 (stable)*
+*Ultra-modern library: ALL HDF5 formats supported in v1.0.0!*
+*Path to production: v0.12.0-rc.1 (feature-complete) → v0.12.x-rc.x (community testing) → v1.0.0-rc.1 → v1.0.0 (stable)*

@@ -141,7 +141,7 @@ func main() {
   - 57 reference HDF5 test files ✅
 
 ### ⚠️ Partial Support
-- **Dense Attributes**: Infrastructure ready, B-tree v2 iteration deferred to v0.11.0-RC (<10% of files affected)
+- **Dense Attributes**: Infrastructure ready, B-tree v2 iteration deferred to v0.12.0-rc.1 (<10% of files affected)
 
 ### ✍️ Write Support (v0.11.2-beta)
 - ✅ **File creation** - CreateForWrite() with Truncate/Exclusive modes
@@ -157,31 +157,14 @@ func main() {
 - ✅ **Legacy compatibility** - Files readable by HDF5 1.0+ tools ✨ NEW
 
 **Known Limitations (v0.11.2-beta)**:
-- Dense storage read-modify-write (adding after file reopen - v0.11.3-beta)
+- Dense storage read-modify-write (adding to existing after reopen)
 - Attribute modification/deletion (write-once only)
-- Some files not h5dump-readable yet (working on full compatibility)
+- Soft/external links not yet supported (hard links only)
+- Compound datatypes write support (planned for v0.12.0-rc.1)
 
 ### ❌ Planned Features
 
-**v0.11.3-beta (Next)** - Continue Write Support:
-- Dense storage read-modify-write (add to existing after reopen)
-- Attribute modification/deletion
-- Hard/soft/external links
-- h5dump compatibility improvements
-
-**v0.11.0-RC (Q1 2026)** - Feature Complete:
-- Compound datatypes for attributes
-- SWMR (Single Writer Multiple Reader)
-- API freeze
-- Community testing
-
-**v1.1.0+ (After Stable)** - Extended Features:
-- Other compression (SZIP, LZF, BZIP2)
-- Virtual datasets / external files
-- Parallel I/O
-- Advanced filters (N-bit, Scale-offset)
-
-See [ROADMAP.md](ROADMAP.md) for detailed timeline.
+**Next Steps** - See [ROADMAP.md](ROADMAP.md) for complete timeline and versioning strategy.
 
 ---
 

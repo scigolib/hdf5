@@ -169,7 +169,7 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 - **Message encoding** - Complete attribute message support
 - **Type inference** - Automatic datatype detection from Go values
 - **Value encoding** - Scalars, arrays, strings supported
-- **Implementation note** - Write deferred to v0.11.0-RC (object header modification)
+- **Implementation note** - Write deferred to v0.12.0-rc.1 (object header modification)
 - **Files**: `attribute_write.go` (~402 LOC)
 - **Tests**: 5 test functions for encoding/inference
 - **Coverage**: 94.1%
@@ -230,7 +230,7 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 - ✅ File creation
 - ✅ Dataset writing (contiguous layout, all datatypes including advanced)
 - ✅ Group creation (symbol table format)
-- ✅ Attributes (infrastructure ready, write in v0.11.0-RC)
+- ✅ Attributes (infrastructure ready, write in v0.11.1-beta)
 - ✅ Free space management (validated)
 - ✅ Advanced datatypes (arrays, enums, references, opaque)
 - ✅ Code quality (registry pattern, zero lint issues)
@@ -248,9 +248,8 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 - Object header modification for compact attributes
 - Hard/soft/external links
 
-### 🎯 Then: v0.11.0-RC (Feature Complete)
-- Dense attributes (fractal heap write)
-- SWMR support
+### 🎯 Then: v0.12.0-rc.1 (Feature Complete)
+- All remaining features (see ROADMAP.md)
 - API freeze
 - Community testing begins
 
