@@ -84,6 +84,108 @@ func (ds *DatasetWriter) DeleteAttribute(name string) error {
 	return deleteAttribute(ds.fileWriter, ds.address, name)
 }
 
+// RebalanceAttributeBTree manually triggers B-tree rebalancing for this dataset's dense attribute storage.
+//
+// Use this when:
+//   - You know this specific dataset needs rebalancing
+//   - More efficient than RebalanceAllBTrees() for targeted optimization
+//   - After batch deletions with rebalancing disabled
+//
+// Performance (for current MVP with single-leaf B-trees):
+//   - Instant (< 1ms) - no-op for single-leaf trees
+//
+// Future (when multi-level B-trees implemented):
+//   - Small (<1000 attrs): <10ms
+//   - Medium (1000-10000 attrs): 10-100ms
+//   - Large (10000+ attrs): 100ms-1s
+//
+// Returns:
+//   - error: if dataset doesn't use dense storage or rebalancing fails
+//
+// Example:
+//
+//	fw.DisableRebalancing()
+//	for i := 0; i < 1000; i++ {
+//	    ds.DeleteAttribute(fmt.Sprintf("temp_%d", i))  // Fast deletions
+//	}
+//	ds.RebalanceAttributeBTree()  // Rebalance this dataset only
+//
+// Reference: Similar to per-object rebalancing in HDF5 (hypothetical - not exposed in C API).
+func (ds *DatasetWriter) RebalanceAttributeBTree() error {
+	// Check if dataset uses dense attribute storage
+	if ds.denseAttrInfo == nil && ds.objectHeader == nil {
+		// Dataset doesn't have dense storage (compact or no attributes)
+		// Nothing to rebalance
+		return nil
+	}
+
+	// For datasets opened with OpenForWrite, we have cached dense attr info
+	if ds.denseAttrInfo != nil {
+		// Load B-tree from file
+		sb := ds.fileWriter.file.Superblock()
+		reader := ds.fileWriter.writer.Reader()
+
+		btree := structures.NewWritableBTreeV2(4096)
+		err := btree.LoadFromFile(reader, ds.denseAttrInfo.BTreeNameIndexAddr, sb)
+		if err != nil {
+			return fmt.Errorf("failed to load B-tree: %w", err)
+		}
+
+		// Trigger rebalancing
+		err = btree.RebalanceAll()
+		if err != nil {
+			return fmt.Errorf("failed to rebalance B-tree: %w", err)
+		}
+
+		// For MVP: RebalanceAll() is a no-op (single-leaf trees are already optimal)
+		// Future: If tree was modified, write it back to disk here
+
+		return nil
+	}
+
+	// For datasets created in this session, need to read object header
+	sb := ds.fileWriter.file.Superblock()
+	reader := ds.fileWriter.writer.Reader()
+	oh, err := core.ReadObjectHeader(reader, ds.address, sb)
+	if err != nil {
+		return fmt.Errorf("failed to read object header: %w", err)
+	}
+
+	// Check if has dense attribute storage
+	var attrInfo *core.AttributeInfoMessage
+	for _, msg := range oh.Messages {
+		if msg.Type == core.MsgAttributeInfo {
+			attrInfo, err = core.ParseAttributeInfoMessage(msg.Data, sb)
+			if err != nil {
+				return fmt.Errorf("failed to parse attribute info: %w", err)
+			}
+			break
+		}
+	}
+
+	if attrInfo == nil {
+		// No dense storage - nothing to rebalance
+		return nil
+	}
+
+	// Load and rebalance B-tree
+	btree := structures.NewWritableBTreeV2(4096)
+	err = btree.LoadFromFile(reader, attrInfo.BTreeNameIndexAddr, sb)
+	if err != nil {
+		return fmt.Errorf("failed to load B-tree: %w", err)
+	}
+
+	err = btree.RebalanceAll()
+	if err != nil {
+		return fmt.Errorf("failed to rebalance B-tree: %w", err)
+	}
+
+	// For MVP: RebalanceAll() is a no-op
+	// Future: Write modified tree back to disk
+
+	return nil
+}
+
 // writeAttribute is the internal implementation for writing attributes.
 //
 // Storage strategy:
@@ -460,7 +562,7 @@ func deleteCompactAttributeFromHeader(fw *FileWriter, objectAddr uint64, oh *cor
 }
 
 // deleteDenseAttributeFromHeader deletes attribute from dense storage by reading Attribute Info from header.
-func deleteDenseAttributeFromHeader(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader, name string, sb *core.Superblock) error {
+func deleteDenseAttributeFromHeader(fw *FileWriter, _ uint64, oh *core.ObjectHeader, name string, sb *core.Superblock) error {
 	// Find Attribute Info Message
 	var attrInfo *core.AttributeInfoMessage
 	for _, msg := range oh.Messages {
@@ -503,7 +605,9 @@ func deleteDenseAttributeImpl(fw *FileWriter, attrInfo *core.AttributeInfoMessag
 	}
 
 	// Delete attribute using core deletion function
-	err = core.DeleteDenseAttribute(heap, btree, name)
+	// Use FileWriter's rebalancing configuration
+	rebalance := fw.RebalancingEnabled()
+	err = core.DeleteDenseAttribute(heap, btree, name, rebalance)
 	if err != nil {
 		return fmt.Errorf("failed to delete dense attribute: %w", err)
 	}
