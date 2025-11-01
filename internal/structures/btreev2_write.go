@@ -134,6 +134,9 @@ type WritableBTreeV2 struct {
 	// Addresses loaded from file (for RMW scenarios)
 	loadedHeaderAddress uint64
 	loadedLeafAddress   uint64
+
+	// Lazy rebalancing state (nil if disabled)
+	lazyState *LazyRebalancingState
 }
 
 // NewWritableBTreeV2 creates a new B-tree v2 for link name indexing.

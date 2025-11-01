@@ -338,7 +338,7 @@ func ModifyDenseAttribute(heap HeapWriter, btree BTreeWriter, name string, newAt
 //
 // Algorithm (matching H5Adense.c:H5A__dense_remove):
 // 1. Search B-tree v2 for attribute name → get heap ID
-// 2. Delete record from B-tree
+// 2. Delete record from B-tree (with optional rebalancing)
 // 3. Delete object from fractal heap
 // 4. Update Attribute Info message (decrement count)
 //
@@ -346,17 +346,17 @@ func ModifyDenseAttribute(heap HeapWriter, btree BTreeWriter, name string, newAt
 //   - heap: Writable fractal heap (loaded from file)
 //   - btree: Writable B-tree v2 (loaded from file)
 //   - name: Attribute name to delete
+//   - rebalance: If true, use DeleteRecordWithRebalancing for optimal tree structure
 //
 // Returns:
 //   - error: Non-nil if deletion fails
 //
-// MVP Limitations:
-//   - No transition from dense → compact (HDF5 C library doesn't do this either)
-//   - Fractal heap space is freed but not compacted (acceptable)
-//   - B-tree node is not rebalanced/merged (acceptable for MVP)
+// Rebalancing behavior:
+//   - When rebalance=true: Maintains optimal B-tree structure (nodes ≥50% full)
+//   - When rebalance=false: Faster deletion, tree may become sparse
 //
 // Reference: H5Adense.c - H5A__dense_remove(), H5Adelete.c - H5A__delete().
-func DeleteDenseAttribute(heap HeapWriter, btree BTreeWriter, name string) error {
+func DeleteDenseAttribute(heap HeapWriter, btree BTreeWriter, name string, rebalance bool) error {
 	if heap == nil || btree == nil {
 		return fmt.Errorf("heap or btree is nil")
 	}
@@ -370,8 +370,17 @@ func DeleteDenseAttribute(heap HeapWriter, btree BTreeWriter, name string) error
 		return fmt.Errorf("attribute %q not found in dense storage", name)
 	}
 
-	// 2. Delete record from B-tree
-	err := btree.DeleteRecord(name)
+	// 2. Delete record from B-tree (choose deletion strategy)
+	var err error
+	switch {
+	case btree.IsLazyRebalancingEnabled():
+		// Use lazy deletion for performance (10-100x faster)
+		err = btree.DeleteRecordLazy(name)
+	case rebalance:
+		err = btree.DeleteRecordWithRebalancing(name)
+	default:
+		err = btree.DeleteRecord(name)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to delete B-tree record: %w", err)
 	}
@@ -403,4 +412,7 @@ type BTreeWriter interface {
 	SearchRecord(name string) ([]byte, bool)
 	UpdateRecord(name string, newHeapID uint64) error
 	DeleteRecord(name string) error
+	DeleteRecordWithRebalancing(name string) error
+	DeleteRecordLazy(name string) error
+	IsLazyRebalancingEnabled() bool
 }
