@@ -499,36 +499,45 @@ Benefits:
 - More efficient storage
 - Easier to maintain consistency
 
-### 5. Test with Python h5py
+### 5. Create Test Files in Pure Go
 
-Generate test files using Python for verification:
+Generate test files using this library (no Python needed!):
 
-```python
-import h5py
-import numpy as np
+```go
+package main
 
-with h5py.File('test_types.h5', 'w') as f:
-    # Test all supported types
-    f.create_dataset('int32', data=np.array([1, 2, 3], dtype='i4'))
-    f.create_dataset('int64', data=np.array([1, 2, 3], dtype='i8'))
-    f.create_dataset('float32', data=np.array([1.1, 2.2, 3.3], dtype='f4'))
-    f.create_dataset('float64', data=np.array([1.1, 2.2, 3.3], dtype='f8'))
+import (
+    "log"
+    "github.com/scigolib/hdf5"
+)
 
-    # Fixed-length strings
-    dt = h5py.string_dtype(encoding='utf-8', length=10)
-    f.create_dataset('strings_fixed', data=[b'hello', b'world'], dtype=dt)
+func main() {
+    // Create test file
+    fw, _ := hdf5.CreateForWrite("test_types.h5", hdf5.CreateTruncate)
+    defer fw.Close()
 
-    # Variable-length strings
-    dt = h5py.string_dtype(encoding='utf-8')
-    f.create_dataset('strings_vlen', data=['hello', 'world'], dtype=dt)
+    // Test all supported types
+    fw.CreateDataset("/int32", hdf5.Int32, []uint64{3})
+    fw.CreateDataset("/int64", hdf5.Int64, []uint64{3})
+    fw.CreateDataset("/float32", hdf5.Float32, []uint64{3})
+    fw.CreateDataset("/float64", hdf5.Float64, []uint64{3})
 
-    # Compound type
-    dt = np.dtype([('x', 'f8'), ('y', 'f8'), ('name', 'S20')])
-    data = np.array([(1.0, 2.0, b'point1'), (3.0, 4.0, b'point2')], dtype=dt)
-    f.create_dataset('compound', data=data)
+    // Fixed-length strings
+    fw.CreateDataset("/strings_fixed", hdf5.StringFixed(10), []uint64{2})
+
+    // Arrays
+    fw.CreateDataset("/arrays", hdf5.ArrayFloat32, []uint64{10},
+        hdf5.WithArrayDims([]uint64{3, 3}))
+
+    // Enums
+    fw.CreateDataset("/status", hdf5.EnumInt8, []uint64{5},
+        hdf5.WithEnumValues([]string{"OK", "ERROR"}, []int64{0, 1}))
+
+    // Write data, verify with h5dump!
+}
 ```
 
-Then read with Go and verify values match!
+**Pure Go workflow** - Write with this library, validate with h5dump or Python h5py!
 
 ---
 
