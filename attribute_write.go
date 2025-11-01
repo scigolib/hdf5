@@ -237,7 +237,11 @@ func writeAttributeWithCachedHeader(fw *FileWriter, objectAddr uint64, oh *core.
 	return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
 }
 
-// writeDenseAttributeWithInfo writes attribute to existing dense storage using provided info.
+// writeDenseAttributeWithInfo writes or modifies attribute in existing dense storage.
+//
+// This implements upsert semantics for dense attributes:
+// - If attribute exists → modify it (Phase 2: Dense modification)
+// - If attribute doesn't exist → create it (Phase 3: Dense RMW)
 //
 // This is similar to writeDenseAttribute but uses the cached AttributeInfoMessage
 // instead of searching for it in the object header.
@@ -257,7 +261,7 @@ func writeDenseAttributeWithInfo(fw *FileWriter, _ uint64, _ *core.ObjectHeader,
 		return fmt.Errorf("failed to load B-tree: %w", err)
 	}
 
-	// Encode and add new attribute
+	// Prepare new attribute
 	datatype, dataspace, err := inferDatatypeFromValue(value)
 	if err != nil {
 		return fmt.Errorf("failed to infer datatype: %w", err)
@@ -281,22 +285,37 @@ func writeDenseAttributeWithInfo(fw *FileWriter, _ uint64, _ *core.ObjectHeader,
 		return fmt.Errorf("failed to encode attribute: %w", err)
 	}
 
-	// Insert into fractal heap
-	heapIDBytes, err := heap.InsertObject(attrMsg)
-	if err != nil {
-		return fmt.Errorf("failed to insert into heap: %w", err)
-	}
+	// Check if attribute already exists (upsert semantics)
+	_, exists := btree.SearchRecord(name)
 
-	// Convert heap ID to uint64 for B-tree
-	if len(heapIDBytes) != 8 {
-		return fmt.Errorf("unexpected heap ID length: %d bytes", len(heapIDBytes))
-	}
-	heapID := binary.LittleEndian.Uint64(heapIDBytes)
+	if exists { //nolint:nestif // Clear upsert logic
+		// Modify existing attribute (Phase 2)
+		// Set the encoded data in attr for ModifyDenseAttribute
+		attr.Data = attrMsg
+		err = core.ModifyDenseAttribute(heap, btree, name, attr)
+		if err != nil {
+			return fmt.Errorf("failed to modify existing dense attribute: %w", err)
+		}
+	} else {
+		// Create new attribute (Phase 3 - original RMW code)
 
-	// Insert into B-tree
-	err = btree.InsertRecord(name, heapID)
-	if err != nil {
-		return fmt.Errorf("failed to insert into B-tree: %w", err)
+		// Insert into fractal heap
+		heapIDBytes, insertErr := heap.InsertObject(attrMsg)
+		if insertErr != nil {
+			return fmt.Errorf("failed to insert into heap: %w", insertErr)
+		}
+
+		// Convert heap ID to uint64 for B-tree
+		if len(heapIDBytes) != 8 {
+			return fmt.Errorf("unexpected heap ID length: %d bytes", len(heapIDBytes))
+		}
+		heapID := binary.LittleEndian.Uint64(heapIDBytes)
+
+		// Insert into B-tree
+		err = btree.InsertRecord(name, heapID)
+		if err != nil {
+			return fmt.Errorf("failed to insert into B-tree: %w", err)
+		}
 	}
 
 	// Write updated structures back to file (IN-PLACE using WriteAt)
@@ -328,6 +347,8 @@ func writeDenseAttributeWithInfo(fw *FileWriter, _ uint64, _ *core.ObjectHeader,
 // (i.e., files that were created, closed, and reopened).
 //
 // Reference: H5Adense.c - H5A__dense_insert().
+//
+//nolint:gocognit,gocyclo,cyclop // Complex RMW logic with multiple verification steps
 func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
 	// Step 1: Find Attribute Info Message
@@ -362,7 +383,7 @@ func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 		return fmt.Errorf("failed to load B-tree: %w", err)
 	}
 
-	// Step 4: Encode and add new attribute
+	// Step 4: Prepare new attribute
 	datatype, dataspace, err := inferDatatypeFromValue(value)
 	if err != nil {
 		return fmt.Errorf("failed to infer datatype: %w", err)
@@ -386,22 +407,36 @@ func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 		return fmt.Errorf("failed to encode attribute: %w", err)
 	}
 
-	// Insert into fractal heap
-	heapIDBytes, err := heap.InsertObject(attrMsg)
-	if err != nil {
-		return fmt.Errorf("failed to insert into heap: %w", err)
-	}
+	// Check if attribute already exists (upsert semantics)
+	_, exists := btree.SearchRecord(name)
 
-	// Convert heap ID to uint64 for B-tree
-	if len(heapIDBytes) != 8 {
-		return fmt.Errorf("unexpected heap ID length: %d bytes", len(heapIDBytes))
-	}
-	heapID := binary.LittleEndian.Uint64(heapIDBytes)
+	if exists { //nolint:nestif // Clear upsert logic
+		// Modify existing attribute (Phase 2)
+		attr.Data = attrMsg
+		err = core.ModifyDenseAttribute(heap, btree, name, attr)
+		if err != nil {
+			return fmt.Errorf("failed to modify existing dense attribute: %w", err)
+		}
+	} else {
+		// Create new attribute (Phase 3 - original code)
 
-	// Insert into B-tree
-	err = btree.InsertRecord(name, heapID)
-	if err != nil {
-		return fmt.Errorf("failed to insert into B-tree: %w", err)
+		// Insert into fractal heap
+		heapIDBytes, insertErr := heap.InsertObject(attrMsg)
+		if insertErr != nil {
+			return fmt.Errorf("failed to insert into heap: %w", insertErr)
+		}
+
+		// Convert heap ID to uint64 for B-tree
+		if len(heapIDBytes) != 8 {
+			return fmt.Errorf("unexpected heap ID length: %d bytes", len(heapIDBytes))
+		}
+		heapID := binary.LittleEndian.Uint64(heapIDBytes)
+
+		// Insert into B-tree
+		err = btree.InsertRecord(name, heapID)
+		if err != nil {
+			return fmt.Errorf("failed to insert into B-tree: %w", err)
+		}
 	}
 
 	// Step 5: Write updated structures back to file (IN-PLACE using WriteAt)

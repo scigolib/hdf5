@@ -4,6 +4,7 @@
 package hdf5_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -292,5 +293,259 @@ func TestAttributeModification_MultipleModifications(t *testing.T) {
 
 	if intValue, ok := value.(int32); !ok || intValue != 9 {
 		t.Errorf("Expected version=9 (final value), got %v (type %T)", value, value)
+	}
+}
+
+// TestAttributeModification_DenseUpsert tests upsert semantics for dense attributes.
+//
+// Verifies:
+//   - Creating 8+ attributes triggers dense storage
+//   - Modifying an existing dense attribute works (same size)
+//   - Modifying an existing dense attribute works (different size)
+//   - Reading back modified attribute shows new value
+//
+// This is Phase 2: Dense attribute modification.
+//
+// Reference: H5Adense.c - H5A__dense_write().
+//
+//nolint:gocognit // Test function with multiple verification steps
+func TestAttributeModification_DenseUpsert(t *testing.T) {
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "attr_modify_dense.h5")
+
+	// Step 1: Create file with dataset
+	fw, err := hdf5.CreateForWrite(testFile, hdf5.CreateTruncate)
+	if err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+
+	dims := []uint64{10}
+	ds, err := fw.CreateDataset("/temperature", hdf5.Float64, dims)
+	if err != nil {
+		t.Fatalf("Failed to create dataset: %v", err)
+	}
+
+	// Step 2: Create 8 attributes to trigger dense storage
+	for i := 0; i < 8; i++ {
+		err = ds.WriteAttribute(fmt.Sprintf("attr_%d", i), int32(i*10))
+		if err != nil {
+			t.Fatalf("Failed to write attribute %d: %v", i, err)
+		}
+	}
+
+	// Step 3: Modify one of the dense attributes (same size)
+	err = ds.WriteAttribute("attr_3", int32(999))
+	if err != nil {
+		t.Fatalf("Failed to modify dense attribute (same size): %v", err)
+	}
+
+	// Step 4: Modify another dense attribute (different size - string)
+	// Note: This changes from int32 (4 bytes) to string (variable)
+	// For this test, we'll stick with same type but different value
+	err = ds.WriteAttribute("attr_5", int32(555))
+	if err != nil {
+		t.Fatalf("Failed to modify dense attribute: %v", err)
+	}
+
+	// Step 5: Add one more attribute (9th) - should also be dense
+	err = ds.WriteAttribute("extra", int32(1000))
+	if err != nil {
+		t.Fatalf("Failed to add 9th attribute: %v", err)
+	}
+
+	// Step 6: Modify the newly added attribute
+	err = ds.WriteAttribute("extra", int32(2000))
+	if err != nil {
+		t.Fatalf("Failed to modify newly added dense attribute: %v", err)
+	}
+
+	// Close and reopen
+	err = fw.Close()
+	if err != nil {
+		t.Fatalf("Failed to close file: %v", err)
+	}
+
+	// Step 7: Read back and verify
+	f, err := hdf5.Open(testFile)
+	if err != nil {
+		t.Fatalf("Failed to reopen file: %v", err)
+	}
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(testFile)
+	}()
+
+	// Access dataset through walk
+	var dataset *hdf5.Dataset
+	f.Walk(func(_ string, obj hdf5.Object) {
+		if ds, ok := obj.(*hdf5.Dataset); ok && ds.Name() == "temperature" {
+			dataset = ds
+		}
+	})
+	if dataset == nil {
+		t.Fatalf("Failed to find dataset 'temperature'")
+	}
+
+	// Verify attributes
+	attrs, err := dataset.Attributes()
+	if err != nil {
+		t.Fatalf("Failed to read attributes: %v", err)
+	}
+
+	if len(attrs) != 9 {
+		t.Fatalf("Expected 9 attributes, got %d", len(attrs))
+	}
+
+	// Verify modified attributes
+	attr3Found := false
+	attr5Found := false
+	extraFound := false
+
+	for _, attr := range attrs {
+		value, err := attr.ReadValue()
+		if err != nil {
+			t.Fatalf("Failed to read attribute value: %v", err)
+		}
+
+		if attr.Name == "attr_3" {
+			attr3Found = true
+			if intValue, ok := value.(int32); !ok || intValue != 999 {
+				t.Errorf("Expected attr_3=999 (modified), got %v (type %T)", value, value)
+			}
+		}
+
+		if attr.Name == "attr_5" {
+			attr5Found = true
+			if intValue, ok := value.(int32); !ok || intValue != 555 {
+				t.Errorf("Expected attr_5=555 (modified), got %v (type %T)", value, value)
+			}
+		}
+
+		if attr.Name == "extra" {
+			extraFound = true
+			if intValue, ok := value.(int32); !ok || intValue != 2000 {
+				t.Errorf("Expected extra=2000 (modified), got %v (type %T)", value, value)
+			}
+		}
+	}
+
+	if !attr3Found {
+		t.Error("Attribute 'attr_3' not found")
+	}
+	if !attr5Found {
+		t.Error("Attribute 'attr_5' not found")
+	}
+	if !extraFound {
+		t.Error("Attribute 'extra' not found")
+	}
+}
+
+// TestAttributeModification_DenseDifferentSize tests modifying dense attributes with different sizes.
+//
+// Verifies:
+//   - Modifying short string → long string in dense storage
+//   - Modifying long string → short string in dense storage
+//   - Delete + insert logic works correctly
+//
+// Reference: H5HF.c - H5HF_remove() + H5HF_insert().
+//
+//nolint:gocognit // Test function with multiple verification steps
+func TestAttributeModification_DenseDifferentSize(t *testing.T) {
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "attr_modify_dense_size.h5")
+
+	fw, err := hdf5.CreateForWrite(testFile, hdf5.CreateTruncate)
+	if err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+
+	dims := []uint64{5}
+	ds, err := fw.CreateDataset("/data", hdf5.Int32, dims)
+	if err != nil {
+		t.Fatalf("Failed to create dataset: %v", err)
+	}
+
+	// Create 8 attributes to trigger dense storage
+	for i := 0; i < 7; i++ {
+		err = ds.WriteAttribute(fmt.Sprintf("padding_%d", i), int32(i))
+		if err != nil {
+			t.Fatalf("Failed to write padding attribute %d: %v", i, err)
+		}
+	}
+
+	// Add attribute with short string (8th attribute - triggers dense)
+	err = ds.WriteAttribute("name", "A")
+	if err != nil {
+		t.Fatalf("Failed to write short string: %v", err)
+	}
+
+	// Modify to long string (different size)
+	err = ds.WriteAttribute("name", "VeryLongAttributeValueThatExceedsOriginalSize")
+	if err != nil {
+		t.Fatalf("Failed to modify to long string: %v", err)
+	}
+
+	// Modify back to short string
+	err = ds.WriteAttribute("name", "B")
+	if err != nil {
+		t.Fatalf("Failed to modify back to short string: %v", err)
+	}
+
+	// Close and verify
+	err = fw.Close()
+	if err != nil {
+		t.Fatalf("Failed to close file: %v", err)
+	}
+
+	f, err := hdf5.Open(testFile)
+	if err != nil {
+		t.Fatalf("Failed to reopen file: %v", err)
+	}
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(testFile)
+	}()
+
+	// Access dataset through walk
+	var dataset *hdf5.Dataset
+	f.Walk(func(_ string, obj hdf5.Object) {
+		if ds, ok := obj.(*hdf5.Dataset); ok && ds.Name() == "data" {
+			dataset = ds
+		}
+	})
+	if dataset == nil {
+		t.Fatalf("Failed to find dataset 'data'")
+	}
+
+	attrs, err := dataset.Attributes()
+	if err != nil {
+		t.Fatalf("Failed to read attributes: %v", err)
+	}
+
+	if len(attrs) != 8 {
+		t.Fatalf("Expected 8 attributes, got %d", len(attrs))
+	}
+
+	// Find and verify the "name" attribute
+	nameFound := false
+	for _, attr := range attrs {
+		if attr.Name != "name" {
+			continue
+		}
+
+		nameFound = true
+		value, err := attr.ReadValue()
+		if err != nil {
+			t.Fatalf("Failed to read attribute value: %v", err)
+		}
+
+		if strValue, ok := value.(string); !ok || strValue != "B" {
+			t.Errorf("Expected name='B', got %v (type %T)", value, value)
+		}
+		break
+	}
+
+	if !nameFound {
+		t.Error("Attribute 'name' not found")
 	}
 }
