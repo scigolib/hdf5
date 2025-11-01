@@ -660,7 +660,7 @@ file.Walk(func(path string, obj hdf5.Object) {
 
 ### 5. Reuse File Handles (Concurrency)
 
-**Note**: Current version (v0.11.0-beta) is not thread-safe. Each goroutine should have its own file handle:
+**Note**: Current version is not thread-safe. Each goroutine should have its own file handle:
 
 ```go
 // For concurrent processing, open multiple handles
@@ -826,5 +826,5 @@ func main() {
 
 ---
 
-*Last Updated: 2025-10-29*
-*Version: 0.10.0-beta*
+*Last Updated: 2025-11-01*
+*Version: 0.11.3-beta*

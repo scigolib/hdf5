@@ -31,8 +31,8 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 - ✅ **Actively maintained** - Regular updates and improvements
 
 **Trade-offs**:
-- ⚠️ **Write support advancing** - v0.11.1-beta has chunked/compression/attributes (more in v0.11.2+)
-- ⚠️ **Some advanced features missing** - Virtual datasets, parallel I/O, SWMR (planned)
+- ⚠️ **Write support advancing** - v0.11.3-beta has dense storage RMW complete, more features coming in v0.11.4+
+- ⚠️ **Some advanced features missing** - Compound write, virtual datasets, parallel I/O, SWMR (planned for v0.12.0-rc.1)
 - ⚠️ **Slightly slower** - Pure Go is 2-3x slower than C for some operations (but fast enough for most use cases)
 
 ### Why pure Go? Why not use CGo?
@@ -58,9 +58,9 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 
 **For reading**: **Feature-complete!** ✅ Production-ready for reading HDF5 files.
 
-**For writing**: **MVP ready!** ✅ v0.11.0-beta has basic write support.
+**For writing**: **Advancing rapidly!** ✅ v0.11.3-beta has dense storage RMW complete.
 
-**Read Support (v0.10.0+)**:
+**Read Support**:
 - ✅ All datatypes (integers, floats, strings, compounds, arrays, enums, references, opaque)
 - ✅ All dataset layouts (compact, contiguous, chunked)
 - ✅ GZIP compression
@@ -68,22 +68,25 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 - ✅ Attributes (compact and dense)
 - ✅ Both old (pre-1.8) and modern (1.8+) HDF5 files
 
-**Write Support (v0.11.0-beta MVP)**:
+**Write Support (v0.11.3-beta)**:
 - ✅ File creation (Truncate/Exclusive modes)
 - ✅ Dataset writing (contiguous + chunked layouts, all datatypes)
 - ✅ Chunked datasets (B-tree v1 indexing, chunk storage)
 - ✅ Compression (GZIP/deflate, Shuffle filter, Fletcher32 checksum)
 - ✅ Group creation (symbol table + dense groups with automatic transition)
 - ✅ Attribute writing (compact 0-7 + dense 8+ with automatic transition)
+- ✅ **Dense storage RMW** (Read-Modify-Write for existing dense attributes) ✨ NEW
 - ✅ Advanced datatypes (arrays, enums, references, opaque)
+- ✅ Legacy formats (Superblock v0 + Object Header v1)
 
-**Limitations (v0.11.1-beta)**:
-- ⚠️ Dense storage read-modify-write (adding after file reopen - v0.11.2-beta)
+**Limitations (v0.11.3-beta)**:
 - ⚠️ Attribute modification/deletion (write-once only)
+- ⚠️ Soft/external links not yet supported
+- ⚠️ Compound datatypes write support
 - ⚠️ Other compression formats (SZIP, LZF) - planned for v1.1.0+
 
 **Quality metrics**:
-- Test coverage: 70.2%
+- Test coverage: 86.1%
 - Lint issues: 0 (34+ linters)
 - 57 reference test files
 - 200+ test cases
@@ -100,7 +103,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 **Not ideal for** (yet):
 - Applications requiring all advanced HDF5 features (virtual datasets, parallel I/O, SWMR)
 - Performance-critical loops requiring C-level speed
-- Modifying existing dense storage after file reopen (coming in v0.11.2-beta)
+- Attribute modification/deletion (write-once only for now)
 
 ---
 
@@ -129,9 +132,9 @@ See [Reading Data Guide](READING_DATA.md) for details.
 
 ### Can I write HDF5 files?
 
-**Yes! MVP write support available in v0.11.0-beta.** ✅
+**Yes! Write support advancing rapidly in v0.11.3-beta.** ✅
 
-**What's supported (v0.11.0-beta)**:
+**What's supported (v0.11.3-beta)**:
 ```go
 // Create new HDF5 file
 fw, err := hdf5.CreateForWrite("output.h5", hdf5.CreateTruncate)
@@ -155,13 +158,13 @@ enumDs, _ := fw.CreateDataset("/status", hdf5.EnumInt8, []uint64{5},
     hdf5.WithEnumValues([]string{"OK", "ERROR"}, []int64{0, 1}))
 ```
 
-**Current limitations (v0.11.1-beta)**:
-- Dense storage read-modify-write (adding after file reopen - v0.11.2-beta)
+**Current limitations (v0.11.3-beta)**:
 - Attribute modification/deletion (write-once only)
-- h5dump compatibility (working on it)
+- Soft/external links not yet supported
+- Compound datatype write support
 
 **Coming soon**:
-- **v0.11.2-beta**: Dense storage read-modify-write, attribute modifications
+- **v0.11.4-beta**: Links support, attribute modifications
 - **v0.12.0-rc.1**: Feature complete, API freeze, community testing
 - **v1.0.0**: Production-ready write support
 
@@ -188,25 +191,28 @@ for _, attr := range attrs {
 - ✅ Compact attributes (in object header)
 - ✅ Dense attributes (fractal heap direct blocks)
 
-**Limitation**: Dense attributes in B-tree v2 (rare, <10% of files) deferred to v0.11.0.
+**Limitation**: Dense attributes in B-tree v2 (rare, <10% of files) deferred to v0.12.0-rc.1.
 
 ### What datatypes are supported?
 
 **Fully Supported (Read + Write)**:
+
 | HDF5 Type | Go Type | Read | Write |
 |-----------|---------|------|-------|
-| H5T_INTEGER (int8-64, uint8-64) | int/uint → float64 | ✅ | ✅ v0.11.0 |
-| H5T_FLOAT (32/64-bit) | float32, float64 | ✅ | ✅ v0.11.0 |
-| H5T_STRING (fixed) | string | ✅ | ✅ v0.11.0 |
-| H5T_STRING (variable) | string | ✅ | ⏳ v0.11.1 |
-| H5T_COMPOUND | map[string]interface{} | ✅ | ⏳ v0.11.1 |
-| H5T_ARRAY | fixed arrays | ✅ | ✅ v0.11.0 |
-| H5T_ENUM | named integers | ✅ | ✅ v0.11.0 |
-| H5T_REFERENCE | object/region refs | ✅ | ✅ v0.11.0 |
-| H5T_OPAQUE | binary blobs | ✅ | ✅ v0.11.0 |
+| H5T_INTEGER | int8-64, uint8-64 | ✅ | ✅ |
+| H5T_FLOAT | float32, float64 | ✅ | ✅ |
+| H5T_STRING | string | ✅ | ✅ |
+| H5T_ARRAY | fixed arrays | ✅ | ✅ |
+| H5T_ENUM | named integers | ✅ | ✅ |
+| H5T_REFERENCE | object/region refs | ✅ | ✅ |
+| H5T_OPAQUE | binary blobs | ✅ | ✅ |
 
-**Not Yet Supported** (planned for v1.0.0+):
-- H5T_TIME (time types) - rare, low priority
+**Partial Support**:
+- H5T_COMPOUND: ✅ Read, ❌ Write (planned)
+- H5T_VLEN: ✅ Read, ❌ Write (planned)
+
+**Not Supported**:
+- H5T_TIME - deprecated in HDF5 since v1.4, never fully implemented
 
 See [Datatypes Guide](DATATYPES.md) for detailed type mapping.
 
@@ -227,7 +233,7 @@ See [Datatypes Guide](DATATYPES.md) for detailed type mapping.
 h5repack -f GZIP=6 input.h5 output.h5
 ```
 
-GZIP support planned for v1.2.0 (see ROADMAP.md).
+GZIP compression fully supported (both reading and writing).
 
 ### What HDF5 versions are supported?
 
@@ -238,7 +244,7 @@ GZIP support planned for v1.2.0 (see ROADMAP.md).
 - ✅ **Version 3** (HDF5 1.10+ with SWMR)
 
 **Object Header Versions**:
-- ✅ **Version 1** (pre-HDF5 1.8) ✨ v0.10.0-beta
+- ✅ **Version 1** (pre-HDF5 1.8)
 - ✅ **Version 2** (HDF5 1.8+)
 
 **File Formats**:
@@ -246,7 +252,7 @@ GZIP support planned for v1.2.0 (see ROADMAP.md).
 - ✅ Modern groups (object headers)
 - ✅ Both old and new B-tree formats
 
-**Compatibility**: Reads files from HDF5 1.0 (1998) through latest HDF5 1.14+ (2024).
+**Compatibility**: Reads and writes files compatible with HDF5 1.0 (1998) through latest HDF5 1.14+ (2024). Ready for future HDF5 formats (will be added in v1.x.x updates).
 
 ### Does it support large files?
 
@@ -259,7 +265,7 @@ GZIP support planned for v1.2.0 (see ROADMAP.md).
 
 **Large Datasets**:
 - ✅ Chunked datasets can be any size (read chunk-by-chunk)
-- ⚠️ Entire dataset loaded into memory on `Read()` (streaming planned for v1.0.0)
+- ⚠️ Entire dataset loaded into memory on `Read()` (streaming API planned for v0.12.0-rc.1)
 
 **Best Practices**:
 - Process datasets one at a time
@@ -301,7 +307,7 @@ file.Walk(func(path string, obj hdf5.Object) {
 
 ### Is it thread-safe?
 
-**Current (v0.11.0-beta)**: **No** - Each `File` instance should be used from a single goroutine.
+**Currently**: **No** - Each `File` instance should be used from a single goroutine.
 
 **Workaround**: Open separate file handles per goroutine:
 
@@ -327,13 +333,13 @@ for _, dsPath := range datasetPaths {
 wg.Wait()
 ```
 
-**Future**: Concurrent reader support planned for v1.0.0.
+**Future**: Full thread-safety with mutexes + SWMR mode planned for v0.12.0-rc.1.
 
 ### Can I stream large datasets?
 
 **Current**: No - entire dataset read into memory.
 
-**Future**: Streaming/chunked reading API planned for v1.0.0:
+**Future**: Streaming/chunked reading API planned for v0.12.0-rc.1:
 
 ```go
 // Future API (not available yet)
@@ -499,7 +505,7 @@ if err == nil {
 - `main` branch: Stable releases only
 - `develop` branch: Active development (default)
 - Feature branches: `feature/object-header-v1`
-- Release branches: `release/v0.11.0-beta`
+- Release branches: `release/v0.11.x-beta`
 
 **Process**:
 1. Fork repository
@@ -545,45 +551,50 @@ if err == nil {
 
 ## 🗺️ Roadmap and Future
 
-### When will write support be available?
+### What's the current write support status?
 
-**Timeline**:
-- **v0.11.0-beta** (2-3 months): MVP write support
-  - File creation
-  - Basic dataset writing (contiguous layout)
-  - Group creation
-  - Simple attributes
+**Already Available** (v0.11.3-beta):
+- ✅ File creation with multiple superblock formats (v0, v2)
+- ✅ Dataset writing: contiguous and chunked layouts
+- ✅ Compression: GZIP, Shuffle filter, Fletcher32 checksum
+- ✅ Groups: symbol table and dense formats
+- ✅ Attributes: compact (0-7) and dense (8+) storage
+- ✅ **Dense storage RMW** (add to existing after reopen) ✨ NEW
+- ✅ Advanced datatypes: arrays, enums, references, opaque
+- ✅ Legacy format support (v0 superblock + Object Header v1)
 
-- **v0.12.0-beta / v1.0.0** (5-6 months): Full write support
-  - Chunked datasets with compression
-  - Dataset updates and resizing
-  - Full attribute writing
-  - Complex datatypes
-  - Transaction safety
+**Coming Soon** (v0.11.4-beta):
+- Attribute modification and deletion
+- Links support (soft/external)
+- Indirect blocks for fractal heap
 
-See [ROADMAP.md](../../ROADMAP.md) for detailed plans.
+See [ROADMAP.md](../../ROADMAP.md) for complete roadmap.
 
 ### What features are planned?
 
-**Short-term** (v0.11.0 - v0.11.1):
-- ✅ MVP write support (done in v0.11.0-beta)
-- ⏳ Chunked datasets + compression
-- ⏳ Compact attributes write
-- ⏳ Dense groups (Link Info)
+**Near-term** (v0.11.x-beta releases):
+- ✅ MVP write support
+- ✅ Chunked datasets + compression
+- ✅ Dense groups and attributes
+- ✅ Legacy format support (v0 superblock)
+- ✅ Dense storage RMW ✨ COMPLETE
+- ⏳ Attribute modification/deletion (next)
+- ⏳ Links support (soft/external) (next)
 
-**Medium-term** (v0.11.1 - v1.0.0):
-- ✅ Advanced datatypes (arrays, enums) - done in v0.11.0-beta
-- More compression formats (SZIP, LZF)
-- Chunked dataset writing with compression
-- Dataset resizing
-- Full write support with all features
+**Feature Complete** (v0.12.0-rc.1 - Q1 2026):
+- Compound datatypes write
+- Thread-safety with mutexes
+- SWMR (Single Writer Multiple Reader)
+- Streaming API for large datasets
+- All remaining HDF5 features
+- API freeze
 
-**Long-term** (v1.1.0+):
-- Virtual datasets (VDS read support)
-- External file links
-- Parallel I/O
-- Advanced performance optimizations
-- Thread-safe concurrent operations
+**Stable Release** (v1.0.0 - Mid-late 2026):
+- Community validated
+- Production-ready
+- Long-term support (2+ years)
+- ALL HDF5 formats supported (v0, v2, v3)
+- Ready for HDF5 2.0.0 (currently in development, will be added in v1.x.x updates)
 
 ### Will v1.0.0 break the API?
 
@@ -642,5 +653,5 @@ See [ROADMAP.md](../../ROADMAP.md) for versioning strategy.
 
 ---
 
-*Last Updated: 2025-10-30*
-*Version: 0.11.0-beta*
+*Last Updated: 2025-11-01*
+*Version: 0.11.3-beta*

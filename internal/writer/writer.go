@@ -19,7 +19,7 @@ type FileWriter struct {
 	allocator *Allocator // Space allocation tracker
 }
 
-// CreateMode specifies the file creation behavior.
+// CreateMode specifies the file creation/opening behavior.
 type CreateMode int
 
 const (
@@ -30,6 +30,14 @@ const (
 	// ModeExclusive creates a new file, fails if it exists.
 	// Equivalent to os.O_CREATE | os.O_EXCL.
 	ModeExclusive
+
+	// ModeReadWrite opens an existing file for reading and writing.
+	// Used for read-modify-write operations on existing HDF5 files.
+	ModeReadWrite
+
+	// ModeReadOnly opens an existing file for reading only.
+	// Used when opening files without modification intent.
+	ModeReadOnly
 )
 
 // NewFileWriter creates a writer for a new HDF5 file.
@@ -71,6 +79,78 @@ func NewFileWriter(filename string, mode CreateMode, initialOffset uint64) (*Fil
 	return &FileWriter{
 		file:      osFile,
 		allocator: NewAllocator(initialOffset),
+	}, nil
+}
+
+// OpenFileWriter opens an existing HDF5 file for read-modify-write operations.
+// Unlike NewFileWriter which creates a new file, this opens an existing file.
+//
+// Parameters:
+//   - filename: Path to existing HDF5 file
+//   - mode: Open mode (ModeReadWrite or ModeReadOnly)
+//   - initialOffset: Current end-of-file offset (for allocation tracking)
+//
+// For existing files:
+//   - initialOffset should be set to the current file size
+//   - New allocations will occur after existing data
+//   - Allocator tracks next free address
+//
+// Returns:
+//   - FileWriter ready for RMW operations
+//   - Error if file doesn't exist or open fails
+//
+// Example:
+//
+//	// Open existing file for modification
+//	fw, err := OpenFileWriter("data.h5", ModeReadWrite, existingFileSize)
+//	if err != nil {
+//	    return err
+//	}
+//	defer fw.Close()
+//
+//	// Now you can allocate new space and write data
+//	addr, _ := fw.Allocate(1024)
+//	fw.WriteAt(newData, int64(addr))
+func OpenFileWriter(filename string, mode CreateMode, initialOffset uint64) (*FileWriter, error) {
+	var osFile *os.File
+	var err error
+
+	switch mode {
+	case ModeReadWrite:
+		// Open existing file for reading and writing
+		osFile, err = os.OpenFile(filename, os.O_RDWR, 0o666) //nolint:gosec // User-provided filename for HDF5 file modification
+
+	case ModeReadOnly:
+		// Open existing file for reading only
+		osFile, err = os.OpenFile(filename, os.O_RDONLY, 0o666) //nolint:gosec // User-provided filename for HDF5 file reading
+
+	default:
+		return nil, fmt.Errorf("invalid open mode: %d (use ModeReadWrite or ModeReadOnly)", mode)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+
+	// Get actual file size to validate initialOffset
+	stat, err := osFile.Stat()
+	if err != nil {
+		_ = osFile.Close()
+		return nil, fmt.Errorf("failed to stat file: %w", err)
+	}
+
+	fileSize := uint64(stat.Size()) //nolint:gosec // Safe: file size conversion
+
+	// Initialize allocator at file size (new allocations happen after existing data)
+	allocatorOffset := fileSize
+	if initialOffset > fileSize {
+		// Caller provided larger offset than file size - trust it (for sparse files)
+		allocatorOffset = initialOffset
+	}
+
+	return &FileWriter{
+		file:      osFile,
+		allocator: NewAllocator(allocatorOffset),
 	}, nil
 }
 

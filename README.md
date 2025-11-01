@@ -5,9 +5,9 @@
 [![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat&logo=go)](https://golang.org)
 [![Go Report Card](https://goreportcard.com/badge/github.com/scigolib/hdf5)](https://goreportcard.com/report/github.com/scigolib/hdf5)
 [![CI](https://github.com/scigolib/hdf5/actions/workflows/test.yml/badge.svg)](https://github.com/scigolib/hdf5/actions)
-[![Coverage](https://img.shields.io/badge/coverage-89.7%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
+[![Coverage](https://img.shields.io/badge/coverage-86.1%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.11.2--beta-green.svg)](ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-v0.11.3--beta-green.svg)](ROADMAP.md)
 [![GoDoc](https://pkg.go.dev/badge/github.com/scigolib/hdf5.svg)](https://pkg.go.dev/github.com/scigolib/hdf5)
 
 A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. Read support is feature-complete, write support advancing rapidly!
@@ -23,7 +23,7 @@ A modern, pure Go library for reading and writing HDF5 files without CGo depende
 - ✅ **Rich Datatypes** - Integers, floats, strings (fixed/variable), compounds
 - ✅ **Memory Efficient** - Buffer pooling and smart memory management
 - ✅ **Production Ready** - Read support feature-complete (v0.10.0-beta)
-- ✍️ **Write Support Advancing** - v0.11.2-beta: Legacy format support (v0 superblock + Object Header v1)!
+- ✍️ **Write Support Advancing** - v0.11.3-beta: Dense Storage RMW (Read-Modify-Write complete)!
 
 ---
 
@@ -98,7 +98,7 @@ func main() {
 
 ## 🎯 Current Status
 
-**Version**: v0.11.2-beta (RELEASED 2025-11-01 - Legacy format support) ✅
+**Version**: v0.11.3-beta (RELEASED 2025-11-01 - Dense Storage RMW) ✅
 
 **Production Readiness: Read support feature-complete! Write support advancing rapidly!** 🎉
 
@@ -143,21 +143,21 @@ func main() {
 ### ⚠️ Partial Support
 - **Dense Attributes**: Infrastructure ready, B-tree v2 iteration deferred to v0.12.0-rc.1 (<10% of files affected)
 
-### ✍️ Write Support (v0.11.2-beta)
+### ✍️ Write Support (v0.11.3-beta)
 - ✅ **File creation** - CreateForWrite() with Truncate/Exclusive modes
-- ✅ **Superblock formats** - v0 (legacy, HDF5 < 1.8) + v2 (modern, HDF5 >= 1.8) ✨ NEW
-- ✅ **Object headers** - v1 (legacy, 16-byte) + v2 (modern, 4-byte min) ✨ NEW
+- ✅ **Superblock formats** - v0 (legacy, HDF5 < 1.8) + v2 (modern, HDF5 >= 1.8)
+- ✅ **Object headers** - v1 (legacy, 16-byte) + v2 (modern, 4-byte min)
 - ✅ **Dataset writing** - Contiguous + chunked layouts, all datatypes
 - ✅ **Chunked datasets** - Chunk storage with B-tree v1 indexing
 - ✅ **Compression** - GZIP (deflate), Shuffle filter, Fletcher32 checksum
 - ✅ **Groups** - Symbol table + dense groups (automatic transition at 8+ links)
 - ✅ **Attributes** - Compact (0-7) + dense (8+) with automatic transition
+- ✅ **Dense Storage RMW** - Read-modify-write for existing dense attributes ✨ NEW
 - ✅ **Advanced datatypes** - Arrays, Enums, References, Opaque
 - ✅ **Free space management** - End-of-file allocation (validated, 100% coverage)
-- ✅ **Legacy compatibility** - Files readable by HDF5 1.0+ tools ✨ NEW
+- ✅ **Legacy compatibility** - Files readable by HDF5 1.0+ tools
 
-**Known Limitations (v0.11.2-beta)**:
-- Dense storage read-modify-write (adding to existing after reopen)
+**Known Limitations (v0.11.3-beta)**:
 - Attribute modification/deletion (write-once only)
 - Soft/external links not yet supported (hard links only)
 - Compound datatypes write support (planned for v0.12.0-rc.1)
@@ -276,7 +276,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Status**: Beta - Read complete, Write support advancing
-**Version**: v0.11.2-beta (Legacy format support: v0 superblock + Object Header v1)
+**Version**: v0.11.3-beta (Dense Storage RMW - Read-Modify-Write complete)
 **Last Updated**: 2025-11-01
 
 ---

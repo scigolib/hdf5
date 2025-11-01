@@ -702,7 +702,7 @@ Include:
 
 ```markdown
 **Go version**: go1.25.1 linux/amd64
-**Library version**: github.com/scigolib/hdf5 v0.11.0-beta
+**Library version**: github.com/scigolib/hdf5 v0.11.3-beta
 **OS**: Ubuntu 22.04
 
 **Problem**: Cannot read string dataset
@@ -759,5 +759,5 @@ GROUP "/" {
 
 ---
 
-*Last Updated: 2025-10-29*
-*Version: 0.10.0-beta*
+*Last Updated: 2025-11-01*
+*Version: 0.11.3-beta*

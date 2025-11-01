@@ -24,15 +24,15 @@ HDF5 uses its own type system that maps to native types in different programming
 
 | Category | HDF5 Class | Go Representation | Read | Write |
 |----------|------------|-------------------|------|-------|
-| **Fixed-point** | H5T_INTEGER | int8-64, uint8-64 | ✅ | ✅ v0.11.0-beta |
-| **Floating-point** | H5T_FLOAT | float32, float64 | ✅ | ✅ v0.11.0-beta |
-| **String** | H5T_STRING | string, []string | ✅ | ✅ v0.11.0-beta |
-| **Compound** | H5T_COMPOUND | map[string]interface{} | ✅ | ❌ v0.12.0-rc.1 |
-| **Array** | H5T_ARRAY | [N]T (fixed arrays) | ✅ | ✅ v0.11.0-beta |
-| **Enum** | H5T_ENUM | Named integer constants | ✅ | ✅ v0.11.0-beta |
-| **Reference** | H5T_REFERENCE | uint64, [12]byte | ✅ | ✅ v0.11.0-beta |
-| **Opaque** | H5T_OPAQUE | []byte with tag | ✅ | ✅ v0.11.0-beta |
-| **Time** | H5T_TIME | - | ❌ | ❌ Deprecated in HDF5 |
+| **Fixed-point** | H5T_INTEGER | int8-64, uint8-64 | ✅ | ✅ |
+| **Floating-point** | H5T_FLOAT | float32, float64 | ✅ | ✅ |
+| **String** | H5T_STRING | string, []string | ✅ | ✅ |
+| **Compound** | H5T_COMPOUND | map[string]interface{} | ✅ | ❌ Planned |
+| **Array** | H5T_ARRAY | [N]T (fixed arrays) | ✅ | ✅ |
+| **Enum** | H5T_ENUM | Named integer constants | ✅ | ✅ |
+| **Reference** | H5T_REFERENCE | uint64, [12]byte | ✅ | ✅ |
+| **Opaque** | H5T_OPAQUE | []byte with tag | ✅ | ✅ |
+| **Time** | H5T_TIME | - | ❌ | ❌ Deprecated |
 
 ---
 
@@ -93,9 +93,9 @@ data, err := ds.Read()  // Returns []float64
 - `H5T_STD_U32LE`, `H5T_STD_U32BE`
 - `H5T_STD_U64LE`, `H5T_STD_U64BE`
 
-**Go Conversion**: Read as signed integers (int32/int64), then converted to float64.
+**Go Conversion**: Read as native unsigned integers (uint8/uint16/uint32/uint64).
 
-**Note**: Values > MaxInt64 will overflow. Full unsigned support planned for v1.0.0.
+**Note**: All unsigned types (Uint8, Uint16, Uint32, Uint64) are fully supported for both reading and writing.
 
 ### Floating-Point Types
 
@@ -315,7 +315,7 @@ Compound Type:
   - "scores" : array of 5 × float64
 ```
 
-**Status**: Array fields not yet supported (planned for v0.11.0).
+**Status**: Array fields not yet supported (planned for future release).
 
 **Workaround**: Flatten arrays into separate fields:
 ```
@@ -403,71 +403,24 @@ fmt.Printf("%.6f\n", value)  // 3.141593 (shows only 6 digits)
 
 ---
 
-## ❌ Unsupported Types
+## ❌ Not Yet Supported
 
-### Array Datatype
+### Compound Datatype (Write Only)
 
-**HDF5 Type**: `H5T_ARRAY`
+**HDF5 Type**: `H5T_COMPOUND`
 
-**Status**: Not yet implemented (planned for v0.11.0)
+**Status**:
+- ✅ Reading: Fully supported
+- ❌ Writing: Planned for v0.12.0-rc.1
 
-**Example**:
-```python
-# Creating array datatype in Python
-dt = np.dtype([('vector', '3f8')])  # Array of 3 floats
+**Example** (Reading works):
+```go
+// Read compound data
+data, err := ds.ReadCompound()
+// data is map[string]interface{} with field names as keys
 ```
 
-**Workaround**: Use compound types with individual fields:
-```python
-dt = np.dtype([
-    ('vector_x', 'f8'),
-    ('vector_y', 'f8'),
-    ('vector_z', 'f8')
-])
-```
-
-### Enum Datatype
-
-**HDF5 Type**: `H5T_ENUM`
-
-**Status**: Not yet implemented (planned for v0.11.0)
-
-**Example** (Python):
-```python
-import h5py
-
-# Enum mapping
-enum_dt = h5py.enum_dtype({'RED': 0, 'GREEN': 1, 'BLUE': 2}, basetype='i')
-```
-
-**Workaround**: Use integer datasets with attributes documenting the mapping:
-```python
-ds = f.create_dataset('color', data=[0, 1, 2, 1], dtype='i4')
-ds.attrs['color_map'] = '0=RED, 1=GREEN, 2=BLUE'
-```
-
-### Reference Datatype
-
-**HDF5 Type**: `H5T_REFERENCE`
-
-**Status**: Not yet implemented (planned for v1.0.0)
-
-References allow pointing to other objects or regions within HDF5 file.
-
-**Workaround**: Use string paths:
-```python
-ds.attrs['related_dataset'] = '/experiments/trial1/data'
-```
-
-### Opaque Datatype
-
-**HDF5 Type**: `H5T_OPAQUE`
-
-**Status**: Not yet implemented (planned for v1.0.0)
-
-Opaque types are binary blobs with no structure.
-
-**Workaround**: Use byte arrays (if needed, implement custom decoder).
+**Workaround for Writing**: Use multiple separate datasets (one per field) until compound write is implemented.
 
 ---
 
@@ -587,5 +540,5 @@ Then read with Go and verify values match!
 
 ---
 
-*Last Updated: 2025-10-29*
-*Version: 0.10.0-beta*
+*Last Updated: 2025-11-01*
+*Version: 0.11.3-beta*

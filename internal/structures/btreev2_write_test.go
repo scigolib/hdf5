@@ -671,6 +671,21 @@ func (w *testBTreeWriter) WriteAtAddress(data []byte, address uint64) error {
 	return nil
 }
 
+// ReadAt implements io.ReaderAt for testing RMW operations.
+func (w *testBTreeWriter) ReadAt(p []byte, off int64) (n int, err error) {
+	if off < 0 {
+		return 0, fmt.Errorf("negative offset")
+	}
+	if off >= int64(len(w.buf)) {
+		return 0, fmt.Errorf("offset beyond buffer")
+	}
+	n = copy(p, w.buf[off:])
+	if n < len(p) {
+		return n, fmt.Errorf("incomplete read")
+	}
+	return n, nil
+}
+
 // testBTreeAllocator for B-tree v2 testing.
 type testBTreeAllocator struct {
 	nextAddr uint64

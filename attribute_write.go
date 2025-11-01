@@ -9,6 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/scigolib/hdf5/internal/core"
+	"github.com/scigolib/hdf5/internal/structures"
 	"github.com/scigolib/hdf5/internal/writer"
 )
 
@@ -51,6 +52,12 @@ const (
 //   - Attributes cannot be modified after creation (write-once)
 //   - No attribute deletion
 func (ds *DatasetWriter) WriteAttribute(name string, value interface{}) error {
+	// For datasets opened with OpenForWrite, use cached object header and dense attr info
+	if ds.objectHeader != nil {
+		return writeAttributeWithCachedHeader(ds.fileWriter, ds.address, ds.objectHeader, ds.denseAttrInfo, name, value)
+	}
+
+	// For datasets created in this session, read object header fresh
 	return writeAttribute(ds.fileWriter, ds.address, name, value)
 }
 
@@ -167,44 +174,230 @@ func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHea
 	return nil
 }
 
+// writeAttributeWithCachedHeader writes attribute using cached object header (for OpenDataset scenarios).
+//
+// This function is used when a dataset is opened with OpenForWrite() and already has
+// a parsed object header and attribute info available.
+//
+// Parameters:
+//   - fw: File writer
+//   - objectAddr: Object header address
+//   - oh: Cached object header (from OpenDataset)
+//   - denseAttrInfo: Cached attribute info (may be nil)
+//   - name: Attribute name
+//   - value: Attribute value
+//
+// Reference: Same as writeAttribute, but skips object header re-parsing.
+func writeAttributeWithCachedHeader(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
+	denseAttrInfo *core.AttributeInfoMessage, name string, value interface{}) error {
+	sb := fw.file.Superblock()
+
+	// If dense storage info is available, use it directly
+	if denseAttrInfo != nil {
+		return writeDenseAttributeWithInfo(fw, objectAddr, oh, denseAttrInfo, name, value, sb)
+	}
+
+	// No dense storage yet - count compact attributes to determine strategy
+	compactCount := 0
+	for _, msg := range oh.Messages {
+		if msg.Type == core.MsgAttribute {
+			compactCount++
+		}
+	}
+
+	if compactCount < MaxCompactAttributes {
+		// Still compact → add compact attribute
+		return writeCompactAttribute(fw, objectAddr, oh, name, value, sb)
+	}
+
+	// Need to transition to dense storage (8th attribute)
+	return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
+}
+
+// writeDenseAttributeWithInfo writes attribute to existing dense storage using provided info.
+//
+// This is similar to writeDenseAttribute but uses the cached AttributeInfoMessage
+// instead of searching for it in the object header.
+func writeDenseAttributeWithInfo(fw *FileWriter, _ uint64, _ *core.ObjectHeader,
+	attrInfo *core.AttributeInfoMessage, name string, value interface{}, sb *core.Superblock) error {
+	// Load existing fractal heap from file
+	heap := structures.NewWritableFractalHeap(64 * 1024)
+	err := heap.LoadFromFile(fw.writer.Reader(), attrInfo.FractalHeapAddr, sb)
+	if err != nil {
+		return fmt.Errorf("failed to load fractal heap: %w", err)
+	}
+
+	// Load existing B-tree v2 from file
+	btree := structures.NewWritableBTreeV2(4096)
+	err = btree.LoadFromFile(fw.writer.Reader(), attrInfo.BTreeNameIndexAddr, sb)
+	if err != nil {
+		return fmt.Errorf("failed to load B-tree: %w", err)
+	}
+
+	// Encode and add new attribute
+	datatype, dataspace, err := inferDatatypeFromValue(value)
+	if err != nil {
+		return fmt.Errorf("failed to infer datatype: %w", err)
+	}
+
+	data, err := encodeAttributeValue(value)
+	if err != nil {
+		return fmt.Errorf("failed to encode value: %w", err)
+	}
+
+	attr := &core.Attribute{
+		Name:      name,
+		Datatype:  datatype,
+		Dataspace: dataspace,
+		Data:      data,
+	}
+
+	// Encode attribute message
+	attrMsg, err := core.EncodeAttributeFromStruct(attr, sb)
+	if err != nil {
+		return fmt.Errorf("failed to encode attribute: %w", err)
+	}
+
+	// Insert into fractal heap
+	heapIDBytes, err := heap.InsertObject(attrMsg)
+	if err != nil {
+		return fmt.Errorf("failed to insert into heap: %w", err)
+	}
+
+	// Convert heap ID to uint64 for B-tree
+	if len(heapIDBytes) != 8 {
+		return fmt.Errorf("unexpected heap ID length: %d bytes", len(heapIDBytes))
+	}
+	heapID := binary.LittleEndian.Uint64(heapIDBytes)
+
+	// Insert into B-tree
+	err = btree.InsertRecord(name, heapID)
+	if err != nil {
+		return fmt.Errorf("failed to insert into B-tree: %w", err)
+	}
+
+	// Write updated structures back to file (IN-PLACE using WriteAt)
+	err = heap.WriteAt(fw.writer, sb)
+	if err != nil {
+		return fmt.Errorf("failed to write updated heap: %w", err)
+	}
+
+	err = btree.WriteAt(fw.writer, sb)
+	if err != nil {
+		return fmt.Errorf("failed to write updated B-tree: %w", err)
+	}
+
+	return nil
+}
+
 // writeDenseAttribute writes attribute to existing dense storage (heap + B-tree).
 //
-// MVP Limitation (v0.11.1-beta):
-// Adding attributes to EXISTING dense storage is not yet supported.
-// This will be implemented in v0.11.2-beta when we add read-modify-write support.
+// This function implements Phase 3: Read-Modify-Write for dense attribute storage.
 //
-// Current workaround:
-// Write all attributes in a single session before closing the file.
-// After file is closed and reopened, adding more attributes requires reading
-// the entire heap and B-tree from disk, which needs additional infrastructure.
+// Process:
+// 1. Find Attribute Info Message in object header
+// 2. Load existing WritableFractalHeap from file
+// 3. Load existing WritableBTreeV2 from file
+// 4. Add new attribute to loaded structures
+// 5. Write updated heap and B-tree back to file (overwrite existing)
 //
-// What works now (Phase 2):
-// - Create dataset
-// - Add 8+ attributes → automatic dense storage creation
-// - All attributes written in one session
-//
-// What doesn't work yet (Phase 3 - planned for v0.11.2-beta):
-// - Reopen file and add more attributes to existing dense storage.
+// This enables adding attributes to datasets that already have dense storage
+// (i.e., files that were created, closed, and reopened).
 //
 // Reference: H5Adense.c - H5A__dense_insert().
-func writeDenseAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
+func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
-	// Avoid unused parameter warnings
-	_ = fw
-	_ = objectAddr
-	_ = oh
-	_ = name
-	_ = value
-	_ = sb
+	// Step 1: Find Attribute Info Message
+	var attrInfo *core.AttributeInfoMessage
+	for _, msg := range oh.Messages {
+		if msg.Type == core.MsgAttributeInfo {
+			// Parse the message data
+			parsed, err := core.ParseAttributeInfoMessage(msg.Data, sb)
+			if err != nil {
+				return fmt.Errorf("failed to parse attribute info message: %w", err)
+			}
+			attrInfo = parsed
+			break
+		}
+	}
 
-	// For v0.11.2-beta: Implement read-modify-write
-	// 1. Read existing Attribute Info Message
-	// 2. Read WritableFractalHeap from file
-	// 3. Read WritableBTreeV2 from file
-	// 4. Add new attribute
-	// 5. Write updated structures back
+	if attrInfo == nil {
+		return fmt.Errorf("attribute info message not found (dense storage not initialized)")
+	}
 
-	return fmt.Errorf("adding attributes to existing dense storage not yet implemented (v0.11.2-beta planned feature)")
+	// Step 2: Load existing fractal heap from file
+	heap := structures.NewWritableFractalHeap(64 * 1024) // Match size from dense attribute writer
+	err := heap.LoadFromFile(fw.writer.Reader(), attrInfo.FractalHeapAddr, sb)
+	if err != nil {
+		return fmt.Errorf("failed to load fractal heap: %w", err)
+	}
+
+	// Step 3: Load existing B-tree v2 from file
+	btree := structures.NewWritableBTreeV2(4096) // Match size from dense attribute writer
+	err = btree.LoadFromFile(fw.writer.Reader(), attrInfo.BTreeNameIndexAddr, sb)
+	if err != nil {
+		return fmt.Errorf("failed to load B-tree: %w", err)
+	}
+
+	// Step 4: Encode and add new attribute
+	datatype, dataspace, err := inferDatatypeFromValue(value)
+	if err != nil {
+		return fmt.Errorf("failed to infer datatype: %w", err)
+	}
+
+	data, err := encodeAttributeValue(value)
+	if err != nil {
+		return fmt.Errorf("failed to encode value: %w", err)
+	}
+
+	attr := &core.Attribute{
+		Name:      name,
+		Datatype:  datatype,
+		Dataspace: dataspace,
+		Data:      data,
+	}
+
+	// Encode attribute message
+	attrMsg, err := core.EncodeAttributeFromStruct(attr, sb)
+	if err != nil {
+		return fmt.Errorf("failed to encode attribute: %w", err)
+	}
+
+	// Insert into fractal heap
+	heapIDBytes, err := heap.InsertObject(attrMsg)
+	if err != nil {
+		return fmt.Errorf("failed to insert into heap: %w", err)
+	}
+
+	// Convert heap ID to uint64 for B-tree
+	if len(heapIDBytes) != 8 {
+		return fmt.Errorf("unexpected heap ID length: %d bytes", len(heapIDBytes))
+	}
+	heapID := binary.LittleEndian.Uint64(heapIDBytes)
+
+	// Insert into B-tree
+	err = btree.InsertRecord(name, heapID)
+	if err != nil {
+		return fmt.Errorf("failed to insert into B-tree: %w", err)
+	}
+
+	// Step 5: Write updated structures back to file (IN-PLACE using WriteAt)
+	// NOTE: WriteAt() writes to the addresses where structures were loaded from
+	// This is true Read-Modify-Write - no new allocations!
+
+	// Write heap in-place at loaded address
+	err = heap.WriteAt(fw.writer, sb)
+	if err != nil {
+		return fmt.Errorf("failed to write updated heap: %w", err)
+	}
+
+	// Write B-tree in-place at loaded address
+	err = btree.WriteAt(fw.writer, sb)
+	if err != nil {
+		return fmt.Errorf("failed to write updated B-tree: %w", err)
+	}
+
+	return nil
 }
 
 // transitionToDenseAttributes migrates all compact attributes to dense storage.
@@ -221,6 +414,8 @@ func writeDenseAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeade
 // 9. Write updated object header
 //
 // Reference: H5Aint.c - H5A__dense_create().
+//
+//nolint:gocognit,gocyclo,cyclop // Complex but necessary business logic for compact→dense transition
 func transitionToDenseAttributes(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
 	// 1. Read all existing compact attributes
@@ -270,20 +465,7 @@ func transitionToDenseAttributes(fw *FileWriter, objectAddr uint64, oh *core.Obj
 		return fmt.Errorf("failed to add new attribute: %w", err)
 	}
 
-	// 6. Write dense storage
-	allocator := fw.writer.Allocator()
-	attrInfo, err := daw.WriteToFile(fw.writer, allocator, sb)
-	if err != nil {
-		return fmt.Errorf("failed to write dense storage: %w", err)
-	}
-
-	// 7. Encode Attribute Info Message
-	attrInfoMsg, err := core.EncodeAttributeInfoMessage(attrInfo, sb)
-	if err != nil {
-		return fmt.Errorf("failed to encode attribute info: %w", err)
-	}
-
-	// 8. Remove all compact attribute messages from object header
+	// 6. Remove compact attributes from object header
 	var newMessages []*core.HeaderMessage
 	for _, msg := range oh.Messages {
 		if msg.Type != core.MsgAttribute {
@@ -292,16 +474,81 @@ func transitionToDenseAttributes(fw *FileWriter, objectAddr uint64, oh *core.Obj
 	}
 	oh.Messages = newMessages
 
-	// 9. Add Attribute Info Message
+	// 7. Calculate object header size (without AttrInfo message yet)
+	// to determine where dense storage should be allocated
+	ohWriter := &core.ObjectHeaderWriter{
+		Version:  oh.Version,
+		Flags:    oh.Flags,
+		Messages: make([]core.MessageWriter, len(oh.Messages)),
+	}
+	for i, msg := range oh.Messages {
+		ohWriter.Messages[i] = core.MessageWriter{
+			Type: msg.Type,
+			Data: msg.Data,
+		}
+	}
+
+	// Add temporary AttrInfo message to calculate size
+	// Use REAL size (2 + offsetSize*2) even though addresses are unknown
+	tempAttrInfo := &core.AttributeInfoMessage{
+		Version:            0,
+		Flags:              0,
+		FractalHeapAddr:    0,
+		BTreeNameIndexAddr: 0,
+	}
+	tempAttrInfoMsg, err := core.EncodeAttributeInfoMessage(tempAttrInfo, sb)
+	if err != nil {
+		return fmt.Errorf("failed to encode temp attribute info: %w", err)
+	}
+
+	ohWriter.Messages = append(ohWriter.Messages, core.MessageWriter{
+		Type: core.MsgAttributeInfo,
+		Data: tempAttrInfoMsg,
+	})
+
+	objectHeaderSize := ohWriter.Size()
+	objectHeaderEnd := objectAddr + objectHeaderSize
+
+	// 8. Update allocator to ensure dense storage allocated AFTER object header
+	allocator := fw.writer.Allocator()
+	if allocator.EndOfFile() < objectHeaderEnd {
+		bytesToAdvance := objectHeaderEnd - allocator.EndOfFile()
+		_, err = allocator.Allocate(bytesToAdvance)
+		if err != nil {
+			return fmt.Errorf("failed to advance allocator past object header: %w", err)
+		}
+	}
+
+	// 9. Write dense storage - allocator will place it AFTER object header
+	attrInfo, err := daw.WriteToFile(fw.writer, allocator, sb)
+	if err != nil {
+		return fmt.Errorf("failed to write dense storage: %w", err)
+	}
+
+	// 10. NOW add AttributeInfo message with REAL addresses to object header
+	attrInfoMsg, err := core.EncodeAttributeInfoMessage(attrInfo, sb)
+	if err != nil {
+		return fmt.Errorf("failed to encode attribute info: %w", err)
+	}
+
 	err = core.AddMessageToObjectHeader(oh, core.MsgAttributeInfo, attrInfoMsg)
 	if err != nil {
 		return fmt.Errorf("failed to add attribute info message: %w", err)
 	}
 
-	// 10. Write updated object header
+	// 11. Write object header with REAL addresses (ONE TIME!)
 	err = core.WriteObjectHeader(fw.writer, objectAddr, oh, sb)
 	if err != nil {
 		return fmt.Errorf("failed to write object header: %w", err)
+	}
+
+	// 13. CRITICAL: Flush buffered writes to disk!
+	// Dense storage was just created at new addresses.
+	// Subsequent attributes will try to load from these addresses.
+	// If data isn't flushed, they'll read uninitialized memory!
+	err = fw.writer.Flush()
+	if err != nil {
+		return fmt.Errorf("failed to flush after transition: %w", err)
 	}
 
 	return nil

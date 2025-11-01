@@ -817,6 +817,10 @@ type DatasetWriter struct {
 	chunkCoordinator *writer.ChunkCoordinator // For chunked datasets
 	chunkDims        []uint64                 // Chunk dimensions
 	pipeline         *writer.FilterPipeline   // Filter pipeline for chunked datasets
+
+	// For RMW scenarios (files opened with OpenForWrite)
+	objectHeader  *core.ObjectHeader         // Full object header (for attribute operations)
+	denseAttrInfo *core.AttributeInfoMessage // Dense attribute storage info (nil if no dense storage)
 }
 
 // Write writes data to the dataset.
@@ -1301,6 +1305,202 @@ func WithFletcher32() DatasetOption {
 		}
 		cfg.pipeline.AddFilter(writer.NewFletcher32Filter())
 	}
+}
+
+// OpenMode specifies how to open an existing HDF5 file.
+type OpenMode int
+
+const (
+	// OpenReadOnly opens the file for reading only.
+	OpenReadOnly OpenMode = iota
+
+	// OpenReadWrite opens the file for both reading and writing.
+	// This enables read-modify-write operations like adding attributes
+	// to existing dense storage.
+	OpenReadWrite
+)
+
+// OpenForWrite opens an existing HDF5 file for modification.
+// This function enables read-modify-write operations on existing files.
+//
+// Supported operations:
+//   - Adding attributes to datasets with existing dense storage
+//   - Creating new datasets in existing files
+//   - Creating new groups (when group write support is added)
+//
+// Parameters:
+//   - filename: Path to existing HDF5 file
+//   - mode: Open mode (OpenReadOnly or OpenReadWrite)
+//
+// Returns:
+//   - *FileWriter: Handle for modifying the file
+//   - error: If file doesn't exist or isn't a valid HDF5 file
+//
+// Example:
+//
+//	// Reopen file to add more attributes
+//	fw, err := hdf5.OpenForWrite("data.h5", hdf5.OpenReadWrite)
+//	if err != nil {
+//	    return err
+//	}
+//	defer fw.Close()
+//
+//	// Open existing dataset
+//	ds, err := fw.OpenDataset("/temperature")
+//	if err != nil {
+//	    return err
+//	}
+//
+//	// Add more attributes to existing dense storage
+//	ds.WriteAttribute("calibration_date", "2025-11-01")
+//	ds.WriteAttribute("sensor_location", "Lab A")
+func OpenForWrite(filename string, mode OpenMode) (*FileWriter, error) {
+	// Step 1: Open existing HDF5 file for reading (to load structure)
+	f, err := Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+
+	// Step 2: Create low-level writer for RMW operations
+	var writerMode writer.CreateMode
+	if mode == OpenReadWrite {
+		writerMode = writer.ModeReadWrite // New mode for RMW
+	} else {
+		writerMode = writer.ModeReadOnly // Read-only mode
+	}
+
+	// Determine initial offset from superblock
+	superblockSize := uint64(48) // v2/v3
+	if f.sb.Version == core.Version0 {
+		superblockSize = 96 // v0
+	}
+
+	fw, err := writer.OpenFileWriter(filename, writerMode, superblockSize)
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("failed to create writer: %w", err)
+	}
+
+	// Step 3: Extract root group information from existing file
+	rootGroupAddr := f.sb.RootGroup
+	rootBTreeAddr := f.sb.RootBTreeAddr // v0 only
+	rootHeapAddr := f.sb.RootHeapAddr   // v0 only
+	rootStNodeAddr := uint64(0)         // Will need to extract if needed
+
+	// Step 4: Create FileWriter with loaded structures
+	fileWriter := &FileWriter{
+		file:           f,
+		writer:         fw,
+		filename:       filename,
+		rootGroupAddr:  rootGroupAddr,
+		rootBTreeAddr:  rootBTreeAddr,
+		rootHeapAddr:   rootHeapAddr,
+		rootStNodeAddr: rootStNodeAddr,
+	}
+
+	return fileWriter, nil
+}
+
+// OpenDataset opens an existing dataset for modification.
+// This enables read-modify-write operations on datasets.
+//
+// Supported operations:
+//   - WriteAttribute(): Add attributes to existing dense storage
+//   - Write(): Overwrite dataset data (for contiguous layout)
+//
+// Parameters:
+//   - path: Dataset path (e.g., "/temperature")
+//
+// Returns:
+//   - *DatasetWriter: Handle for modifying the dataset
+//   - error: If dataset doesn't exist
+//
+// Example:
+//
+//	fw, _ := hdf5.OpenForWrite("data.h5", hdf5.OpenReadWrite)
+//	defer fw.Close()
+//
+//	ds, _ := fw.OpenDataset("/temperature")
+//	ds.WriteAttribute("units", "Celsius")  // Works with existing dense storage!
+//
+//nolint:gocognit,gocyclo,cyclop // Complex navigation logic with multiple object types and error paths
+func (fw *FileWriter) OpenDataset(path string) (*DatasetWriter, error) {
+	// Step 1: Navigate to dataset using file.Walk()
+	var foundDataset *Dataset
+	fw.file.Walk(func(p string, obj Object) {
+		if p == path {
+			if ds, ok := obj.(*Dataset); ok {
+				foundDataset = ds
+			}
+		}
+	})
+
+	if foundDataset == nil {
+		return nil, fmt.Errorf("dataset %q not found", path)
+	}
+
+	// Step 2: Read object header to extract dataset metadata
+	oh, err := core.ReadObjectHeader(fw.writer.Reader(), foundDataset.Address(), fw.file.sb)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read object header: %w", err)
+	}
+
+	// Step 3: Extract datatype, dataspace, layout, and attribute info messages
+	var datatypeMsg *core.DatatypeMessage
+	var dataspaceMsg *core.DataspaceMessage
+	var layoutMsg *core.DataLayoutMessage
+	var attrInfoMsg *core.AttributeInfoMessage
+
+	for _, msg := range oh.Messages {
+		switch msg.Type {
+		case core.MsgDatatype:
+			datatypeMsg, err = core.ParseDatatypeMessage(msg.Data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse datatype: %w", err)
+			}
+		case core.MsgDataspace:
+			dataspaceMsg, err = core.ParseDataspaceMessage(msg.Data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse dataspace: %w", err)
+			}
+		case core.MsgDataLayout:
+			layoutMsg, err = core.ParseDataLayoutMessage(msg.Data, fw.file.sb)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse layout: %w", err)
+			}
+		case core.MsgAttributeInfo:
+			attrInfoMsg, err = core.ParseAttributeInfoMessage(msg.Data, fw.file.sb)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse attribute info: %w", err)
+			}
+		}
+	}
+
+	if datatypeMsg == nil || dataspaceMsg == nil || layoutMsg == nil {
+		return nil, fmt.Errorf("dataset metadata incomplete (missing datatype, dataspace, or layout)")
+	}
+
+	// Step 4: Calculate data size
+	totalElements := uint64(1)
+	for _, dim := range dataspaceMsg.Dimensions {
+		totalElements *= dim
+	}
+	dataSize := totalElements * uint64(datatypeMsg.Size)
+
+	// Step 5: Create DatasetWriter
+	dsw := &DatasetWriter{
+		fileWriter:    fw,
+		name:          path,
+		address:       foundDataset.Address(),
+		dataAddress:   layoutMsg.DataAddress, // Data address from layout message
+		dataSize:      dataSize,
+		dtype:         datatypeMsg,
+		dims:          dataspaceMsg.Dimensions,
+		objectHeader:  oh,          // Store object header for attribute operations
+		denseAttrInfo: attrInfoMsg, // May be nil if no dense storage yet
+	}
+
+	return dsw, nil
 }
 
 // Close closes the file writer and flushes all data to disk.

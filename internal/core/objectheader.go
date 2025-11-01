@@ -121,10 +121,10 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 
 	// Parse attributes from messages (both compact and dense)
 	attributes, err := ParseAttributesFromMessages(r, header.Messages, sb)
-	//nolint:revive // empty-block: Error intentionally ignored, attributes are optional
 	if err != nil {
 		// Don't fail the whole header read if attributes fail
-		// Just log and continue
+		// Attributes are optional - continue without them
+		_ = err
 	} else {
 		header.Attributes = attributes
 	}

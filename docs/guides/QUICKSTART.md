@@ -344,7 +344,7 @@ python create_test.py
 - ✅ Chunked datasets
 
 ### Q: Can I write HDF5 files?
-**A**: Yes! v0.11.0-beta has MVP write support (contiguous datasets, all datatypes, groups). Chunked datasets and compression coming in v0.11.1-beta. See [ROADMAP.md](../../ROADMAP.md) for details.
+**A**: Yes! Write support advancing rapidly - contiguous/chunked datasets, all datatypes, groups, attributes (compact & dense), compression (GZIP/Shuffle), dense storage RMW complete. See [ROADMAP.md](../../ROADMAP.md) for details.
 
 ### Q: Does it require CGo?
 **A**: **No!** This is a pure Go implementation with zero C dependencies. Works on all Go-supported platforms.
@@ -437,10 +437,9 @@ if err != nil {
 - Object header v2
 
 ⚠️ **Beta limitations**:
-- No write support yet (v0.11.0+)
-- Dense attributes need B-tree v2 (<10% of files)
-- Some advanced datatypes missing (arrays, enums, references, opaque, time)
-- Soft links deferred to v0.11.0
+- Attribute modification/deletion (write-once only)
+- Soft/external links not yet supported
+- Compound datatype writing (planned for v0.12.0-rc.1)
 
 See [README.md](../../README.md) for full feature list.
 
@@ -459,5 +458,5 @@ After completing this quick start, explore:
 
 ---
 
-*Last Updated: 2025-10-29*
-*Version: 0.10.0-beta*
+*Last Updated: 2025-11-01*
+*Version: 0.11.3-beta*

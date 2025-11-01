@@ -45,6 +45,37 @@ func (d *Dataset) Attributes() ([]*core.Attribute, error) {
 	return header.Attributes, nil
 }
 
+// ListAttributes returns the names of all attributes attached to this dataset.
+func (d *Dataset) ListAttributes() ([]string, error) {
+	attrs, err := d.Attributes()
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, len(attrs))
+	for i, attr := range attrs {
+		names[i] = attr.Name
+	}
+	return names, nil
+}
+
+// ReadAttribute reads a single attribute by name.
+func (d *Dataset) ReadAttribute(name string) (interface{}, error) {
+	attrs, err := d.Attributes()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, attr := range attrs {
+		if attr.Name == name {
+			// Parse and return typed value
+			return attr.ReadValue()
+		}
+	}
+
+	return nil, fmt.Errorf("attribute %q not found", name)
+}
+
 // Read reads the dataset values and returns them as float64 array.
 // Currently supports float64, float32, int32, int64 datatypes.
 // All values are converted to float64 for convenience.

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
 
 	"github.com/scigolib/hdf5/internal/core"
 )
@@ -46,6 +47,10 @@ var (
 type WritableFractalHeap struct {
 	Header      *WritableHeapHeader
 	DirectBlock *WritableDirectBlock
+
+	// Addresses loaded from file (for RMW scenarios)
+	loadedHeaderAddress      uint64
+	loadedDirectBlockAddress uint64
 }
 
 // WritableHeapHeader represents a fractal heap header for writing.
@@ -205,8 +210,17 @@ func (fh *WritableFractalHeap) InsertObject(data []byte) ([]byte, error) {
 	// Current offset becomes the object's location
 	objectOffset := fh.DirectBlock.FreeOffset
 
-	// Append object to direct block
-	fh.DirectBlock.Objects = append(fh.DirectBlock.Objects, data...)
+	// Write object at free offset position
+	// For new heaps: Objects slice is empty or short, need to extend
+	// For loaded heaps: Objects slice is pre-allocated to block size
+	//nolint:gosec // G115: safe conversion, offset checked against block size above
+	neededLen := int(objectOffset + dataSize)
+	if neededLen > len(fh.DirectBlock.Objects) {
+		// Extend slice if needed (for new heaps)
+		fh.DirectBlock.Objects = append(fh.DirectBlock.Objects, make([]byte, neededLen-len(fh.DirectBlock.Objects))...)
+	}
+	// Write data at the correct offset
+	copy(fh.DirectBlock.Objects[objectOffset:], data)
 
 	// Update offsets
 	fh.DirectBlock.FreeOffset += dataSize
@@ -265,12 +279,9 @@ func (fh *WritableFractalHeap) WriteToFile(writer Writer, allocator Allocator, s
 	// Calculate sizes
 	headerSize := 22 + 12*int(sb.LengthSize) + 3*int(sb.OffsetSize) + 4 // +4 for checksum
 
-	directBlockHeaderSize := 5 + int(sb.OffsetSize) + int(fh.Header.HeapOffsetSize)
-	checksumSize := 0
-	if fh.DirectBlock.ChecksumEnabled {
-		checksumSize = 4
-	}
-	directBlockSize := directBlockHeaderSize + len(fh.DirectBlock.Objects) + checksumSize
+	// Direct block is allocated at FULL block size, not just used portion
+	// This matches HDF5 C library behavior
+	directBlockSize := fh.DirectBlock.Size
 
 	// Allocate both addresses
 	headerAddr, err := allocator.Allocate(uint64(headerSize)) //nolint:gosec // G115: headerSize bounded by HDF5 format
@@ -278,7 +289,7 @@ func (fh *WritableFractalHeap) WriteToFile(writer Writer, allocator Allocator, s
 		return 0, fmt.Errorf("failed to allocate heap header: %w", err)
 	}
 
-	directBlockAddr, err := allocator.Allocate(uint64(directBlockSize)) //nolint:gosec // G115: directBlockSize bounded by heap block size
+	directBlockAddr, err := allocator.Allocate(directBlockSize)
 	if err != nil {
 		return 0, fmt.Errorf("failed to allocate direct block: %w", err)
 	}
@@ -299,6 +310,46 @@ func (fh *WritableFractalHeap) WriteToFile(writer Writer, allocator Allocator, s
 	}
 
 	return headerAddr, nil
+}
+
+// WriteAt writes fractal heap in-place at previously loaded addresses.
+//
+// This method is used for Read-Modify-Write (RMW) scenarios:
+// - Heap was loaded via LoadFromFile()
+// - New objects were inserted
+// - Write back to same addresses
+//
+// Parameters:
+//   - writer: File writer (must implement Writer interface)
+//   - sb: Superblock for field sizes
+//
+// Returns:
+//   - error: if write fails or heap was not loaded from file
+//
+// Reference: Same as WriteToFile, but uses stored addresses.
+func (fh *WritableFractalHeap) WriteAt(writer Writer, sb *core.Superblock) error {
+	// Verify this heap was loaded from file
+	if fh.loadedHeaderAddress == 0 {
+		return errors.New("cannot use WriteAt: heap not loaded from file (use WriteToFile for new heaps)")
+	}
+
+	// Update cross-references (in case they were cleared)
+	fh.Header.RootBlockAddress = fh.loadedDirectBlockAddress
+	fh.DirectBlock.HeapHeaderAddress = fh.loadedHeaderAddress
+
+	// Write header at loaded address
+	err := fh.writeHeaderAt(writer, fh.loadedHeaderAddress, sb)
+	if err != nil {
+		return fmt.Errorf("failed to write heap header at 0x%X: %w", fh.loadedHeaderAddress, err)
+	}
+
+	// Write direct block at loaded address
+	err = fh.writeDirectBlockAt(writer, fh.loadedDirectBlockAddress, sb)
+	if err != nil {
+		return fmt.Errorf("failed to write direct block at 0x%X: %w", fh.loadedDirectBlockAddress, err)
+	}
+
+	return nil
 }
 
 // writeHeaderAt serializes and writes heap header at the given address.
@@ -424,20 +475,18 @@ func (fh *WritableFractalHeap) writeHeaderAt(writer Writer, addr uint64, sb *cor
 
 // writeDirectBlockAt serializes and writes direct block at the given address.
 //
+// NOTE: HDF5 direct blocks are written at FULL block size, not just used portion.
+// This allows readers to know the block size without additional metadata.
+//
 // Reference: H5HFcache.c - H5HF__cache_dblock_pre_serialize().
 func (fh *WritableFractalHeap) writeDirectBlockAt(writer Writer, addr uint64, sb *core.Superblock) error {
-	// Calculate header size
-	// Signature (4) + Version (1) + Heap Header Address (offsetSize) + Block Offset (heapOffsetSize)
-	headerSize := 5 + int(sb.OffsetSize) + int(fh.Header.HeapOffsetSize)
+	// Checksum is always at the end of the FULL block (not just used portion)
+	checksumSize := 4
 
-	// Add checksum if enabled
-	checksumSize := 0
-	if fh.DirectBlock.ChecksumEnabled {
-		checksumSize = 4
-	}
-
-	// Total size is header + used objects + checksum
-	totalSize := headerSize + len(fh.DirectBlock.Objects) + checksumSize
+	// Total size is FULL block size (not just used portion!)
+	// This matches HDF5 C library behavior - blocks are fixed size
+	//nolint:gosec // G115: block size from header, max ~2GB
+	totalSize := int(fh.DirectBlock.Size)
 
 	buf := make([]byte, totalSize)
 	offset := 0
@@ -450,7 +499,7 @@ func (fh *WritableFractalHeap) writeDirectBlockAt(writer Writer, addr uint64, sb
 	buf[offset] = fh.DirectBlock.Version
 	offset++
 
-	// Heap Header Address (will be 0 initially, updated after header write)
+	// Heap Header Address
 	writeUintVar(buf[offset:], fh.DirectBlock.HeapHeaderAddress, int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
@@ -458,18 +507,184 @@ func (fh *WritableFractalHeap) writeDirectBlockAt(writer Writer, addr uint64, sb
 	writeUintVar(buf[offset:], fh.DirectBlock.BlockOffset, int(fh.Header.HeapOffsetSize), sb.Endianness)
 	offset += int(fh.Header.HeapOffsetSize)
 
-	// Object data
+	// Object data (used portion) - rest is padding
 	copy(buf[offset:], fh.DirectBlock.Objects)
-	offset += len(fh.DirectBlock.Objects)
 
-	// Checksum (if enabled)
-	if fh.DirectBlock.ChecksumEnabled {
-		checksum := crc32.ChecksumIEEE(buf[:offset])
-		binary.LittleEndian.PutUint32(buf[offset:], checksum)
-	}
+	// Checksum at END of block (last 4 bytes)
+	checksumOffset := totalSize - checksumSize
+	checksum := crc32.ChecksumIEEE(buf[:checksumOffset])
+	binary.LittleEndian.PutUint32(buf[checksumOffset:], checksum)
 
 	// Write to file at pre-allocated address
 	return writer.WriteAtAddress(buf, addr)
+}
+
+// readDirectBlockFromFile reads a direct block from file.
+// This is a helper for LoadFromFile that reads the direct block structure.
+//
+// Reference: H5HFdblock.c - H5HF__cache_dblock_deserialize().
+func (fh *WritableFractalHeap) readDirectBlockFromFile(reader io.ReaderAt, address, blockSize uint64,
+	heapOffsetSize, fileOffsetSize uint8, endianness binary.ByteOrder, headerAddr uint64) (*DirectBlock, error) {
+	if address == 0 || address == ^uint64(0) {
+		return nil, fmt.Errorf("invalid direct block address: 0x%X", address)
+	}
+
+	// Read entire block (header + data)
+	//nolint:gosec // G115: safe conversion, blockSize from HDF5 header (max ~2GB per block)
+	totalSize := int(blockSize)
+	buf := make([]byte, totalSize)
+	//nolint:gosec // G115: uint64 to int64 conversion safe for file offsets
+	if _, err := reader.ReadAt(buf, int64(address)); err != nil {
+		return nil, fmt.Errorf("failed to read direct block: %w", err)
+	}
+
+	dblock := &DirectBlock{}
+	offset := 0
+
+	// Signature (4 bytes) - "FHDB"
+	copy(dblock.Signature[:], buf[offset:offset+4])
+	if string(dblock.Signature[:]) != "FHDB" {
+		return nil, fmt.Errorf("invalid direct block signature: %q (expected FHDB)", dblock.Signature)
+	}
+	offset += 4
+
+	// Version (1 byte)
+	dblock.Version = buf[offset]
+	if dblock.Version != 0 {
+		return nil, fmt.Errorf("unsupported direct block version: %d", dblock.Version)
+	}
+	offset++
+
+	// Heap Header Address (sizeof_addr bytes)
+	dblock.HeapHeaderAddr = readUint(buf[offset:offset+int(fileOffsetSize)], int(fileOffsetSize), endianness)
+	offset += int(fileOffsetSize)
+
+	// Verify heap header address matches
+	if dblock.HeapHeaderAddr != headerAddr {
+		return nil, fmt.Errorf("direct block heap header address mismatch: 0x%X (expected 0x%X)",
+			dblock.HeapHeaderAddr, headerAddr)
+	}
+
+	// Block Offset (heap_off_size bytes)
+	dblock.BlockOffset = readUint(buf[offset:offset+int(heapOffsetSize)], int(heapOffsetSize), endianness)
+	offset += int(heapOffsetSize)
+
+	// Data (remaining bytes, excluding checksum if present)
+	// For simplicity, we assume checksum is always present for now
+	dataEnd := totalSize - 4 // Exclude checksum
+	dblock.Data = make([]byte, dataEnd-offset)
+	copy(dblock.Data, buf[offset:dataEnd])
+
+	// Checksum at end (not validated in this MVP)
+	dblock.Checksum = endianness.Uint32(buf[totalSize-4 : totalSize])
+
+	return dblock, nil
+}
+
+// LoadFromFile loads an existing fractal heap from file for modification.
+//
+// This enables read-modify-write: load existing heap, add more objects, write back.
+//
+// Process:
+// 1. Read heap header from file address
+// 2. Read direct block (MVP: single block only)
+// 3. Initialize writable structures with existing data
+// 4. New insertions append to existing objects
+//
+// Parameters:
+// - reader: File reader (must implement io.ReaderAt)
+// - address: Heap header address in file
+// - sb: Superblock for field sizes
+//
+// Returns:
+// - error: If heap cannot be loaded or format unsupported
+//
+// Reference: H5HF.c - H5HF_open().
+func (fh *WritableFractalHeap) LoadFromFile(reader io.ReaderAt, address uint64, sb *core.Superblock) error {
+	if reader == nil {
+		return errors.New("reader is nil")
+	}
+	if sb == nil {
+		return errors.New("superblock is nil")
+	}
+	if address == 0 || address == ^uint64(0) {
+		return fmt.Errorf("invalid heap address: 0x%X", address)
+	}
+
+	// Use the read-only fractal heap parser
+	readHeap, err := OpenFractalHeap(reader, address, sb.LengthSize, sb.OffsetSize, sb.Endianness)
+	if err != nil {
+		return fmt.Errorf("failed to open fractal heap: %w", err)
+	}
+
+	// Verify this is a simple heap we can modify (MVP limitations)
+	if readHeap.Header.CurrentRowCount != 0 {
+		return fmt.Errorf("cannot modify heap with indirect blocks (root has %d rows)", readHeap.Header.CurrentRowCount)
+	}
+
+	// Read the direct block manually (readDirectBlock is private)
+	dblock, err := fh.readDirectBlockFromFile(reader, readHeap.Header.RootBlockAddr, readHeap.Header.StartingBlockSize,
+		readHeap.Header.HeapOffsetSize, sb.OffsetSize, sb.Endianness, readHeap.headerAddr)
+	if err != nil {
+		return fmt.Errorf("failed to read direct block: %w", err)
+	}
+
+	// Store loaded addresses for WriteAt() support (RMW)
+	fh.loadedHeaderAddress = address
+	fh.loadedDirectBlockAddress = readHeap.Header.RootBlockAddr
+
+	// Convert read-only header to writable header
+	fh.Header = &WritableHeapHeader{
+		Version:         readHeap.Header.Version,
+		HeapIDLength:    readHeap.Header.HeapIDLen,
+		IOFiltersLength: readHeap.Header.IOFiltersLen,
+		Flags:           readHeap.Header.Flags,
+
+		MaxManagedObjectSize: readHeap.Header.MaxManagedObjSize,
+
+		NextHugeObjectID:    readHeap.Header.NextHugeObjID,
+		HugeObjectBTreeAddr: readHeap.Header.HugeObjBTreeAddr,
+
+		FreeSpace:          readHeap.Header.FreeSpaceAmount,
+		FreeSectionAddress: readHeap.Header.FreeSpaceSectionAddr,
+
+		ManagedSpaceSize:      readHeap.Header.ManagedObjSpaceSize,
+		AllocatedManagedSpace: readHeap.Header.ManagedObjAllocSize,
+		ManagedSpaceOffset:    readHeap.Header.ManagedObjIterOffset,
+		NumManagedObjects:     readHeap.Header.ManagedObjCount,
+
+		SizeHugeObjects: readHeap.Header.HugeObjSize,
+		NumHugeObjects:  readHeap.Header.HugeObjCount,
+		SizeTinyObjects: readHeap.Header.TinyObjSize,
+		NumTinyObjects:  readHeap.Header.TinyObjCount,
+
+		TableWidth:         readHeap.Header.TableWidth,
+		StartingBlockSize:  readHeap.Header.StartingBlockSize,
+		MaxDirectBlockSize: readHeap.Header.MaxDirectBlockSize,
+		MaxHeapSize:        readHeap.Header.MaxHeapSize,
+		StartingNumRows:    readHeap.Header.StartRootIndirectRows,
+		RootBlockAddress:   readHeap.Header.RootBlockAddr,
+		CurrentNumRows:     readHeap.Header.CurrentRowCount,
+
+		HeapOffsetSize: readHeap.Header.HeapOffsetSize,
+		HeapLengthSize: readHeap.Header.HeapLengthSize,
+	}
+
+	// Convert direct block to writable format
+	fh.DirectBlock = &WritableDirectBlock{
+		Version:           dblock.Version,
+		HeapHeaderAddress: dblock.HeapHeaderAddr,
+		BlockOffset:       dblock.BlockOffset,
+		Size:              readHeap.Header.StartingBlockSize,
+		Objects:           make([]byte, len(dblock.Data)),
+		FreeOffset:        readHeap.Header.ManagedObjIterOffset, // Next insert position
+		ChecksumEnabled:   readHeap.Header.ChecksumDirectBlocks,
+	}
+
+	// Copy existing object data
+	copy(fh.DirectBlock.Objects, dblock.Data)
+
+	return nil
 }
 
 // GetObject retrieves object by ID from fractal heap (for testing).

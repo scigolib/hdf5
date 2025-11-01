@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
 
 	"github.com/scigolib/hdf5/internal/core"
 )
@@ -129,6 +130,10 @@ type WritableBTreeV2 struct {
 	leaf     *BTreeV2LeafNode
 	records  []LinkNameRecord
 	nodeSize uint32
+
+	// Addresses loaded from file (for RMW scenarios)
+	loadedHeaderAddress uint64
+	loadedLeafAddress   uint64
 }
 
 // NewWritableBTreeV2 creates a new B-tree v2 for link name indexing.
@@ -246,7 +251,10 @@ func (bt *WritableBTreeV2) WriteToFile(writer Writer, allocator Allocator, sb *c
 	}
 
 	// Calculate leaf node size
-	leafSize := bt.calculateLeafSize(sb)
+	// IMPORTANT: For RMW (Read-Modify-Write), allocate FULL node size,
+	// not just current content size. This allows leaf to grow without relocation.
+	// We'll only write actual data, but reserve full node size for future growth.
+	leafSize := uint64(bt.nodeSize) // Allocate FULL node size
 
 	// Allocate space for leaf node
 	leafAddr, err := allocator.Allocate(leafSize)
@@ -291,6 +299,59 @@ func (bt *WritableBTreeV2) WriteToFile(writer Writer, allocator Allocator, sb *c
 	return headerAddr, nil
 }
 
+// WriteAt writes B-tree v2 in-place at previously loaded addresses.
+//
+// This method is used for Read-Modify-Write (RMW) scenarios:
+// - B-tree was loaded via LoadFromFile()
+// - New records were inserted
+// - Write back to same addresses
+//
+// Parameters:
+//   - writer: File writer (must implement Writer interface)
+//   - sb: Superblock for field sizes
+//
+// Returns:
+//   - error: if write fails or B-tree was not loaded from file
+//
+// Reference: Same as WriteToFile, but uses stored addresses.
+func (bt *WritableBTreeV2) WriteAt(writer Writer, sb *core.Superblock) error {
+	if writer == nil || sb == nil {
+		return errors.New("writer or superblock is nil")
+	}
+
+	// Verify this B-tree was loaded from file
+	if bt.loadedHeaderAddress == 0 {
+		return errors.New("cannot use WriteAt: B-tree not loaded from file (use WriteToFile for new B-trees)")
+	}
+
+	// Encode leaf node
+	leafData, err := bt.encodeLeafNode(sb)
+	if err != nil {
+		return fmt.Errorf("failed to encode leaf node: %w", err)
+	}
+
+	// Write leaf node at loaded address
+	if err := writer.WriteAtAddress(leafData, bt.loadedLeafAddress); err != nil {
+		return fmt.Errorf("failed to write leaf node at 0x%X: %w", bt.loadedLeafAddress, err)
+	}
+
+	// Update header with leaf address (in case it was cleared)
+	bt.header.RootNodeAddr = bt.loadedLeafAddress
+
+	// Encode header
+	headerData, err := bt.encodeHeader(sb)
+	if err != nil {
+		return fmt.Errorf("failed to encode header: %w", err)
+	}
+
+	// Write header at loaded address
+	if err := writer.WriteAtAddress(headerData, bt.loadedHeaderAddress); err != nil {
+		return fmt.Errorf("failed to write header at 0x%X: %w", bt.loadedHeaderAddress, err)
+	}
+
+	return nil
+}
+
 // encodeHeader encodes B-tree v2 header for writing.
 //
 // Format (from H5B2cache.c - H5B2__hdr_serialize):
@@ -307,7 +368,7 @@ func (bt *WritableBTreeV2) WriteToFile(writer Writer, allocator Allocator, sb *c
 //   - Total Records: 8 bytes
 //   - Checksum: CRC32 (4 bytes)
 //
-//nolint:unparam // error return reserved for future validation
+//nolint:unparam // error reserved for future validation/compression features
 func (bt *WritableBTreeV2) encodeHeader(sb *core.Superblock) ([]byte, error) {
 	size := bt.calculateHeaderSize(sb)
 	buf := make([]byte, size)
@@ -373,7 +434,7 @@ func (bt *WritableBTreeV2) encodeHeader(sb *core.Superblock) ([]byte, error) {
 //   - Records: Array of link name records (numRecords * 11 bytes)
 //   - Checksum: CRC32 (4 bytes)
 //
-//nolint:unparam // error return reserved for future validation
+//nolint:unparam // error reserved for future validation/compression features
 func (bt *WritableBTreeV2) encodeLeafNode(sb *core.Superblock) ([]byte, error) {
 	size := bt.calculateLeafSize(sb)
 	buf := make([]byte, size)
@@ -473,6 +534,288 @@ func compareLinkNames(a, b string) int {
 		return 1
 	}
 	return 0
+}
+
+// LoadFromFile loads an existing B-tree v2 from file.
+//
+// This implements read-modify-write (RMW) support:
+// 1. Read header and leaf from file
+// 2. Populate internal structures
+// 3. Ready for new record insertion
+//
+// Parameters:
+//   - r: Reader to read from (io.ReaderAt)
+//   - headerAddr: Address of B-tree v2 header
+//   - sb: Superblock for offset/length sizes
+//
+// Returns:
+//   - error if read fails or validation fails
+//
+// MVP Limitations:
+//   - Single leaf node only (no internal nodes)
+//   - Assumes B-tree type 5 (Link Name Index)
+func (bt *WritableBTreeV2) LoadFromFile(r io.ReaderAt, headerAddr uint64, sb *core.Superblock) error {
+	if r == nil {
+		return fmt.Errorf("reader is nil")
+	}
+	if sb == nil {
+		return fmt.Errorf("superblock is nil")
+	}
+
+	// 1. Read and decode header
+	header, err := readBTreeV2Header(r, headerAddr, sb)
+	if err != nil {
+		return fmt.Errorf("failed to read B-tree header: %w", err)
+	}
+
+	// 2. Validate header
+	if header.Type != BTreeV2TypeLinkNameIndex {
+		return fmt.Errorf("%w: expected type %d, got %d", ErrInvalidBTreeType, BTreeV2TypeLinkNameIndex, header.Type)
+	}
+
+	if header.Depth != 0 {
+		return fmt.Errorf("only single-leaf B-trees are supported (depth 0), got depth %d", header.Depth)
+	}
+
+	// 3. Store loaded addresses for WriteAt() support (RMW)
+	bt.loadedHeaderAddress = headerAddr
+	bt.loadedLeafAddress = header.RootNodeAddr
+
+	// 4. Store header
+	bt.header = header
+	bt.nodeSize = header.NodeSize
+
+	// 5. Read and decode leaf node (if not empty)
+	if header.NumRecordsRoot > 0 {
+		leaf, records, err := readBTreeV2LeafNode(r, header.RootNodeAddr, int(header.NumRecordsRoot), sb)
+		if err != nil {
+			return fmt.Errorf("failed to read leaf node: %w", err)
+		}
+
+		bt.leaf = leaf
+		bt.records = records
+	} else {
+		// Empty tree
+		bt.leaf = &BTreeV2LeafNode{
+			Signature: [4]byte{'B', 'T', 'L', 'F'},
+			Version:   0,
+			Type:      BTreeV2TypeLinkNameIndex,
+			Records:   make([]LinkNameRecord, 0),
+		}
+		bt.records = make([]LinkNameRecord, 0)
+	}
+
+	return nil
+}
+
+// readBTreeV2Header reads B-tree v2 header from file.
+//
+// Format (from H5B2cache.c - H5B2__hdr_deserialize):
+//   - Signature: "BTHD" (4 bytes)
+//   - Version: 0 (1 byte)
+//   - Type: 5 = Link Name Index (1 byte)
+//   - Node Size: 4 bytes
+//   - Record Size: 2 bytes
+//   - Depth: 2 bytes
+//   - Split Percent: 1 byte
+//   - Merge Percent: 1 byte
+//   - Root Node Address: offsetSize bytes
+//   - Number of Records in Root: 2 bytes
+//   - Total Records: 8 bytes
+//   - Checksum: CRC32 (4 bytes)
+func readBTreeV2Header(r io.ReaderAt, address uint64, sb *core.Superblock) (*BTreeV2Header, error) {
+	// Calculate header size
+	size := 4 + 1 + 1 + 4 + 2 + 2 + 1 + 1 + int(sb.OffsetSize) + 2 + 8 + 4
+
+	// Read header data
+	buf := make([]byte, size)
+	//nolint:gosec // G115: address conversion, valid for file I/O
+	n, err := r.ReadAt(buf, int64(address))
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("failed to read header at 0x%X: %w", address, err)
+	}
+	if n < size {
+		return nil, fmt.Errorf("incomplete header read: got %d bytes, want %d", n, size)
+	}
+
+	offset := 0
+
+	// Signature (4 bytes)
+	var signature [4]byte
+	copy(signature[:], buf[offset:offset+4])
+	if string(signature[:]) != BTreeV2HeaderSignature {
+		return nil, fmt.Errorf("invalid B-tree header signature: got %q, want %q", signature, BTreeV2HeaderSignature)
+	}
+	offset += 4
+
+	// Version (1 byte)
+	version := buf[offset]
+	if version != 0 {
+		return nil, fmt.Errorf("unsupported B-tree version: %d", version)
+	}
+	offset++
+
+	// Type (1 byte)
+	btreeType := buf[offset]
+	offset++
+
+	// Node Size (4 bytes)
+	nodeSize := binary.LittleEndian.Uint32(buf[offset : offset+4])
+	offset += 4
+
+	// Record Size (2 bytes)
+	recordSize := binary.LittleEndian.Uint16(buf[offset : offset+2])
+	offset += 2
+
+	// Depth (2 bytes)
+	depth := binary.LittleEndian.Uint16(buf[offset : offset+2])
+	offset += 2
+
+	// Split Percent (1 byte)
+	splitPercent := buf[offset]
+	offset++
+
+	// Merge Percent (1 byte)
+	mergePercent := buf[offset]
+	offset++
+
+	// Root Node Address (offsetSize bytes)
+	rootNodeAddr := readUint64(buf[offset:offset+int(sb.OffsetSize)], int(sb.OffsetSize), sb.Endianness)
+	offset += int(sb.OffsetSize)
+
+	// Number of Records in Root (2 bytes)
+	numRecordsRoot := binary.LittleEndian.Uint16(buf[offset : offset+2])
+	offset += 2
+
+	// Total Records (8 bytes)
+	totalRecords := binary.LittleEndian.Uint64(buf[offset : offset+8])
+	offset += 8
+
+	// Checksum (CRC32, 4 bytes)
+	storedChecksum := binary.LittleEndian.Uint32(buf[offset : offset+4])
+	expectedChecksum := crc32.ChecksumIEEE(buf[:offset])
+	if storedChecksum != expectedChecksum {
+		return nil, fmt.Errorf("b-tree header checksum mismatch: got 0x%X, want 0x%X", storedChecksum, expectedChecksum)
+	}
+
+	return &BTreeV2Header{
+		Signature:      signature,
+		Version:        version,
+		Type:           btreeType,
+		NodeSize:       nodeSize,
+		RecordSize:     recordSize,
+		Depth:          depth,
+		SplitPercent:   splitPercent,
+		MergePercent:   mergePercent,
+		RootNodeAddr:   rootNodeAddr,
+		NumRecordsRoot: numRecordsRoot,
+		TotalRecords:   totalRecords,
+	}, nil
+}
+
+// readBTreeV2LeafNode reads B-tree v2 leaf node from file.
+//
+// Format (from H5B2cache.c - H5B2__leaf_deserialize):
+//   - Signature: "BTLF" (4 bytes)
+//   - Version: 0 (1 byte)
+//   - Type: 5 (1 byte)
+//   - Records: Array of link name records (numRecords * 11 bytes)
+//   - Checksum: CRC32 (4 bytes)
+func readBTreeV2LeafNode(r io.ReaderAt, address uint64, numRecords int, _ *core.Superblock) (*BTreeV2LeafNode, []LinkNameRecord, error) {
+	// Calculate leaf size
+	size := 4 + 1 + 1 + (numRecords * 11) + 4
+
+	// Read leaf data
+	buf := make([]byte, size)
+	//nolint:gosec // G115: address conversion, valid for file I/O
+	n, err := r.ReadAt(buf, int64(address))
+	if err != nil && err != io.EOF {
+		return nil, nil, fmt.Errorf("failed to read leaf at 0x%X: %w", address, err)
+	}
+	if n < size {
+		return nil, nil, fmt.Errorf("incomplete leaf read: got %d bytes, want %d", n, size)
+	}
+
+	offset := 0
+
+	// Signature (4 bytes)
+	var signature [4]byte
+	copy(signature[:], buf[offset:offset+4])
+	if string(signature[:]) != BTreeV2LeafSignature {
+		return nil, nil, fmt.Errorf("invalid B-tree leaf signature: got %q, want %q", signature, BTreeV2LeafSignature)
+	}
+	offset += 4
+
+	// Version (1 byte)
+	version := buf[offset]
+	if version != 0 {
+		return nil, nil, fmt.Errorf("unsupported B-tree leaf version: %d", version)
+	}
+	offset++
+
+	// Type (1 byte)
+	leafType := buf[offset]
+	offset++
+
+	// Records (each record is 11 bytes: 4 bytes hash + 7 bytes heap ID)
+	records := make([]LinkNameRecord, numRecords)
+	for i := 0; i < numRecords; i++ {
+		// Name Hash (4 bytes)
+		nameHash := binary.LittleEndian.Uint32(buf[offset : offset+4])
+		offset += 4
+
+		// Heap ID (7 bytes)
+		var heapID [7]byte
+		copy(heapID[:], buf[offset:offset+7])
+		offset += 7
+
+		records[i] = LinkNameRecord{
+			NameHash: nameHash,
+			HeapID:   heapID,
+		}
+	}
+
+	// Checksum (CRC32, 4 bytes)
+	storedChecksum := binary.LittleEndian.Uint32(buf[offset : offset+4])
+	expectedChecksum := crc32.ChecksumIEEE(buf[:offset])
+	if storedChecksum != expectedChecksum {
+		return nil, nil, fmt.Errorf("b-tree leaf checksum mismatch: got 0x%X, want 0x%X", storedChecksum, expectedChecksum)
+	}
+
+	leaf := &BTreeV2LeafNode{
+		Signature: signature,
+		Version:   version,
+		Type:      leafType,
+		Records:   records,
+	}
+
+	return leaf, records, nil
+}
+
+// readUint64 reads a uint64 value from buffer with specified size and endianness.
+// This is the counterpart to writeUint64 for decoding.
+func readUint64(buf []byte, size int, endianness binary.ByteOrder) uint64 {
+	switch size {
+	case 1:
+		return uint64(buf[0])
+	case 2:
+		return uint64(endianness.Uint16(buf[:2]))
+	case 4:
+		return uint64(endianness.Uint32(buf[:4]))
+	case 8:
+		return endianness.Uint64(buf[:8])
+	default:
+		return 0
+	}
+}
+
+// GetRecords returns the current list of records in the B-tree.
+// This is a read-only accessor for the records slice.
+//
+// Returns:
+//   - []LinkNameRecord: slice of all link name records in the B-tree
+func (bt *WritableBTreeV2) GetRecords() []LinkNameRecord {
+	return bt.records
 }
 
 // jenkinsHash computes Jenkins hash (lookup3) for a string.
