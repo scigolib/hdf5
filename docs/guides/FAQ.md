@@ -162,7 +162,7 @@ enumDs, _ := fw.CreateDataset("/status", hdf5.EnumInt8, []uint64{5},
 
 **Coming soon**:
 - **v0.11.2-beta**: Dense storage read-modify-write, attribute modifications
-- **v0.11.0-RC**: API freeze, SWMR, community testing
+- **v0.12.0-rc.1**: Feature complete, API freeze, community testing
 - **v1.0.0**: Production-ready write support
 
 See [ROADMAP.md](../../ROADMAP.md) for details.

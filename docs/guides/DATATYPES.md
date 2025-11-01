@@ -27,7 +27,7 @@ HDF5 uses its own type system that maps to native types in different programming
 | **Fixed-point** | H5T_INTEGER | int8-64, uint8-64 | ✅ | ✅ v0.11.0-beta |
 | **Floating-point** | H5T_FLOAT | float32, float64 | ✅ | ✅ v0.11.0-beta |
 | **String** | H5T_STRING | string, []string | ✅ | ✅ v0.11.0-beta |
-| **Compound** | H5T_COMPOUND | map[string]interface{} | ✅ | ❌ v0.11.0-RC |
+| **Compound** | H5T_COMPOUND | map[string]interface{} | ✅ | ❌ v0.12.0-rc.1 |
 | **Array** | H5T_ARRAY | [N]T (fixed arrays) | ✅ | ✅ v0.11.0-beta |
 | **Enum** | H5T_ENUM | Named integer constants | ✅ | ✅ v0.11.0-beta |
 | **Reference** | H5T_REFERENCE | uint64, [12]byte | ✅ | ✅ v0.11.0-beta |
