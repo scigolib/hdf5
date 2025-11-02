@@ -1,5 +1,3 @@
-//go:build ignore
-
 // Example 3: Incremental Rebalancing
 //
 // This example demonstrates incremental (background) rebalancing mode.

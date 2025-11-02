@@ -4,12 +4,12 @@ This directory contains working examples demonstrating HDF5 B-tree rebalancing s
 
 ## Examples
 
-### 01-default.go - Default (No Rebalancing)
+### default/ - Default (No Rebalancing)
 
 **Use Case**: Append-only workloads, small files, maximum write performance
 
 ```bash
-go run 01-default.go
+go run ./default
 ```
 
 **What it demonstrates**:
@@ -19,12 +19,12 @@ go run 01-default.go
 
 ---
 
-### 02-lazy.go - Lazy Rebalancing
+### lazy/ - Lazy Rebalancing
 
 **Use Case**: Batch deletion workloads, medium/large files (100-500MB)
 
 ```bash
-go run 02-lazy.go
+go run ./lazy
 ```
 
 **What it demonstrates**:
@@ -35,12 +35,12 @@ go run 02-lazy.go
 
 ---
 
-### 03-incremental.go - Incremental Rebalancing
+### incremental/ - Incremental Rebalancing
 
 **Use Case**: Large files (>500MB), continuous operations, zero-pause requirement
 
 ```bash
-go run 03-incremental.go
+go run ./incremental
 ```
 
 **What it demonstrates**:
@@ -51,12 +51,12 @@ go run 03-incremental.go
 
 ---
 
-### 04-smart.go - Smart Rebalancing (Auto-Tuning)
+### smart/ - Smart Rebalancing (Auto-Tuning)
 
 **Use Case**: Unknown workloads, mixed operations, want auto-pilot mode
 
 ```bash
-go run 04-smart.go
+go run ./smart
 ```
 
 **What it demonstrates**:
@@ -71,10 +71,10 @@ go run 04-smart.go
 
 | Example | Mode | Overhead | Pause Time | Use Case |
 |---------|------|----------|------------|----------|
-| **01-default** | None | 0% | None | Append-only, small files |
-| **02-lazy** | Lazy (batch) | ~2% | 100-500ms batches | Batch deletions |
-| **03-incremental** | Incremental (background) | ~4% | None (background) | Large files, continuous ops |
-| **04-smart** | Smart (auto) | ~6% | Varies | Unknown workloads |
+| **default/** | None | 0% | None | Append-only, small files |
+| **lazy/** | Lazy (batch) | ~2% | 100-500ms batches | Batch deletions |
+| **incremental/** | Incremental (background) | ~4% | None (background) | Large files, continuous ops |
+| **smart/** | Smart (auto) | ~6% | Varies | Unknown workloads |
 
 ---
 
@@ -82,20 +82,27 @@ go run 04-smart.go
 
 ```bash
 # Run each example individually
-go run 01-default.go
-go run 02-lazy.go
-go run 03-incremental.go
-go run 04-smart.go
+go run ./default
+go run ./lazy
+go run ./incremental
+go run ./smart
 
-# Or run all at once
-for f in *.go; do echo "Running $f..."; go run "$f"; echo; done
+# Or build all examples
+go build ./...
+
+# Or run all examples at once
+for dir in default lazy incremental smart; do
+  echo "Running $dir..."
+  go run ./$dir
+  echo
+done
 ```
 
 **Output Files**:
-- `01-default-output.h5` - File with no rebalancing
-- `02-lazy-output.h5` - File with lazy rebalancing
-- `03-incremental-output.h5` - File with incremental rebalancing
-- `04-smart-output.h5` - File with smart rebalancing
+- `default-output.h5` - File with no rebalancing
+- `lazy-output.h5` - File with lazy rebalancing
+- `incremental-output.h5` - File with incremental rebalancing
+- `smart-output.h5` - File with smart rebalancing
 
 All files are valid HDF5 and can be opened with:
 - `h5dump` (C library tool)
@@ -106,10 +113,10 @@ All files are valid HDF5 and can be opened with:
 
 ## Performance Tips
 
-1. **Start with default** (01-default.go) unless you know you need rebalancing
-2. **Use lazy** (02-lazy.go) for batch deletion workloads (10-100x faster)
-3. **Use incremental** (03-incremental.go) for large files where pauses are unacceptable
-4. **Use smart** (04-smart.go) only if workload is truly unknown
+1. **Start with default** (`./default`) unless you know you need rebalancing
+2. **Use lazy** (`./lazy`) for batch deletion workloads (10-100x faster)
+3. **Use incremental** (`./incremental`) for large files where pauses are unacceptable
+4. **Use smart** (`./smart`) only if workload is truly unknown
 
 ---
 

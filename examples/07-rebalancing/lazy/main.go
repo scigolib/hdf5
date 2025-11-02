@@ -1,5 +1,3 @@
-//go:build ignore
-
 // Example 2: Lazy Rebalancing
 //
 // This example demonstrates lazy (batch) rebalancing mode.

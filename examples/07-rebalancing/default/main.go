@@ -1,5 +1,3 @@
-//go:build ignore
-
 // Example 1: Default (No Rebalancing)
 //
 // This example demonstrates the default behavior: NO automatic rebalancing.
