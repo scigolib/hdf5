@@ -22,8 +22,8 @@ A modern, pure Go library for reading and writing HDF5 files without CGo depende
 - ✅ **Full Dataset Reading** - Compact, contiguous, chunked layouts with GZIP
 - ✅ **Rich Datatypes** - Integers, floats, strings (fixed/variable), compounds
 - ✅ **Memory Efficient** - Buffer pooling and smart memory management
-- ✅ **Production Ready** - Read support feature-complete (v0.10.0-beta)
-- ✍️ **Write Support Advancing** - v0.11.3-beta: Dense Storage RMW (Read-Modify-Write complete)!
+- ✅ **Production Ready** - Read support feature-complete
+- ✍️ **Write Support Advancing** - MVP write support + Smart Rebalancing API!
 
 ---
 
@@ -92,7 +92,103 @@ func main() {
 
 ### Advanced
 - **[Architecture Overview](docs/architecture/OVERVIEW.md)** - How it works internally
-- **[Examples](examples/)** - Working code examples (5 examples with detailed documentation)
+- **[Performance Tuning](docs/guides/performance-tuning.md)** - B-tree rebalancing strategies for optimal performance
+- **[Rebalancing API](docs/guides/rebalancing-api.md)** - Complete API reference for rebalancing options
+- **[Examples](examples/)** - Working code examples (7 examples with detailed documentation)
+
+---
+
+## ⚡ Performance Tuning
+
+**NEW in v0.11.3-beta**: Smart B-tree rebalancing for deletion-heavy workloads!
+
+When deleting many attributes, B-trees can become **sparse** (wasted disk space, slower searches). This library offers **4 rebalancing strategies**:
+
+### 1. Default (No Rebalancing)
+
+**Fast deletions, but B-tree may become sparse**
+
+```go
+// No options = no rebalancing (like HDF5 C library)
+fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate)
+```
+
+**Use for**: Append-only workloads, small files (<100MB)
+
+---
+
+### 2. Lazy Rebalancing (10-100x faster than immediate)
+
+**Batch processing: rebalances when threshold reached**
+
+```go
+fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
+    hdf5.WithLazyRebalancing(
+        hdf5.LazyThreshold(0.05),         // Trigger at 5% underflow
+        hdf5.LazyMaxDelay(5*time.Minute), // Force rebalance after 5 min
+    ),
+)
+```
+
+**Use for**: Batch deletion workloads, medium/large files (100-500MB)
+
+**Performance**: ~2% overhead, occasional 100-500ms pauses
+
+---
+
+### 3. Incremental Rebalancing (ZERO pause)
+
+**Background processing: rebalances in background goroutine**
+
+```go
+fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
+    hdf5.WithLazyRebalancing(),  // Prerequisite!
+    hdf5.WithIncrementalRebalancing(
+        hdf5.IncrementalBudget(100*time.Millisecond),
+        hdf5.IncrementalInterval(5*time.Second),
+    ),
+)
+defer fw.Close()  // Stops background goroutine
+```
+
+**Use for**: Large files (>500MB), continuous operations, TB-scale data
+
+**Performance**: ~4% overhead, **zero user-visible pause**
+
+---
+
+### 4. Smart Rebalancing (Auto-Pilot)
+
+**Auto-tuning: library detects workload and selects optimal mode**
+
+```go
+fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
+    hdf5.WithSmartRebalancing(
+        hdf5.SmartAutoDetect(true),
+        hdf5.SmartAutoSwitch(true),
+    ),
+)
+```
+
+**Use for**: Unknown workloads, mixed operations, research environments
+
+**Performance**: ~6% overhead, adapts automatically
+
+---
+
+### Performance Comparison
+
+| Mode | Deletion Speed | Pause Time | Use Case |
+|------|----------------|------------|----------|
+| **Default** | 100% (baseline) | None | Append-only, small files |
+| **Lazy** | 95% (10-100x faster than immediate!) | 100-500ms batches | Batch deletions |
+| **Incremental** | 92% | None (background) | Large files, continuous ops |
+| **Smart** | 88% | Varies | Unknown workloads |
+
+**Learn more**:
+- **[Performance Tuning Guide](docs/guides/performance-tuning.md)**: Comprehensive guide with benchmarks, recommendations, troubleshooting
+- **[Rebalancing API Reference](docs/guides/rebalancing-api.md)**: Complete API documentation
+- **[Examples](examples/07-rebalancing/)**: 4 working examples demonstrating each mode
 
 ---
 
