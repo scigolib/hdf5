@@ -218,12 +218,13 @@ if [ $DOCS_MISSING -eq 0 ]; then
 fi
 echo ""
 
-# 13. Check sprint completion (v0.10.0-beta specific)
-log_info "Checking sprint tasks completion..."
-if grep -q "100% - 6/6 tasks" ROADMAP.md; then
-    log_success "Sprint v0.10.0-beta: 100% complete (6/6 tasks)"
+# 13. Check ROADMAP.md current status
+log_info "Checking ROADMAP.md current version..."
+CURRENT_VERSION=$(grep "Current Version" ROADMAP.md | head -1 | sed -n 's/.*Current Version\*\*: \(v[^ |]*\).*/\1/p')
+if [ -n "$CURRENT_VERSION" ]; then
+    log_success "ROADMAP.md shows current version: $CURRENT_VERSION"
 else
-    log_warning "Sprint tasks may not be complete"
+    log_warning "Could not detect current version in ROADMAP.md"
     WARNINGS=$((WARNINGS + 1))
 fi
 echo ""
