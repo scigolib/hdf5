@@ -148,7 +148,7 @@ func TestDatasetWriter_RebalanceAttributeBTree_NoAttributes(t *testing.T) {
 //
 // Tests the RMW (read-modify-write) path with cached object header.
 func TestDatasetWriter_RebalanceAttributeBTree_OpenForWrite(t *testing.T) {
-	filename := "testdata/rebalance_open_for_write.h5"
+	filename := "tmp/rebalance_open_for_write.h5"
 	defer os.Remove(filename)
 
 	// Create file with dense attributes

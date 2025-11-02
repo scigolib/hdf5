@@ -98,7 +98,7 @@ func TestFileWriter_BTreeRebalancing_RuntimeToggle(t *testing.T) {
 
 // TestFileWriter_BTreeRebalancing_OpenForWrite tests rebalancing config with OpenForWrite.
 func TestFileWriter_BTreeRebalancing_OpenForWrite(t *testing.T) {
-	filename := "testdata/btree_rebalancing_openforwrite.h5"
+	filename := "tmp/btree_rebalancing_openforwrite.h5"
 	defer os.Remove(filename)
 
 	// Create file first
@@ -113,11 +113,11 @@ func TestFileWriter_BTreeRebalancing_OpenForWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenForWrite failed: %v", err)
 	}
-	defer fw2.Close()
 
 	if !fw2.RebalancingEnabled() {
 		t.Error("Expected rebalancing to be enabled by default in OpenForWrite")
 	}
+	fw2.Close() // Close explicitly before next open
 
 	// Open with rebalancing disabled
 	fw3, err := hdf5.OpenForWrite(filename, hdf5.OpenReadWrite,
