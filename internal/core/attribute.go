@@ -1,3 +1,4 @@
+// Package core provides HDF5 file format parsing and manipulation functionality.
 package core
 
 import (

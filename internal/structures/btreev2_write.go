@@ -134,6 +134,12 @@ type WritableBTreeV2 struct {
 	// Addresses loaded from file (for RMW scenarios)
 	loadedHeaderAddress uint64
 	loadedLeafAddress   uint64
+
+	// Lazy rebalancing state (nil if disabled)
+	lazyState *LazyRebalancingState
+
+	// Incremental rebalancing state (nil if disabled)
+	incrementalRebalancer *IncrementalRebalancer
 }
 
 // NewWritableBTreeV2 creates a new B-tree v2 for link name indexing.
@@ -234,6 +240,104 @@ func (bt *WritableBTreeV2) HasKey(name string) bool {
 	}
 
 	return false
+}
+
+// SearchRecord searches for a record by name and returns the heap ID.
+//
+// This function is used for attribute modification - to find an existing attribute
+// by name and get its heap ID for reading or updating.
+//
+// Parameters:
+//   - name: attribute/link name to search for
+//
+// Returns:
+//   - []byte: 8-byte heap ID (converted from 7-byte stored format)
+//   - bool: true if found, false if not found
+//
+// For MVP: searches single leaf node by name hash.
+//
+// Reference: H5Adense.c - H5A__dense_write() searches B-tree by name.
+func (bt *WritableBTreeV2) SearchRecord(name string) ([]byte, bool) {
+	hash := jenkinsHash(name)
+
+	// Search in records
+	for _, record := range bt.records {
+		if record.NameHash == hash {
+			// Convert 7-byte heap ID to 8-byte format
+			heapID := make([]byte, 8)
+			copy(heapID, record.HeapID[:])
+			// Last byte is 0 (7-byte format pads to 8 bytes)
+			return heapID, true
+		}
+	}
+
+	return nil, false
+}
+
+// UpdateRecord updates an existing record's heap ID.
+//
+// This function is used when modifying attributes with different sizes:
+// 1. Delete old heap object
+// 2. Insert new heap object → get new heap ID
+// 3. Update B-tree record with new heap ID
+//
+// Parameters:
+//   - name: attribute/link name to update
+//   - newHeapID: new 8-byte heap ID
+//
+// Returns:
+//   - error: if record not found or update fails
+//
+// For MVP: updates record in single leaf node.
+//
+// Reference: H5Adense.c - H5A__dense_write() updates B-tree when size changes.
+func (bt *WritableBTreeV2) UpdateRecord(name string, newHeapID uint64) error {
+	hash := jenkinsHash(name)
+
+	// Find record
+	for i, record := range bt.records {
+		if record.NameHash != hash {
+			continue
+		}
+
+		// Convert 8-byte heap ID to 7-byte format
+		var heapIDBytes [7]byte
+		var temp [8]byte
+		binary.LittleEndian.PutUint64(temp[:], newHeapID)
+		copy(heapIDBytes[:], temp[:7])
+
+		// Update record
+		bt.records[i].HeapID = heapIDBytes
+		bt.leaf.Records = bt.records
+		return nil
+	}
+
+	return fmt.Errorf("record not found for name: %s", name)
+}
+
+// DeleteRecord removes a record from the B-tree by name.
+//
+// Deprecated: Use DeleteRecordWithRebalancing for production-quality deletion.
+// This method is kept for backward compatibility only.
+//
+// This function is used for attribute deletion:
+// 1. Search for record by name (hash)
+// 2. Remove from records slice
+// 3. Update record counts
+//
+// Parameters:
+//   - name: attribute/link name to delete
+//
+// Returns:
+//   - error: if record not found or deletion fails
+//
+// For MVP: removes record from single leaf node.
+// No tree rebalancing or node merging.
+//
+// Reference: H5B2.c - H5B2_remove(), H5Adelete.c - attribute deletion.
+func (bt *WritableBTreeV2) DeleteRecord(name string) error {
+	// Delegate to rebalancing version (which handles MVP correctly)
+	return bt.DeleteRecordWithRebalancing(name)
 }
 
 // WriteToFile writes B-tree v2 to file and returns header address.

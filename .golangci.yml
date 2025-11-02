@@ -129,6 +129,7 @@ linters:
         - commentFormatting  # Too opinionated about comment style
         - whyNoLint          # We document nolints when needed
         - unnamedResult      # Named results can reduce readability
+        - commentedOutCode   # False positives on test data comments
 
       settings:
         hugeParam:

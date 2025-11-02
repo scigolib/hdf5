@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/binary"
 	"testing"
 )
 
@@ -167,4 +168,193 @@ func TestCopyNDChunk_PartialChunks(t *testing.T) {
 	if fullData[4*7+6] != 4 {
 		t.Errorf("[4][6]: expected 4, got %d", fullData[4*7+6])
 	}
+}
+
+// TestReadDatasetInfo tests reading dataset metadata.
+func TestReadDatasetInfo(t *testing.T) {
+	tests := []struct {
+		name    string
+		header  *ObjectHeader
+		sb      *Superblock
+		wantErr bool
+	}{
+		{
+			name: "valid dataset with all messages",
+			header: &ObjectHeader{
+				Messages: []*HeaderMessage{
+					{
+						Type: MsgDatatype,
+						Data: buildDatatypeMessage(t, DatatypeFloat, 8),
+					},
+					{
+						Type: MsgDataspace,
+						Data: buildDataspaceMessage(t, []uint64{2, 3}),
+					},
+					{
+						Type: MsgDataLayout,
+						Data: buildDataLayoutMessage(t, LayoutContiguous, 0x1000),
+					},
+				},
+			},
+			sb:      &Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian},
+			wantErr: false,
+		},
+		{
+			name: "missing datatype message",
+			header: &ObjectHeader{
+				Messages: []*HeaderMessage{
+					{
+						Type: MsgDataspace,
+						Data: buildDataspaceMessage(t, []uint64{2, 3}),
+					},
+					{
+						Type: MsgDataLayout,
+						Data: buildDataLayoutMessage(t, LayoutContiguous, 0x1000),
+					},
+				},
+			},
+			sb:      &Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian},
+			wantErr: true,
+		},
+		{
+			name: "missing dataspace message",
+			header: &ObjectHeader{
+				Messages: []*HeaderMessage{
+					{
+						Type: MsgDatatype,
+						Data: buildDatatypeMessage(t, DatatypeFloat, 8),
+					},
+					{
+						Type: MsgDataLayout,
+						Data: buildDataLayoutMessage(t, LayoutContiguous, 0x1000),
+					},
+				},
+			},
+			sb:      &Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian},
+			wantErr: true,
+		},
+		{
+			name: "missing layout message",
+			header: &ObjectHeader{
+				Messages: []*HeaderMessage{
+					{
+						Type: MsgDatatype,
+						Data: buildDatatypeMessage(t, DatatypeFloat, 8),
+					},
+					{
+						Type: MsgDataspace,
+						Data: buildDataspaceMessage(t, []uint64{2, 3}),
+					},
+				},
+			},
+			sb:      &Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info, err := ReadDatasetInfo(tt.header, tt.sb)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if info == nil {
+				t.Fatal("info is nil")
+			}
+			if info.Datatype == nil {
+				t.Error("datatype is nil")
+			}
+			if info.Dataspace == nil {
+				t.Error("dataspace is nil")
+			}
+			if info.Layout == nil {
+				t.Error("layout is nil")
+			}
+		})
+	}
+}
+
+// Helper functions to build message data.
+
+func buildDatatypeMessage(t *testing.T, class DatatypeClass, size uint32) []byte {
+	t.Helper()
+	// Simple datatype message (version 1).
+	// Bytes 0-3: class | version << 4 | bitfield << 8.
+	// Bytes 4-7: size.
+	data := make([]byte, 8)
+	classAndVersion := uint32(class) | (1 << 4) // Version 1.
+	data[0] = byte(classAndVersion & 0xFF)
+	data[1] = byte((classAndVersion >> 8) & 0xFF)
+	data[2] = byte((classAndVersion >> 16) & 0xFF)
+	data[3] = byte((classAndVersion >> 24) & 0xFF)
+	data[4] = byte(size & 0xFF)
+	data[5] = byte((size >> 8) & 0xFF)
+	data[6] = byte((size >> 16) & 0xFF)
+	data[7] = byte((size >> 24) & 0xFF)
+	return data
+}
+
+func buildDataspaceMessage(t *testing.T, dims []uint64) []byte {
+	t.Helper()
+	// Simple dataspace message (version 1).
+	// Byte 0: version.
+	// Byte 1: dimensionality.
+	// Byte 2: flags.
+	// Bytes 3-4: reserved.
+	// Then: dimension sizes (8 bytes each).
+	data := make([]byte, 5+len(dims)*8)
+	data[0] = 1                // Version 1.
+	data[1] = uint8(len(dims)) // Dimensionality.
+	data[2] = 0                // Flags (no max dims).
+	// Skip reserved bytes 3-4.
+	offset := 5
+	for _, dim := range dims {
+		data[offset] = byte(dim & 0xFF)
+		data[offset+1] = byte((dim >> 8) & 0xFF)
+		data[offset+2] = byte((dim >> 16) & 0xFF)
+		data[offset+3] = byte((dim >> 24) & 0xFF)
+		data[offset+4] = byte((dim >> 32) & 0xFF)
+		data[offset+5] = byte((dim >> 40) & 0xFF)
+		data[offset+6] = byte((dim >> 48) & 0xFF)
+		data[offset+7] = byte((dim >> 56) & 0xFF)
+		offset += 8
+	}
+	return data
+}
+
+func buildDataLayoutMessage(t *testing.T, class DataLayoutClass, address uint64) []byte {
+	t.Helper()
+	// Simple contiguous layout message (version 3).
+	// Byte 0: version.
+	// Byte 1: class.
+	// Bytes 2+: address (8 bytes) + size (8 bytes).
+	data := make([]byte, 2+8+8)
+	data[0] = 3            // Version 3.
+	data[1] = uint8(class) // Class.
+	// Address (8 bytes).
+	data[2] = byte(address & 0xFF)
+	data[3] = byte((address >> 8) & 0xFF)
+	data[4] = byte((address >> 16) & 0xFF)
+	data[5] = byte((address >> 24) & 0xFF)
+	data[6] = byte((address >> 32) & 0xFF)
+	data[7] = byte((address >> 40) & 0xFF)
+	data[8] = byte((address >> 48) & 0xFF)
+	data[9] = byte((address >> 56) & 0xFF)
+	// Size (8 bytes) - set to 1000 bytes for testing.
+	size := uint64(1000)
+	data[10] = byte(size & 0xFF)
+	data[11] = byte((size >> 8) & 0xFF)
+	data[12] = byte((size >> 16) & 0xFF)
+	data[13] = byte((size >> 24) & 0xFF)
+	data[14] = byte((size >> 32) & 0xFF)
+	data[15] = byte((size >> 40) & 0xFF)
+	data[16] = byte((size >> 48) & 0xFF)
+	data[17] = byte((size >> 56) & 0xFF)
+	return data
 }

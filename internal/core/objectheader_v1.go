@@ -45,7 +45,6 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 	}
 
 	numMessages := sb.Endianness.Uint16(headerBuf[2:4])
-	//nolint:gocritic // commentedOutCode: valid comment explaining unused field
 	// refCount := sb.Endianness.Uint32(headerBuf[4:8])  // Unused.
 	headerSize := sb.Endianness.Uint32(headerBuf[8:12])
 
@@ -215,7 +214,6 @@ func parseV1MessagesInBlock(r io.ReaderAt, start, end uint64, maxMessages uint16
 
 		msgType := MessageType(sb.Endianness.Uint16(msgHeaderBuf[0:2]))
 		msgSize := sb.Endianness.Uint16(msgHeaderBuf[2:4])
-		//nolint:gocritic // commentedOutCode: valid comment explaining unused field
 		// msgFlags := msgHeaderBuf[4]  // Unused for now.
 		utils.ReleaseBuffer(msgHeaderBuf)
 

@@ -1,4 +1,3 @@
-//nolint:gocritic // commentedOutCode: inline test comments are not actual commented-out code
 package core
 
 import (
