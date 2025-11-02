@@ -11,6 +11,12 @@ import (
 	"github.com/scigolib/hdf5"
 )
 
+func TestMain(m *testing.M) {
+	// Ensure tmp directory exists for CI
+	os.MkdirAll("tmp", 0755)
+	os.Exit(m.Run())
+}
+
 // TestFileWriter_BTreeRebalancing_DefaultEnabled tests that rebalancing is enabled by default.
 func TestFileWriter_BTreeRebalancing_DefaultEnabled(t *testing.T) {
 	// Default: Rebalancing should be enabled (C library behavior)
