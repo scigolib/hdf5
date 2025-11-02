@@ -7,7 +7,7 @@
 [![CI](https://github.com/scigolib/hdf5/actions/workflows/test.yml/badge.svg)](https://github.com/scigolib/hdf5/actions)
 [![Coverage](https://img.shields.io/badge/coverage-86.1%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.11.3--beta-green.svg)](ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-v0.11.4--beta-green.svg)](ROADMAP.md)
 [![GoDoc](https://pkg.go.dev/badge/github.com/scigolib/hdf5.svg)](https://pkg.go.dev/github.com/scigolib/hdf5)
 
 A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. Read support is feature-complete, write support advancing rapidly!
@@ -23,7 +23,7 @@ A modern, pure Go library for reading and writing HDF5 files without CGo depende
 - ✅ **Rich Datatypes** - Integers, floats, strings (fixed/variable), compounds
 - ✅ **Memory Efficient** - Buffer pooling and smart memory management
 - ✅ **Production Ready** - Read support feature-complete
-- ✍️ **Write Support Advancing** - MVP write support + Smart Rebalancing API!
+- ✍️ **Comprehensive Write Support** - Datasets, groups, attributes + Smart Rebalancing!
 
 ---
 
@@ -100,7 +100,7 @@ func main() {
 
 ## ⚡ Performance Tuning
 
-**NEW in v0.11.3-beta**: Smart B-tree rebalancing for deletion-heavy workloads!
+**NEW in v0.11.4-beta**: Smart B-tree rebalancing, attribute modification/deletion, and 77.8% test coverage!
 
 When deleting many attributes, B-trees can become **sparse** (wasted disk space, slower searches). This library offers **4 rebalancing strategies**:
 
@@ -194,7 +194,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 
 ## 🎯 Current Status
 
-**Version**: v0.11.3-beta (RELEASED 2025-11-01 - Dense Storage RMW) ✅
+**Version**: v0.11.4-beta (RELEASED 2025-11-02 - Smart Rebalancing + Attribute RMW) ✅
 
 **Production Readiness: Read support feature-complete! Write support advancing rapidly!** 🎉
 
@@ -239,7 +239,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 ### ⚠️ Partial Support
 - **Dense Attributes**: Infrastructure ready, B-tree v2 iteration deferred to v0.12.0-rc.1 (<10% of files affected)
 
-### ✍️ Write Support (v0.11.3-beta)
+### ✍️ Write Support (v0.11.4-beta)
 - ✅ **File creation** - CreateForWrite() with Truncate/Exclusive modes
 - ✅ **Superblock formats** - v0 (legacy, HDF5 < 1.8) + v2 (modern, HDF5 >= 1.8)
 - ✅ **Object headers** - v1 (legacy, 16-byte) + v2 (modern, 4-byte min)
@@ -248,13 +248,14 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 - ✅ **Compression** - GZIP (deflate), Shuffle filter, Fletcher32 checksum
 - ✅ **Groups** - Symbol table + dense groups (automatic transition at 8+ links)
 - ✅ **Attributes** - Compact (0-7) + dense (8+) with automatic transition
-- ✅ **Dense Storage RMW** - Read-modify-write for existing dense attributes ✨ NEW
+- ✅ **Dense Storage RMW** - Read-modify-write for existing dense attributes
+- ✅ **Attribute modification/deletion** - Modify/delete compact & dense attributes ✨ NEW
+- ✅ **Smart B-tree rebalancing** - Auto-tuning for deletion-heavy workloads ✨ NEW
 - ✅ **Advanced datatypes** - Arrays, Enums, References, Opaque
 - ✅ **Free space management** - End-of-file allocation (validated, 100% coverage)
 - ✅ **Legacy compatibility** - Files readable by HDF5 1.0+ tools
 
-**Known Limitations (v0.11.3-beta)**:
-- Attribute modification/deletion (write-once only)
+**Known Limitations (v0.11.4-beta)**:
 - Soft/external links not yet supported (hard links only)
 - Compound datatypes write support (planned for v0.12.0-rc.1)
 
@@ -372,8 +373,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Status**: Beta - Read complete, Write support advancing
-**Version**: v0.11.3-beta (Dense Storage RMW - Read-Modify-Write complete)
-**Last Updated**: 2025-11-01
+**Version**: v0.11.4-beta (Smart Rebalancing + Attribute RMW + 77.8% Test Coverage)
+**Last Updated**: 2025-11-02
 
 ---
 
