@@ -2,7 +2,7 @@
 
 > **Best practices for optimal performance with B-tree rebalancing and batch operations**
 >
-> **Version**: v0.11.0-beta
+> **Version**: v0.11.4-beta
 > **Last Updated**: 2025-11-02
 
 ---
@@ -478,4 +478,4 @@ fw.RebalanceAllBTrees()
 
 ---
 
-*Last Updated: 2025-11-02 | Version: v0.11.0-beta*
+*Last Updated: 2025-11-02 | Version: v0.11.4-beta*

@@ -365,7 +365,7 @@ Not yet supported: Arrays, enums, references, opaque, time types
 ### Q: What compression formats work?
 **A**: Currently:
 - ✅ GZIP/Deflate (most common)
-- ❌ SZIP, LZF, BZIP2 (planned for v1.2)
+- ❌ SZIP, LZF, BZIP2 (optional filters, planned for v1.x)
 
 ### Q: Is it thread-safe?
 **A**: Currently, each `File` instance should be used from a single goroutine. Concurrent file access support is planned for v2.0.
@@ -458,5 +458,5 @@ After completing this quick start, explore:
 
 ---
 
-*Last Updated: 2025-11-01*
-*Version: 0.11.3-beta*
+*Last Updated: 2025-11-02*
+*Version: 0.11.4-beta*

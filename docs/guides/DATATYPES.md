@@ -549,5 +549,5 @@ func main() {
 
 ---
 
-*Last Updated: 2025-11-01*
-*Version: 0.11.3-beta*
+*Last Updated: 2025-11-02*
+*Version: 0.11.4-beta*

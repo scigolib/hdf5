@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.11.4-beta] - 2025-11-02
+
+### 🎉 Smart Rebalancing + Attribute RMW + Comprehensive Test Coverage!
+
+**Duration**: 1 day (2025-11-02)
+**Goal**: Complete Phase 3 - Smart Rebalancing API, Attribute Modification/Deletion, and achieve 77.8% test coverage - ✅ **ACHIEVED**
+
+### ✨ Added
+
+#### Smart Rebalancing API (Phase 3 Complete)
+- **Auto-Tuning Rebalancing System** - Automatic strategy selection based on workload detection
+- **Real-time Metrics Collection** - Operation patterns, timing, performance data
+- **Dynamic Mode Switching** - Automatic switching between lazy/incremental/default modes
+- **Adaptive Tuning** - Based on file size and performance metrics
+- **Functional Options Pattern** - WithLazyRebalancing(), WithIncrementalRebalancing(), WithSmartRebalancing()
+- **Performance Gains** - Lazy: 10-100x faster deletions, Incremental: zero pause time
+- **Files**: `internal/rebalancing/` package (6 files, 4,000+ lines), `rebalancing_options.go` (359 lines)
+- **Tests**: Comprehensive test suite with metrics validation (85%+ coverage)
+- **Documentation**: 3 new guides (2,700+ lines), 4 working examples
+
+#### Attribute Modification & Deletion
+- **ModifyCompactAttribute()** - Modify attributes in object headers (84-100% coverage)
+- **DeleteCompactAttribute()** - Delete attributes from object headers
+- **ModifyDenseAttribute()** - Modify attributes in dense storage (B-tree + fractal heap)
+- **DeleteDenseAttribute()** - Delete from dense storage with rebalancing support
+- **Files**: `internal/core/attribute_modify.go` (415 lines)
+- **Tests**: `attribute_modify_test.go` (1,155 lines), professional unit tests
+- **Coverage**: 84-100% per function with table-driven tests
+
+#### Comprehensive Test Coverage (77.8%)
+- **Coverage Improvement**: 43.6% → 77.8% (+34.2% for internal/core)
+- **New Test Files**: 30+ files (8,000+ lines of professional tests)
+- **Integration Tests**: B-tree v1 parsing (94.2% coverage), Dataset readers (50-87% coverage)
+- **Critical Functions Tested**: ParseBTreeV1Node, ReadDatasetFloat64, ReadDatasetStrings, parseCompoundData
+- **Test Types**: Unit tests, integration tests, edge case tests, helper function tests
+- **Quality**: Table-driven tests with testify/require, comprehensive scenarios
+
+### 🐛 Fixed
+
+#### CI/CD Optimization
+- **Test Workflow** - Added `-short` flag to skip performance tests in CI
+- **go vet** - Optimized to run only on ubuntu-latest (3x faster CI)
+- **WSL2 Support** - Enhanced WSL2 support in pre-release script for race detector
+- **Windows File Locking** - Fixed t.TempDir() issues with project-local `tmp/` directory
+
+#### Linter Issues (23 Fixed)
+- **commentedOutCode** - Disabled false positives in `.golangci.yml`
+- **preferStringWriter** - Changed buf.Write([]byte(...)) to buf.WriteString(...) (8 occurrences)
+- **unused** - Removed unused test helpers (6 functions)
+- **unused-parameter** - Renamed unused params to `_` (2 cases)
+- **unparam** - Added nolint for test helper flexibility
+- **package-comments** - Added package comment to attribute.go
+
+### 📚 Documentation
+
+#### New Guides (2,700+ lines)
+- **docs/guides/rebalancing-api.md** (1,015 lines) - Complete API reference
+- **docs/guides/performance-tuning.md** (1,293 lines) - Performance optimization guide
+- **docs/guides/PERFORMANCE.md** (481 lines) - Performance best practices
+- **examples/07-rebalancing/** - 4 working examples (default, lazy, incremental, smart)
+
+### 🔧 Quality Metrics
+
+- **Test Coverage**: 77.8% for internal/core (was 43.6%) ✅
+- **Overall Coverage**: 86.1% (exceeds >70% target) ✅
+- **Linter**: 0 issues (34+ linters, was 23 issues) ✅
+- **Tests**: 100% pass rate with race detector ✅
+- **Formatting**: go fmt clean ✅
+- **TODO/FIXME**: 0 comments ✅
+- **Cross-platform**: Linux, macOS, Windows ✅
+
+### 📊 Statistics
+
+- **Files Changed**: 79 files
+- **Lines Added**: +24,169
+- **Lines Removed**: -230
+- **New Files**: 67 (tests, implementation, documentation)
+- **Modified Files**: 12 (linter fixes, optimizations)
+
+### 🎯 References
+
+- **Architecture**: Follows HDF5 C library patterns (H5Adense.c, H5Aint.c, H5Oattribute.c)
+- **Testing**: Table-driven tests with testify/require
+- **Git-flow**: Feature branches squashed to single commit per release
+
+---
+
 ## [0.11.3-beta] - 2025-11-01
 
 ### 🎉 Dense Attribute RMW - Complete Write/Read Cycle!
