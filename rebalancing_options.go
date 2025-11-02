@@ -45,7 +45,7 @@ type FileWriterOption func(*FileWriter) error
 //	    ),
 //	)
 //
-// Reference: docs/dev/BTREE_PERFORMANCE_ANALYSIS.md
+// Reference: docs/dev/BTREE_PERFORMANCE_ANALYSIS.md.
 func WithLazyRebalancing(opts ...LazyOption) FileWriterOption {
 	return func(fw *FileWriter) error {
 		// Start with default config
@@ -144,7 +144,7 @@ func LazyBatchSize(size int) LazyOption {
 //	)
 //	defer fw.Close()  // Automatically stops background goroutine
 //
-// Reference: docs/dev/BTREE_PERFORMANCE_ANALYSIS.md lines 397-446
+// Reference: docs/dev/BTREE_PERFORMANCE_ANALYSIS.md lines 397-446.
 func WithIncrementalRebalancing(opts ...IncrementalOption) FileWriterOption {
 	return func(fw *FileWriter) error {
 		// Start with default config
@@ -239,13 +239,13 @@ func IncrementalProgressCallback(callback func(structures.RebalancingProgress)) 
 //	    ),
 //	)
 //
-// Reference: Phase 3 design (2025 best practices)
+// Reference: Phase 3 design (2025 best practices).
 func WithSmartRebalancing(opts ...SmartOption) FileWriterOption {
-	return func(fw *FileWriter) error {
-		// Smart rebalancing configuration will be implemented in Phase 3
-		// For now, this is a placeholder showing the API design
-
-		// TODO(Phase 3): Implement smart rebalancing
+	return func(_ *FileWriter) error {
+		// Smart rebalancing configuration will be implemented in Phase 3.
+		// For now, this is a placeholder showing the API design.
+		//
+		// Implementation plan:
 		// config := NewSmartRebalancingConfig()
 		// for _, opt := range opts {
 		//     opt(config)
@@ -276,10 +276,10 @@ type SmartRebalancingConfig struct {
 	// Callbacks
 	OnModeChange func(decision ModeDecision) // Called when mode changes
 
-	// TODO(Phase 3): Add more fields
-	// - Safety constraints
-	// - Adaptive optimizer settings
-	// - Metrics configuration
+	// Future fields (Phase 3 implementation):
+	// - Safety constraints (CPU/memory limits)
+	// - Adaptive optimizer settings (learning rate, etc.)
+	// - Metrics configuration (Prometheus-style)
 }
 
 // ModeDecision explains why a rebalancing mode was selected.
@@ -350,8 +350,10 @@ func SmartOnModeChange(callback func(ModeDecision)) SmartOption {
 // ============================================
 
 const (
-	// Size constants for smart configuration
+	// KB represents kilobyte size for smart configuration.
 	KB = 1024
+	// MB represents megabyte size for smart configuration.
 	MB = 1024 * KB
+	// GB represents gigabyte size for smart configuration.
 	GB = 1024 * MB
 )

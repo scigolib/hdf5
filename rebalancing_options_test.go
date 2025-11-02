@@ -129,9 +129,9 @@ func TestFunctionalOptions_DefaultLazyConfig(t *testing.T) {
 
 	// Verify default values
 	require.NotNil(t, fw.lazyRebalancingConfig)
-	assert.Equal(t, 0.05, fw.lazyRebalancingConfig.Threshold)       // Default 5%
+	assert.Equal(t, 0.05, fw.lazyRebalancingConfig.Threshold)         // Default 5%
 	assert.Equal(t, 5*time.Minute, fw.lazyRebalancingConfig.MaxDelay) // Default 5 min
-	assert.Equal(t, 100, fw.lazyRebalancingConfig.BatchSize)        // Default 100
+	assert.Equal(t, 100, fw.lazyRebalancingConfig.BatchSize)          // Default 100
 }
 
 // TestFunctionalOptions_ProgressCallback tests incremental progress callback.
