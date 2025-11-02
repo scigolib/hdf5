@@ -64,9 +64,9 @@ func TestCreateGroup_ValidationErrors(t *testing.T) {
 			wantErr: "root group already exists",
 		},
 		{
-			name:    "nested group (not supported in MVP)",
+			name:    "nested group (parent doesn't exist)",
 			path:    "/data/experiments",
-			wantErr: "nested groups not yet supported",
+			wantErr: "parent group \"/data\" does not exist",
 		},
 	}
 
