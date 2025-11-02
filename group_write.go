@@ -9,6 +9,91 @@ import (
 	"github.com/scigolib/hdf5/internal/writer"
 )
 
+// GroupWriter represents an HDF5 group opened for writing.
+// Groups organize datasets and other groups in a hierarchical structure.
+//
+// This type enables writing attributes to groups, similar to datasets.
+// It provides a clean, object-oriented API consistent with DatasetWriter.
+//
+// Example:
+//
+//	fw, _ := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate)
+//	defer fw.Close()
+//
+//	// Create group
+//	group, _ := fw.CreateGroup("/mygroup")
+//
+//	// Write attributes to group
+//	group.WriteAttribute("description", "My data group")
+//	group.WriteAttribute("version", int32(1))
+//
+// Note: This is a write-only handle. For reading group contents, use
+// the file-level Walk() or Group() methods after reopening the file.
+type GroupWriter struct {
+	// path is the full path of this group (e.g., "/mygroup" or "/data/experiments")
+	path string
+
+	// headerAddr is the address of the group's object header in the HDF5 file.
+	// This is used for writing attributes and linking to this group.
+	headerAddr uint64
+
+	// file is a reference to the parent FileWriter.
+	// This is needed for attribute operations and accessing file-level structures.
+	file *FileWriter
+}
+
+// WriteAttribute writes an attribute to this group.
+//
+// Storage strategy (automatic):
+//   - 0-7 attributes: Compact storage (object header messages)
+//   - 8+ attributes: Dense storage (Fractal Heap + B-tree v2)
+//
+// Supported value types:
+//   - Scalars: int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64
+//   - Arrays: []int32, []float64, etc. (1D arrays only)
+//   - Strings: string (fixed-length, converted to byte array)
+//
+// Parameters:
+//   - name: Attribute name (ASCII, no null bytes)
+//   - value: Attribute value (Go scalar, slice, or string)
+//
+// Returns:
+//   - error: If attribute cannot be written
+//
+// Example:
+//
+//	group, _ := fw.CreateGroup("/mygroup")
+//	group.WriteAttribute("MATLAB_class", "double")
+//	group.WriteAttribute("MATLAB_complex", uint8(1))
+//	group.WriteAttribute("description", "Temperature measurements")
+//
+// Limitations:
+//   - No variable-length strings
+//   - No compound types
+//   - Attributes cannot be modified after creation (write-once)
+//   - No attribute deletion
+func (g *GroupWriter) WriteAttribute(name string, value interface{}) error {
+	// Delegate to existing attribute writing infrastructure
+	// This reuses the same code path as DatasetWriter.WriteAttribute
+	return writeAttribute(g.file, g.headerAddr, name, value)
+}
+
+// Path returns the full path of this group.
+//
+// This can be used to display the group's location in the file hierarchy
+// or for debugging purposes.
+//
+// Returns:
+//   - string: The group's path (e.g., "/mygroup" or "/data/experiments")
+//
+// Example:
+//
+//	group, _ := fw.CreateGroup("/mygroup")
+//	fmt.Println(group.Path()) // Output: /mygroup
+func (g *GroupWriter) Path() string {
+	return g.path
+}
+
 // validateGroupPath validates group path is not empty, starts with '/', and is not root.
 func validateGroupPath(path string) error {
 	if path == "" {
@@ -82,6 +167,7 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, uint64, error) {
 //   - path: Group path (must start with "/", e.g., "/data" or "/data/experiments")
 //
 // Returns:
+//   - *GroupWriter: Handle for writing attributes to the group
 //   - error: If creation fails
 //
 // Example:
@@ -90,20 +176,22 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, uint64, error) {
 //	defer fw.Close()
 //
 //	// Create root-level group
-//	fw.CreateGroup("/data")
+//	group, _ := fw.CreateGroup("/data")
+//	group.WriteAttribute("description", "My data group")
 //
 //	// Create nested group
-//	fw.CreateGroup("/data/experiments")
+//	nested, _ := fw.CreateGroup("/data/experiments")
+//	nested.WriteAttribute("MATLAB_class", "double")
 //
 // Limitations for MVP (v0.11.0-beta):
 //   - Only symbol table structure (no indexed groups)
 //   - No link creation time tracking
 //   - Maximum 32 entries per group (symbol table node capacity)
 //   - Parent group must exist (create parents first)
-func (fw *FileWriter) CreateGroup(path string) error {
+func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 	// Validate path
 	if err := validateGroupPath(path); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Parse path into parent and name
@@ -112,14 +200,14 @@ func (fw *FileWriter) CreateGroup(path string) error {
 	// Validate parent exists (if not root)
 	if parent != "" && parent != "/" {
 		if _, exists := fw.groups[parent]; !exists {
-			return fmt.Errorf("parent group %q does not exist (create it first)", parent)
+			return nil, fmt.Errorf("parent group %q does not exist (create it first)", parent)
 		}
 	}
 
 	// Create group structures (heap, symbol table, B-tree)
 	heapAddr, stNodeAddr, btreeAddr, err := fw.createGroupStructures()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Store group metadata for nested dataset linking
@@ -149,25 +237,30 @@ func (fw *FileWriter) CreateGroup(path string) error {
 
 	headerAddr, err := fw.writer.Allocate(headerSize)
 	if err != nil {
-		return fmt.Errorf("failed to allocate object header: %w", err)
+		return nil, fmt.Errorf("failed to allocate object header: %w", err)
 	}
 
 	// Write object header
 	writtenSize, err := ohw.WriteTo(fw.writer, headerAddr)
 	if err != nil {
-		return fmt.Errorf("failed to write object header: %w", err)
+		return nil, fmt.Errorf("failed to write object header: %w", err)
 	}
 
 	if writtenSize != headerSize {
-		return fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
+		return nil, fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
 	}
 
 	// Link to parent group
 	if err := fw.linkToParent(parent, name, headerAddr); err != nil {
-		return fmt.Errorf("failed to link to parent: %w", err)
+		return nil, fmt.Errorf("failed to link to parent: %w", err)
 	}
 
-	return nil
+	// Return GroupWriter handle
+	return &GroupWriter{
+		path:       path,
+		headerAddr: headerAddr,
+		file:       fw,
+	}, nil
 }
 
 // parsePath splits a path into parent directory and name.
@@ -482,7 +575,8 @@ func (fw *FileWriter) CreateGroupWithLinks(name string, links map[string]string)
 
 	// Use symbol table format for small groups
 	// Create empty group first
-	if err := fw.CreateGroup(name); err != nil {
+	_, err := fw.CreateGroup(name)
+	if err != nil {
 		return err
 	}
 

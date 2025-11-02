@@ -17,7 +17,7 @@ func TestNestedDatasets_TwoLevels(t *testing.T) {
 	defer func() { _ = fw.Close() }()
 
 	// Create group
-	err = fw.CreateGroup("/mygroup")
+	_, err = fw.CreateGroup("/mygroup")
 	require.NoError(t, err)
 
 	// Create dataset inside group (THIS IS THE KEY TEST!)
@@ -66,10 +66,10 @@ func TestNestedDatasets_ThreeLevels(t *testing.T) {
 	defer func() { _ = fw.Close() }()
 
 	// Create nested groups
-	err = fw.CreateGroup("/level1")
+	_, err = fw.CreateGroup("/level1")
 	require.NoError(t, err)
 
-	err = fw.CreateGroup("/level1/level2")
+	_, err = fw.CreateGroup("/level1/level2")
 	require.NoError(t, err)
 
 	// Create dataset 3 levels deep
@@ -124,7 +124,7 @@ func TestNestedDatasets_MATLABv73_Complex(t *testing.T) {
 	defer func() { _ = fw.Close() }()
 
 	// Create group for complex variable 'z'
-	err = fw.CreateGroup("/z")
+	_, err = fw.CreateGroup("/z")
 	require.NoError(t, err)
 
 	// Create real part dataset
@@ -190,7 +190,7 @@ func TestNestedDatasets_MultipleDatasetsInGroup(t *testing.T) {
 	defer func() { _ = fw.Close() }()
 
 	// Create group
-	err = fw.CreateGroup("/experiments")
+	_, err = fw.CreateGroup("/experiments")
 	require.NoError(t, err)
 
 	// Create multiple datasets in same group
@@ -254,7 +254,7 @@ func TestNestedDatasets_ErrorCases(t *testing.T) {
 	require.Nil(t, dw)
 
 	// Test 2: dataset with existing parent (should succeed)
-	err = fw.CreateGroup("/existing")
+	_, err = fw.CreateGroup("/existing")
 	require.NoError(t, err)
 
 	dw, err = fw.CreateDataset("/existing/data", Int32, []uint64{5})
@@ -266,7 +266,7 @@ func TestNestedDatasets_ErrorCases(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test 3: deeply nested without intermediate groups
-	err = fw.CreateGroup("/level1")
+	_, err = fw.CreateGroup("/level1")
 	require.NoError(t, err)
 	// Don't create /level1/level2 or /level1/level2/level3
 
@@ -286,13 +286,13 @@ func TestNestedDatasets_FourLevelsDeep(t *testing.T) {
 	defer func() { _ = fw.Close() }()
 
 	// Create deeply nested groups
-	err = fw.CreateGroup("/a")
+	_, err = fw.CreateGroup("/a")
 	require.NoError(t, err)
 
-	err = fw.CreateGroup("/a/b")
+	_, err = fw.CreateGroup("/a/b")
 	require.NoError(t, err)
 
-	err = fw.CreateGroup("/a/b/c")
+	_, err = fw.CreateGroup("/a/b/c")
 	require.NoError(t, err)
 
 	// Create dataset 4 levels deep
