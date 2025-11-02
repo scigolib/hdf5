@@ -100,6 +100,7 @@ type BTreeV2 interface {
 //  2. Strategy selection (via ConfigSelector)
 //  3. Mode transitions (via BTreeV2)
 //  4. Periodic re-evaluation (background goroutine)
+//  5. Metrics collection (via MetricsCollector)
 //
 // Thread Safety:
 //   - All public methods are thread-safe
@@ -123,6 +124,7 @@ type SmartRebalancer struct {
 	btree    BTreeV2           // B-tree to manage
 	detector *WorkloadDetector // Workload pattern detection
 	selector *ConfigSelector   // Config selection logic
+	metrics  *MetricsCollector // Metrics collection
 
 	// State (protected by mutex)
 	mu             sync.RWMutex
@@ -294,6 +296,11 @@ func NewSmartRebalancer(btree BTreeV2, options ...SmartRebalancerOption) *SmartR
 		)
 	}
 
+	// Create default metrics collector if not provided
+	if sr.metrics == nil {
+		sr.metrics = NewMetricsCollector()
+	}
+
 	return sr
 }
 
@@ -407,12 +414,12 @@ func (sr *SmartRebalancer) Stop() error {
 	return nil
 }
 
-// RecordOperation tracks an operation for workload detection.
+// RecordOperation tracks an operation for workload detection and metrics.
 //
 // This method is called automatically by B-tree operations (Insert, Delete).
-// It delegates to WorkloadDetector for pattern analysis.
+// It delegates to WorkloadDetector for pattern analysis and MetricsCollector for observability.
 //
-// Performance: O(1) - just inserts into ring buffer
+// Performance: O(1) - just inserts into ring buffer + atomic counter
 //
 // Thread Safety: Safe for concurrent calls.
 //
@@ -433,18 +440,24 @@ func (sr *SmartRebalancer) RecordOperation(opType OperationType) error {
 	ctx := sr.ctx
 	btree := sr.btree
 	detector := sr.detector
+	metrics := sr.metrics
 	sr.mu.RUnlock()
 
 	// Get current file size
 	fileSize := btree.GetFileSize()
 
-	// Record operation
+	// Record operation in detector
 	// Use background context if not started (allows recording before Start())
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	return detector.RecordOperation(ctx, opType, fileSize)
+	err := detector.RecordOperation(ctx, opType, fileSize)
+
+	// Record in metrics (even if detector error occurred)
+	metrics.RecordOperation(opType)
+
+	return err
 }
 
 // Evaluate forces immediate re-evaluation of rebalancing strategy.
@@ -453,7 +466,8 @@ func (sr *SmartRebalancer) RecordOperation(opType OperationType) error {
 //  1. Extracts features from detector
 //  2. Detects workload type
 //  3. Selects optimal config via selector
-//  4. Returns decision (does NOT apply it)
+//  4. Records metrics (evaluation time, decision)
+//  5. Returns decision (does NOT apply it)
 //
 // To apply the decision, call applyDecision().
 //
@@ -480,6 +494,8 @@ func (sr *SmartRebalancer) Evaluate() (Decision, error) {
 	sr.mu.RLock()
 	detector := sr.detector
 	selector := sr.selector
+	metrics := sr.metrics
+	btree := sr.btree
 	sr.mu.RUnlock()
 
 	// Extract features
@@ -488,11 +504,23 @@ func (sr *SmartRebalancer) Evaluate() (Decision, error) {
 	// Detect workload type
 	workloadType := detector.DetectWorkloadType()
 
+	// Record workload type in metrics
+	metrics.RecordWorkloadType(workloadType)
+
+	// Record file size in metrics
+	fileSize := btree.GetFileSize()
+	metrics.RecordFileSize(fileSize)
+
 	// Select config
 	decision := selector.SelectConfig(features, workloadType)
 
-	// Update statistics
+	// Calculate evaluation time
 	evalTime := sr.clock.Now().Sub(startTime)
+
+	// Record evaluation in metrics
+	metrics.RecordEvaluation(decision, evalTime)
+
+	// Update statistics
 	sr.mu.Lock()
 	sr.stats.TotalEvaluations++
 	sr.stats.LastEvalTime = sr.clock.Now()
@@ -532,6 +560,63 @@ func (sr *SmartRebalancer) GetStats() RebalancerStats {
 	statsCopy.Started = sr.started
 
 	return statsCopy
+}
+
+// GetMetrics returns an immutable snapshot of current metrics.
+//
+// This provides comprehensive observability for:
+//   - Decision quality (mode distribution, confidence)
+//   - Performance (evaluation time, operation rate)
+//   - Errors (transition failures, error rate)
+//   - Workload patterns (operation mix, file sizes)
+//   - Resource usage (operations per second, uptime)
+//
+// Thread Safety: Safe for concurrent calls (returns immutable snapshot).
+//
+// Returns:
+//   - MetricsSnapshot: Immutable metrics snapshot
+//
+// Example:
+//
+//	metrics := rebalancer.GetMetrics()
+//	fmt.Printf("Total Operations: %d (%.1f ops/sec)\n",
+//	    metrics.TotalOperations, metrics.OperationsPerSecond)
+//	fmt.Printf("Error Rate: %.3f%%\n", metrics.ErrorRate*100)
+//	fmt.Printf("Avg Confidence: %.2f\n", metrics.AvgConfidence)
+//
+//	// Export to JSON
+//	jsonBytes, _ := json.Marshal(metrics)
+//	fmt.Printf("%s\n", jsonBytes)
+//
+//	// Export to human-readable format
+//	fmt.Printf("%s\n", rebalancer.GetMetricsString())
+func (sr *SmartRebalancer) GetMetrics() MetricsSnapshot {
+	sr.mu.RLock()
+	metrics := sr.metrics
+	sr.mu.RUnlock()
+
+	return metrics.Snapshot()
+}
+
+// GetMetricsString returns a human-readable formatted metrics summary.
+//
+// This is a convenience wrapper around GetMetrics() and String()
+// for logging and debugging purposes.
+//
+// Thread Safety: Safe for concurrent calls.
+//
+// Returns:
+//   - string: Formatted metrics summary
+//
+// Example:
+//
+//	fmt.Printf("Rebalancer Metrics:\n%s\n", rebalancer.GetMetricsString())
+func (sr *SmartRebalancer) GetMetricsString() string {
+	sr.mu.RLock()
+	metrics := sr.metrics
+	sr.mu.RUnlock()
+
+	return metrics.String()
 }
 
 // monitorLoop runs in background goroutine.
@@ -642,6 +727,7 @@ func (sr *SmartRebalancer) applyDecision(decision Decision) error {
 
 	oldMode := sr.currentMode
 	newMode := decision.Mode
+	metrics := sr.metrics
 
 	// Apply mode transition
 	var err error
@@ -652,6 +738,7 @@ func (sr *SmartRebalancer) applyDecision(decision Decision) error {
 		if oldMode == ModeIncremental {
 			// Stop background goroutine first
 			if stopErr := sr.btree.StopBackgroundRebalancing(); stopErr != nil {
+				metrics.RecordError("transition")
 				return fmt.Errorf("%w: stop background failed: %w", ErrTransitionFailed, stopErr)
 			}
 		}
@@ -662,6 +749,7 @@ func (sr *SmartRebalancer) applyDecision(decision Decision) error {
 		if oldMode == ModeIncremental {
 			// Stop background goroutine (keep lazy)
 			if stopErr := sr.btree.StopBackgroundRebalancing(); stopErr != nil {
+				metrics.RecordError("transition")
 				return fmt.Errorf("%w: stop background failed: %w", ErrTransitionFailed, stopErr)
 			}
 			// Lazy already enabled, no need to enable again
@@ -669,6 +757,7 @@ func (sr *SmartRebalancer) applyDecision(decision Decision) error {
 			// Enable lazy
 			config, ok := decision.Config.(*structures.LazyRebalancingConfig)
 			if !ok {
+				metrics.RecordError("transition")
 				return fmt.Errorf("%w: expected LazyRebalancingConfig, got %T", ErrTransitionFailed, decision.Config)
 			}
 			err = sr.btree.EnableLazyRebalancing(*config)
@@ -678,23 +767,30 @@ func (sr *SmartRebalancer) applyDecision(decision Decision) error {
 		// Enable incremental rebalancing
 		config, ok := decision.Config.(*structures.IncrementalRebalancingConfig)
 		if !ok {
+			metrics.RecordError("transition")
 			return fmt.Errorf("%w: expected IncrementalRebalancingConfig, got %T", ErrTransitionFailed, decision.Config)
 		}
 
 		// Enable incremental (this also enables lazy as prerequisite)
 		if err = sr.btree.EnableIncrementalRebalancing(*config); err != nil {
+			metrics.RecordError("transition")
 			return fmt.Errorf("%w: enable incremental failed: %w", ErrTransitionFailed, err)
 		}
 
 		// Start background goroutine
 		if err = sr.btree.StartBackgroundRebalancing(sr.ctx); err != nil {
+			metrics.RecordError("transition")
 			return fmt.Errorf("%w: start background failed: %w", ErrTransitionFailed, err)
 		}
 	}
 
 	if err != nil {
+		metrics.RecordError("transition")
 		return fmt.Errorf("%w: %w", ErrTransitionFailed, err)
 	}
+
+	// Record mode change in metrics (before updating state)
+	metrics.RecordModeChange(oldMode, newMode)
 
 	// Update state
 	sr.currentMode = newMode
