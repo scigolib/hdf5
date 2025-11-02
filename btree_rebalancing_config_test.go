@@ -13,7 +13,7 @@ import (
 
 func TestMain(m *testing.M) {
 	// Ensure tmp directory exists for CI
-	os.MkdirAll("tmp", 0755)
+	os.MkdirAll("tmp", 0o755)
 	os.Exit(m.Run())
 }
 
