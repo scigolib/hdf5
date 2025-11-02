@@ -118,17 +118,39 @@ v1.0.0 STABLE → Production release (all HDF5 formats supported!)
 
 ## 📅 What's Next
 
-### **v0.11.4-beta - Links & Advanced Features** (Next)
+### **v0.11.5-beta - User Feedback Priority** (Next - HIGH PRIORITY!)
 
-**Goal**: Complete missing write features for common use cases
+**Goal**: Address first real user feedback from MATLAB project
+
+**Critical Features** (User-Requested 🎉):
+1. ⭐ **TASK-013**: Support datasets in nested groups (HIGH)
+   - Currently: Datasets only in root group
+   - Needed for: MATLAB v7.3 complex numbers (`/z/real`, `/z/imag`)
+   - Impact: Standard HDF5 feature expected by all users
+
+2. ⭐ **TASK-014**: Write attributes to groups (MEDIUM)
+   - Currently: Attributes only on datasets
+   - Needed for: MATLAB v7.3 metadata (`MATLAB_class`, `MATLAB_complex`)
+   - Impact: Group-level documentation and metadata
+
+**Additional Features**:
+3. ⭐ Soft links and external links
+4. ⭐ Indirect blocks for fractal heap (large objects)
+
+**Target**: 1-2 weeks (prioritize user needs!)
+
+---
+
+### **v0.11.6-beta - Advanced Features** (Later)
+
+**Goal**: Complete advanced write features
 
 **Planned Features**:
-1. ⭐ Soft links and external links
-2. ⭐ Attribute modification/deletion
-3. ⭐ Indirect blocks for fractal heap (large objects)
-4. ⭐ h5dump compatibility improvements
+1. ⭐ Variable-length datatypes
+2. ⭐ Dataset resize and extension
+3. ⭐ h5dump compatibility improvements
 
-**Target**: 1-2 months
+**Target**: 2-3 weeks
 
 ---
 
