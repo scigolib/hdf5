@@ -1,3 +1,5 @@
+//go:build ignore
+
 // Example 2: Lazy Rebalancing
 //
 // This example demonstrates lazy (batch) rebalancing mode.
@@ -34,9 +36,9 @@ func main() {
 	//   - LazyBatchSize(100): Process 100 nodes per batch
 	fw, err := hdf5.CreateForWrite("02-lazy-output.h5", hdf5.CreateTruncate,
 		hdf5.WithLazyRebalancing(
-			hdf5.LazyThreshold(0.05),           // 5% underflow triggers batch
-			hdf5.LazyMaxDelay(5*time.Minute),   // Force rebalance after 5 min
-			hdf5.LazyBatchSize(100),            // 100 nodes per batch
+			hdf5.LazyThreshold(0.05),         // 5% underflow triggers batch
+			hdf5.LazyMaxDelay(5*time.Minute), // Force rebalance after 5 min
+			hdf5.LazyBatchSize(100),          // 100 nodes per batch
 		),
 	)
 	if err != nil {

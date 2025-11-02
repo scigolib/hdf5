@@ -1,3 +1,5 @@
+//go:build ignore
+
 // Example 4: Smart Rebalancing (Auto-Tuning)
 //
 // This example demonstrates smart (auto-tuning) rebalancing mode.
