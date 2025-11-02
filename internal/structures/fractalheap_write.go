@@ -744,6 +744,145 @@ func (fh *WritableFractalHeap) GetObject(heapID []byte) ([]byte, error) {
 	return data, nil
 }
 
+// OverwriteObject overwrites an existing object in the heap (same size, in-place).
+//
+// This function is used for attribute modification when the new attribute data
+// is exactly the same size as the old one. The object is modified in-place,
+// which is more efficient than delete + insert.
+//
+// Parameters:
+//   - heapID: object ID (from SearchRecord)
+//   - newData: new object data (MUST be same size as old data)
+//
+// Returns:
+//   - error: if size doesn't match, ID invalid, or overwrite fails
+//
+// Reference: H5HF.c - H5HF_write() (in-place modification).
+//
+// MVP Limitation: Only works for managed objects in direct block.
+func (fh *WritableFractalHeap) OverwriteObject(heapID, newData []byte) error {
+	// Parse heap ID to get offset and length
+	if len(heapID) < 1 {
+		return ErrInvalidObjectID
+	}
+
+	flags := heapID[0]
+	version := (flags & 0xC0) >> 6
+	idType := HeapIDType(flags & 0x30)
+
+	if version != 0 {
+		return fmt.Errorf("%w: unsupported version %d", ErrInvalidObjectID, version)
+	}
+
+	if idType != HeapIDTypeManaged {
+		return fmt.Errorf("%w: only managed objects supported", ErrInvalidObjectID)
+	}
+
+	if len(heapID) != int(fh.Header.HeapIDLength) {
+		return fmt.Errorf("%w: wrong size", ErrInvalidObjectID)
+	}
+
+	idx := 1
+	offset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
+	idx += int(fh.Header.HeapOffsetSize)
+
+	length := readUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
+
+	// Verify new data is same size
+	if uint64(len(newData)) != length {
+		return fmt.Errorf("size mismatch: old=%d, new=%d (use delete+insert for different sizes)", length, len(newData))
+	}
+
+	// Validate offset
+	if offset >= uint64(len(fh.DirectBlock.Objects)) {
+		return fmt.Errorf("%w: offset %d >= used space %d", ErrObjectNotFound, offset, len(fh.DirectBlock.Objects))
+	}
+
+	if offset+length > uint64(len(fh.DirectBlock.Objects)) {
+		return fmt.Errorf("%w: object extends beyond used space", ErrObjectNotFound)
+	}
+
+	// Overwrite in-place
+	copy(fh.DirectBlock.Objects[offset:offset+length], newData)
+
+	// Note: No need to update header statistics (object count, allocated space remain same)
+	// This is pure in-place modification
+
+	return nil
+}
+
+// DeleteObject marks an object as deleted in the fractal heap.
+//
+// This function is used for attribute modification when the new attribute data
+// is a different size than the old one. The old object is marked as free space,
+// and a new object is inserted with InsertObject().
+//
+// Parameters:
+//   - heapID: object ID to delete
+//
+// Returns:
+//   - error: if ID invalid or deletion fails
+//
+// Reference: H5HF.c - H5HF_remove() (mark object as free).
+//
+// MVP Limitation:
+// - Marked as deleted, but space is NOT reclaimed (no free space manager).
+// - Free space accumulates until heap compaction (future work).
+// - This is acceptable for MVP (matches HDF5 C library behavior without compaction).
+func (fh *WritableFractalHeap) DeleteObject(heapID []byte) error {
+	// Parse heap ID to get offset and length
+	if len(heapID) < 1 {
+		return ErrInvalidObjectID
+	}
+
+	flags := heapID[0]
+	version := (flags & 0xC0) >> 6
+	idType := HeapIDType(flags & 0x30)
+
+	if version != 0 {
+		return fmt.Errorf("%w: unsupported version %d", ErrInvalidObjectID, version)
+	}
+
+	if idType != HeapIDTypeManaged {
+		return fmt.Errorf("%w: only managed objects supported", ErrInvalidObjectID)
+	}
+
+	if len(heapID) != int(fh.Header.HeapIDLength) {
+		return fmt.Errorf("%w: wrong size", ErrInvalidObjectID)
+	}
+
+	idx := 1
+	offset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
+	idx += int(fh.Header.HeapOffsetSize)
+
+	length := readUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
+
+	// Validate offset
+	if offset >= uint64(len(fh.DirectBlock.Objects)) {
+		return fmt.Errorf("%w: offset %d >= used space", ErrObjectNotFound, offset)
+	}
+
+	if offset+length > uint64(len(fh.DirectBlock.Objects)) {
+		return fmt.Errorf("%w: object extends beyond used space", ErrObjectNotFound)
+	}
+
+	// MVP: Mark space as deleted by zeroing it out
+	// In full implementation, this would add to free space list
+	// For now, we just zero the data (space is lost until compaction)
+	for i := offset; i < offset+length; i++ {
+		fh.DirectBlock.Objects[i] = 0
+	}
+
+	// Update statistics
+	fh.Header.NumManagedObjects--
+	fh.Header.FreeSpace += length
+
+	// Note: AllocatedManagedSpace stays same (space allocated but not used)
+	// This is correct - deleted objects increase free space but don't reduce allocated
+
+	return nil
+}
+
 // writeUintVar writes a variable-length unsigned integer.
 func writeUintVar(buf []byte, value uint64, size int, endianness binary.ByteOrder) {
 	switch size {

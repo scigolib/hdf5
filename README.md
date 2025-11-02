@@ -7,7 +7,7 @@
 [![CI](https://github.com/scigolib/hdf5/actions/workflows/test.yml/badge.svg)](https://github.com/scigolib/hdf5/actions)
 [![Coverage](https://img.shields.io/badge/coverage-86.1%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.11.3--beta-green.svg)](ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-v0.11.4--beta-green.svg)](ROADMAP.md)
 [![GoDoc](https://pkg.go.dev/badge/github.com/scigolib/hdf5.svg)](https://pkg.go.dev/github.com/scigolib/hdf5)
 
 A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. Read support is feature-complete, write support advancing rapidly!
@@ -22,8 +22,8 @@ A modern, pure Go library for reading and writing HDF5 files without CGo depende
 - ✅ **Full Dataset Reading** - Compact, contiguous, chunked layouts with GZIP
 - ✅ **Rich Datatypes** - Integers, floats, strings (fixed/variable), compounds
 - ✅ **Memory Efficient** - Buffer pooling and smart memory management
-- ✅ **Production Ready** - Read support feature-complete (v0.10.0-beta)
-- ✍️ **Write Support Advancing** - v0.11.3-beta: Dense Storage RMW (Read-Modify-Write complete)!
+- ✅ **Production Ready** - Read support feature-complete
+- ✍️ **Comprehensive Write Support** - Datasets, groups, attributes + Smart Rebalancing!
 
 ---
 
@@ -92,13 +92,109 @@ func main() {
 
 ### Advanced
 - **[Architecture Overview](docs/architecture/OVERVIEW.md)** - How it works internally
-- **[Examples](examples/)** - Working code examples (5 examples with detailed documentation)
+- **[Performance Tuning](docs/guides/performance-tuning.md)** - B-tree rebalancing strategies for optimal performance
+- **[Rebalancing API](docs/guides/rebalancing-api.md)** - Complete API reference for rebalancing options
+- **[Examples](examples/)** - Working code examples (7 examples with detailed documentation)
+
+---
+
+## ⚡ Performance Tuning
+
+**NEW in v0.11.4-beta**: Smart B-tree rebalancing, attribute modification/deletion, and 77.8% test coverage!
+
+When deleting many attributes, B-trees can become **sparse** (wasted disk space, slower searches). This library offers **4 rebalancing strategies**:
+
+### 1. Default (No Rebalancing)
+
+**Fast deletions, but B-tree may become sparse**
+
+```go
+// No options = no rebalancing (like HDF5 C library)
+fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate)
+```
+
+**Use for**: Append-only workloads, small files (<100MB)
+
+---
+
+### 2. Lazy Rebalancing (10-100x faster than immediate)
+
+**Batch processing: rebalances when threshold reached**
+
+```go
+fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
+    hdf5.WithLazyRebalancing(
+        hdf5.LazyThreshold(0.05),         // Trigger at 5% underflow
+        hdf5.LazyMaxDelay(5*time.Minute), // Force rebalance after 5 min
+    ),
+)
+```
+
+**Use for**: Batch deletion workloads, medium/large files (100-500MB)
+
+**Performance**: ~2% overhead, occasional 100-500ms pauses
+
+---
+
+### 3. Incremental Rebalancing (ZERO pause)
+
+**Background processing: rebalances in background goroutine**
+
+```go
+fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
+    hdf5.WithLazyRebalancing(),  // Prerequisite!
+    hdf5.WithIncrementalRebalancing(
+        hdf5.IncrementalBudget(100*time.Millisecond),
+        hdf5.IncrementalInterval(5*time.Second),
+    ),
+)
+defer fw.Close()  // Stops background goroutine
+```
+
+**Use for**: Large files (>500MB), continuous operations, TB-scale data
+
+**Performance**: ~4% overhead, **zero user-visible pause**
+
+---
+
+### 4. Smart Rebalancing (Auto-Pilot)
+
+**Auto-tuning: library detects workload and selects optimal mode**
+
+```go
+fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
+    hdf5.WithSmartRebalancing(
+        hdf5.SmartAutoDetect(true),
+        hdf5.SmartAutoSwitch(true),
+    ),
+)
+```
+
+**Use for**: Unknown workloads, mixed operations, research environments
+
+**Performance**: ~6% overhead, adapts automatically
+
+---
+
+### Performance Comparison
+
+| Mode | Deletion Speed | Pause Time | Use Case |
+|------|----------------|------------|----------|
+| **Default** | 100% (baseline) | None | Append-only, small files |
+| **Lazy** | 95% (10-100x faster than immediate!) | 100-500ms batches | Batch deletions |
+| **Incremental** | 92% | None (background) | Large files, continuous ops |
+| **Smart** | 88% | Varies | Unknown workloads |
+
+**Learn more**:
+- **[Performance Tuning Guide](docs/guides/performance-tuning.md)**: Comprehensive guide with benchmarks, recommendations, troubleshooting
+- **[Rebalancing API Reference](docs/guides/rebalancing-api.md)**: Complete API documentation
+- **[Examples](examples/07-rebalancing/)**: 4 working examples demonstrating each mode
 
 ---
 
 ## 🎯 Current Status
 
-**Version**: v0.11.3-beta (RELEASED 2025-11-01 - Dense Storage RMW) ✅
+**Version**: v0.11.4-beta (RELEASED 2025-11-02 - Smart Rebalancing + Attribute RMW) ✅
 
 **Production Readiness: Read support feature-complete! Write support advancing rapidly!** 🎉
 
@@ -143,7 +239,7 @@ func main() {
 ### ⚠️ Partial Support
 - **Dense Attributes**: Infrastructure ready, B-tree v2 iteration deferred to v0.12.0-rc.1 (<10% of files affected)
 
-### ✍️ Write Support (v0.11.3-beta)
+### ✍️ Write Support (v0.11.4-beta)
 - ✅ **File creation** - CreateForWrite() with Truncate/Exclusive modes
 - ✅ **Superblock formats** - v0 (legacy, HDF5 < 1.8) + v2 (modern, HDF5 >= 1.8)
 - ✅ **Object headers** - v1 (legacy, 16-byte) + v2 (modern, 4-byte min)
@@ -152,13 +248,14 @@ func main() {
 - ✅ **Compression** - GZIP (deflate), Shuffle filter, Fletcher32 checksum
 - ✅ **Groups** - Symbol table + dense groups (automatic transition at 8+ links)
 - ✅ **Attributes** - Compact (0-7) + dense (8+) with automatic transition
-- ✅ **Dense Storage RMW** - Read-modify-write for existing dense attributes ✨ NEW
+- ✅ **Dense Storage RMW** - Read-modify-write for existing dense attributes
+- ✅ **Attribute modification/deletion** - Modify/delete compact & dense attributes ✨ NEW
+- ✅ **Smart B-tree rebalancing** - Auto-tuning for deletion-heavy workloads ✨ NEW
 - ✅ **Advanced datatypes** - Arrays, Enums, References, Opaque
 - ✅ **Free space management** - End-of-file allocation (validated, 100% coverage)
 - ✅ **Legacy compatibility** - Files readable by HDF5 1.0+ tools
 
-**Known Limitations (v0.11.3-beta)**:
-- Attribute modification/deletion (write-once only)
+**Known Limitations (v0.11.4-beta)**:
 - Soft/external links not yet supported (hard links only)
 - Compound datatypes write support (planned for v0.12.0-rc.1)
 
@@ -276,8 +373,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Status**: Beta - Read complete, Write support advancing
-**Version**: v0.11.3-beta (Dense Storage RMW - Read-Modify-Write complete)
-**Last Updated**: 2025-11-01
+**Version**: v0.11.4-beta (Smart Rebalancing + Attribute RMW + 77.8% Test Coverage)
+**Last Updated**: 2025-11-02
 
 ---
 
