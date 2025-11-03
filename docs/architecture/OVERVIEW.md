@@ -2,7 +2,7 @@
 
 > **Modern HDF5 Go Library** - Pure Go implementation without CGo dependencies
 
-**Last Updated**: 2025-11-02 | **Version**: v0.11.4-beta (Released)
+**Last Updated**: 2025-11-02 | **Version**: v0.11.5-beta
 
 ---
 
@@ -695,5 +695,5 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 ---
 
 *Last Updated: 2025-11-02*
-*Version: v0.11.4-beta (Released)*
+*Version: v0.11.5-beta*
 *Architecture: Read (100%) + Write (85%) + Smart Rebalancing + Attribute RMW Complete*
