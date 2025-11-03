@@ -27,6 +27,12 @@ type ObjectHeader struct {
 	Messages   []*HeaderMessage
 	Name       string
 	Attributes []*Attribute
+
+	// ReferenceCount tracks the number of hard links to this object.
+	// For V1 headers: Stored directly in header (bytes 4-7).
+	// For V2 headers: Stored in RefCount message (type 0x0016) if >1.
+	// Default value is 1 (single link). Incremented when hard links are created.
+	ReferenceCount uint32
 }
 
 // HeaderMessage represents a single message within an object header.
@@ -55,6 +61,7 @@ const (
 	MsgContinuation   MessageType = 16 // Object header continuation (0x0010)
 	MsgSymbolTable    MessageType = 17
 	MsgLinkMessage    MessageType = 6
+	MsgRefCount       MessageType = 22 // Reference Count (0x0016) - for hard links (v2 only)
 )
 
 // ReadObjectHeader reads and parses an HDF5 object header from the specified address.
@@ -104,7 +111,7 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 	var err error
 	switch header.Version {
 	case 1:
-		header.Messages, header.Name, err = parseV1Header(r, address, sb)
+		header.Messages, header.Name, header.ReferenceCount, err = parseV1Header(r, address, sb)
 		if err != nil {
 			return nil, utils.WrapError("v1 header parse failed", err)
 		}
@@ -113,11 +120,24 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 		if err != nil {
 			return nil, utils.WrapError("v2 header parse failed", err)
 		}
+		// For V2, reference count defaults to 1 (may be overridden by RefCount message)
+		header.ReferenceCount = 1
 	default:
 		return nil, fmt.Errorf("unsupported object header version: %d", header.Version)
 	}
 
 	header.Type = determineObjectType(header.Messages)
+
+	// Check for RefCount message (V2 only) - overrides default
+	if header.Version == 2 {
+		for _, msg := range header.Messages {
+			if msg.Type == MsgRefCount && len(msg.Data) >= 4 {
+				// RefCount message is just a uint32
+				header.ReferenceCount = sb.Endianness.Uint32(msg.Data[0:4])
+				break
+			}
+		}
+	}
 
 	// Parse attributes from messages (both compact and dense)
 	attributes, err := ParseAttributesFromMessages(r, header.Messages, sb)
@@ -271,4 +291,41 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, _ *Superblock,
 	}
 
 	return messages, name, nil
+}
+
+// IncrementReferenceCount increments the reference count for this object header.
+// This should be called when creating a new hard link to the object.
+//
+// Reference counting behavior:
+//   - Each object starts with refcount = 1 (original link)
+//   - Each additional hard link increments the count
+//   - When links are deleted, the count is decremented
+//   - Object is deleted when refcount reaches 0
+//
+// Returns the new reference count after increment.
+func (oh *ObjectHeader) IncrementReferenceCount() uint32 {
+	oh.ReferenceCount++
+	return oh.ReferenceCount
+}
+
+// DecrementReferenceCount decrements the reference count for this object header.
+// This should be called when removing a hard link to the object.
+//
+// Returns the new reference count after decrement, or 0 if already at 0.
+func (oh *ObjectHeader) DecrementReferenceCount() uint32 {
+	if oh.ReferenceCount > 0 {
+		oh.ReferenceCount--
+	}
+	return oh.ReferenceCount
+}
+
+// GetReferenceCount returns the current reference count for this object header.
+// The reference count indicates how many hard links point to this object.
+//
+// Returns:
+//   - 0: Object has no links (should be deleted)
+//   - 1: Object has one link (normal case)
+//   - >1: Object has multiple hard links
+func (oh *ObjectHeader) GetReferenceCount() uint32 {
+	return oh.ReferenceCount
 }
