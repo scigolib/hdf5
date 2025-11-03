@@ -31,7 +31,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 - ✅ **Actively maintained** - Regular updates and improvements
 
 **Trade-offs**:
-- ⚠️ **Write support advancing** - v0.11.4-beta has smart rebalancing + attribute modification complete, more features coming in v0.11.5+
+- ⚠️ **Write support advancing** - v0.11.5-beta has smart rebalancing + attribute modification complete, more features coming in v0.11.5+
 - ⚠️ **Some advanced features missing** - Compound write, virtual datasets, parallel I/O, SWMR (planned for v0.12.0-rc.1)
 - ⚠️ **Slightly slower** - Pure Go is 2-3x slower than C for some operations (but fast enough for most use cases)
 
@@ -58,7 +58,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 
 **For reading**: **Feature-complete!** ✅ Production-ready for reading HDF5 files.
 
-**For writing**: **Advancing rapidly!** ✅ v0.11.4-beta has smart rebalancing + attribute modification complete.
+**For writing**: **Advancing rapidly!** ✅ v0.11.5-beta has smart rebalancing + attribute modification complete.
 
 **Read Support**:
 - ✅ All datatypes (integers, floats, strings, compounds, arrays, enums, references, opaque)
@@ -68,7 +68,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 - ✅ Attributes (compact and dense)
 - ✅ Both old (pre-1.8) and modern (1.8+) HDF5 files
 
-**Write Support (v0.11.4-beta)**:
+**Write Support (v0.11.5-beta)**:
 - ✅ File creation (Truncate/Exclusive modes)
 - ✅ Dataset writing (contiguous + chunked layouts, all datatypes)
 - ✅ Chunked datasets (B-tree v1 indexing, chunk storage)
@@ -79,7 +79,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 - ✅ Advanced datatypes (arrays, enums, references, opaque)
 - ✅ Legacy formats (Superblock v0 + Object Header v1)
 
-**Limitations (v0.11.4-beta)**:
+**Limitations (v0.11.5-beta)**:
 - ⚠️ Attribute modification/deletion (write-once only)
 - ⚠️ Soft/external links not yet supported
 - ⚠️ Compound datatypes write support
@@ -132,9 +132,9 @@ See [Reading Data Guide](READING_DATA.md) for details.
 
 ### Can I write HDF5 files?
 
-**Yes! Write support advancing rapidly in v0.11.4-beta.** ✅
+**Yes! Write support advancing rapidly in v0.11.5-beta.** ✅
 
-**What's supported (v0.11.4-beta)**:
+**What's supported (v0.11.5-beta)**:
 ```go
 // Create new HDF5 file
 fw, err := hdf5.CreateForWrite("output.h5", hdf5.CreateTruncate)
@@ -158,13 +158,13 @@ enumDs, _ := fw.CreateDataset("/status", hdf5.EnumInt8, []uint64{5},
     hdf5.WithEnumValues([]string{"OK", "ERROR"}, []int64{0, 1}))
 ```
 
-**Current limitations (v0.11.4-beta)**:
+**Current limitations (v0.11.5-beta)**:
 - Attribute modification/deletion (write-once only)
 - Soft/external links not yet supported
 - Compound datatype write support
 
 **Coming soon**:
-- **v0.11.4-beta**: Links support, attribute modifications
+- **v0.11.5-beta**: Links support, attribute modifications
 - **v0.12.0-rc.1**: Feature complete, API freeze, community testing
 - **v1.0.0**: Production-ready write support
 
@@ -563,7 +563,7 @@ if err == nil {
 
 ### What's the current write support status?
 
-**Already Available** (v0.11.4-beta):
+**Already Available** (v0.11.5-beta):
 - ✅ File creation with multiple superblock formats (v0, v2)
 - ✅ Dataset writing: contiguous and chunked layouts
 - ✅ Compression: GZIP, Shuffle filter, Fletcher32 checksum
@@ -573,7 +573,7 @@ if err == nil {
 - ✅ Advanced datatypes: arrays, enums, references, opaque
 - ✅ Legacy format support (v0 superblock + Object Header v1)
 
-**Coming Soon** (v0.11.4-beta):
+**Coming Soon** (v0.11.5-beta):
 - Attribute modification and deletion
 - Links support (soft/external)
 - Indirect blocks for fractal heap

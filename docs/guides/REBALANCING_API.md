@@ -991,7 +991,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 ## API Stability
 
 **Stability Guarantee**:
-- ✅ All APIs documented here are **stable** as of v0.11.4-beta
+- ✅ All APIs documented here are **stable** as of v0.11.5-beta
 - ✅ Option names, signatures, and semantics will not change (backward compatible)
 - ✅ New options may be added (won't break existing code)
 
@@ -1004,12 +1004,12 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 
 ## See Also
 
-- **[Performance Tuning Guide](performance-tuning.md)**: Comprehensive guide with benchmarks, recommendations, troubleshooting
+- **[Performance Tuning Guide](PERFORMANCE_TUNING.md)**: Comprehensive guide with benchmarks, recommendations, troubleshooting
 - **[FAQ](FAQ.md)**: Common questions about rebalancing
 - **[Examples](../../examples/)**: Working code examples
 
 ---
 
-**Version**: v0.11.4-beta
+**Version**: v0.11.5-beta
 **Last Updated**: 2025-11-02
 **API Status**: Stable
