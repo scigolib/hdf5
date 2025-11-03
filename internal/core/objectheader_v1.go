@@ -28,24 +28,26 @@ import (
 // - Address of continuation block (OffsetSize bytes).
 // - Size of continuation block (LengthSize bytes).
 // Reference: H5Ocont.c from HDF5 C library.
-func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderMessage, string, error) {
+//
+// Returns: (messages, name, referenceCount, error).
+func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderMessage, string, uint32, error) {
 	// Read the header prefix (16 bytes).
 	headerBuf := utils.GetBuffer(16)
 	defer utils.ReleaseBuffer(headerBuf)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(headerBuf, int64(headerAddr)); err != nil {
-		return nil, "", utils.WrapError("v1 header read failed", err)
+		return nil, "", 0, utils.WrapError("v1 header read failed", err)
 	}
 
 	// Parse header fields.
 	version := headerBuf[0]
 	if version != 1 {
-		return nil, "", utils.WrapError("invalid v1 header version", nil)
+		return nil, "", 0, utils.WrapError("invalid v1 header version", nil)
 	}
 
 	numMessages := sb.Endianness.Uint16(headerBuf[2:4])
-	// refCount := sb.Endianness.Uint32(headerBuf[4:8])  // Unused.
+	refCount := sb.Endianness.Uint32(headerBuf[4:8]) // Reference count (hard link count)
 	headerSize := sb.Endianness.Uint32(headerBuf[8:12])
 
 	// Messages start after the 16-byte header.
@@ -58,7 +60,7 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 	// Parse messages in the main header block
 	blockMessages, blockName, err := parseV1MessagesInBlock(r, current, end, numMessages, sb)
 	if err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
 	messages = append(messages, blockMessages...)
 	if blockName != "" {
@@ -75,7 +77,7 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 		// Parse continuation block
 		contMessages, contName, err := parseV1ContinuationBlock(r, cont.Address, cont.Size, sb)
 		if err != nil {
-			return nil, "", utils.WrapError("continuation block parse failed", err)
+			return nil, "", 0, utils.WrapError("continuation block parse failed", err)
 		}
 
 		// Add messages from continuation
@@ -89,7 +91,7 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 		continuations = append(continuations, newConts...)
 	}
 
-	return messages, name, nil
+	return messages, name, refCount, nil
 }
 
 // continuationInfo holds information about a continuation block.

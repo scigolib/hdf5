@@ -58,7 +58,7 @@ func TestParseV1Header_Basic(t *testing.T) {
 		LengthSize: 8,
 	}
 
-	messages, name, err := parseV1Header(bytes.NewReader(header), 0, sb)
+	messages, name, _, err := parseV1Header(bytes.NewReader(header), 0, sb)
 	require.NoError(t, err)
 	require.Equal(t, "test", name)
 	require.Len(t, messages, 2)
@@ -97,7 +97,7 @@ func TestParseV1Header_SymbolTable(t *testing.T) {
 		LengthSize: 8,
 	}
 
-	messages, name, err := parseV1Header(bytes.NewReader(header), 0, sb)
+	messages, name, _, err := parseV1Header(bytes.NewReader(header), 0, sb)
 	require.NoError(t, err)
 	require.Empty(t, name) // No name message
 	require.Len(t, messages, 1)
@@ -133,7 +133,7 @@ func TestParseV1Header_EmptyMessage(t *testing.T) {
 		LengthSize: 8,
 	}
 
-	messages, _, err := parseV1Header(bytes.NewReader(header), 0, sb)
+	messages, _, _, err := parseV1Header(bytes.NewReader(header), 0, sb)
 	require.NoError(t, err)
 	// Should only have 1 message (the name), zero-size skipped
 	require.Len(t, messages, 1)
@@ -202,7 +202,7 @@ func TestParseV1Header_WithContinuation(t *testing.T) {
 		LengthSize: 8,
 	}
 
-	messages, name, err := parseV1Header(bytes.NewReader(fullFile), 0, sb)
+	messages, name, _, err := parseV1Header(bytes.NewReader(fullFile), 0, sb)
 	require.NoError(t, err)
 	require.Equal(t, "test", name)
 
@@ -280,7 +280,7 @@ func TestParseV1Header_ChainedContinuations(t *testing.T) {
 		LengthSize: 8,
 	}
 
-	messages, name, err := parseV1Header(bytes.NewReader(fullFile), 0, sb)
+	messages, name, _, err := parseV1Header(bytes.NewReader(fullFile), 0, sb)
 	require.NoError(t, err)
 	require.Equal(t, "obj", name)
 
@@ -433,7 +433,7 @@ func TestParseV1Header_LargeHeaderWithContinuation(t *testing.T) {
 		LengthSize: 8,
 	}
 
-	messages, name, err := parseV1Header(bytes.NewReader(fullFile), 0, sb)
+	messages, name, _, err := parseV1Header(bytes.NewReader(fullFile), 0, sb)
 	require.NoError(t, err)
 	require.Equal(t, "largeobj", name)
 

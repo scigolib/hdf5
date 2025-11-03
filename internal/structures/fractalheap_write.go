@@ -34,19 +34,30 @@ var (
 )
 
 // WritableFractalHeap represents a fractal heap that supports writing.
-// This is an MVP implementation for dense groups phase 2.
+// This implementation supports both direct and indirect block structures.
 //
-// MVP Limitations:
-// - Single direct block only (no indirect blocks)
-// - No filters/compression
-// - No huge objects
-// - No tiny object optimization
-// - Simple object IDs (offset-based)
+// Structure:
+// - Small heaps (single direct block): Use DirectBlock directly
+// - Large heaps (multiple blocks): Use RootIndirectBlock with child blocks
 //
-// Reference: H5HF.c, H5HFhdr.c, H5HFdblock.c.
+// Transition: When direct block fills up, heap automatically transitions to
+// indirect block structure, moving existing data to first child block.
+//
+// Limitations:
+// - Single-level indirect blocks (no multiply-indirect yet)
+// - No filters/compression (MVP)
+// - No huge objects (MVP)
+// - No tiny object optimization (MVP)
+//
+// Reference: H5HF.c, H5HFhdr.c, H5HFdblock.c, H5HFiblock.c.
 type WritableFractalHeap struct {
 	Header      *WritableHeapHeader
-	DirectBlock *WritableDirectBlock
+	DirectBlock *WritableDirectBlock // Used when root is direct block (small heaps)
+
+	// Indirect block support (for large heaps)
+	RootIndirectBlock  *WritableIndirectBlock          // Non-nil when root is indirect block
+	MaxDirectBlockSize uint64                          // When to transition to indirect
+	DirectBlocks       map[uint64]*WritableDirectBlock // Child blocks (key = block offset)
 
 	// Addresses loaded from file (for RMW scenarios)
 	loadedHeaderAddress      uint64
@@ -173,12 +184,99 @@ func NewWritableFractalHeap(blockSize uint64) *WritableFractalHeap {
 	}
 
 	return &WritableFractalHeap{
-		Header:      header,
-		DirectBlock: directBlock,
+		Header:             header,
+		DirectBlock:        directBlock,
+		RootIndirectBlock:  nil,                                   // Start with direct block root
+		MaxDirectBlockSize: blockSize,                             // Transition threshold
+		DirectBlocks:       make(map[uint64]*WritableDirectBlock), // Empty initially
 	}
 }
 
+// transitionToIndirectRoot transitions the heap from direct block root to indirect block root.
+//
+// This is called when the single direct block becomes full and we need to add more blocks.
+// The process:
+// 1. Create a root indirect block (1 row initially, will grow)
+// 2. Move existing direct block to first child position
+// 3. Update heap header to point to indirect block as root
+// 4. Prepare for allocating additional child blocks
+//
+// Reference: H5HFiblock.c - H5HF__man_iblock_create().
+//
+// MVP Limitation: Single-level indirect only (max_direct_rows = nrows).
+func (fh *WritableFractalHeap) transitionToIndirectRoot() error {
+	if fh.RootIndirectBlock != nil {
+		return fmt.Errorf("heap already has indirect root")
+	}
+
+	if fh.DirectBlock == nil {
+		return fmt.Errorf("no direct block to transition")
+	}
+
+	// Calculate indirect block parameters
+	// Start with 1 row (holds 2 direct blocks with table width=2)
+	numRows := uint16(1)
+	maxDirectRows := numRows // All rows are direct blocks (MVP: no multiply-indirect)
+
+	// Create root indirect block
+	// Block offset = 0 (root starts at beginning of heap address space)
+	indirectBlock := NewWritableIndirectBlock(
+		0, // Heap header address will be set during write
+		0, // Block offset = 0 for root
+		numRows,
+		fh.Header.TableWidth,
+		maxDirectRows,
+	)
+
+	// Move existing direct block to first child position (row 0, col 0)
+	// The existing block already has offset 0, which is correct
+	entryIndex := indirectBlock.CalculateEntryIndex(0, 0)
+	// Address will be set when blocks are written to file
+	if err := indirectBlock.SetChildAddress(entryIndex, 0); err != nil {
+		return fmt.Errorf("failed to set first child address: %w", err)
+	}
+
+	// Add existing direct block to DirectBlocks map (key = block offset)
+	fh.DirectBlocks[fh.DirectBlock.BlockOffset] = fh.DirectBlock
+
+	// Update heap structure
+	fh.RootIndirectBlock = indirectBlock
+
+	// Clear DirectBlock pointer (it's now in DirectBlocks map)
+	// Keep reference until write, then nil it
+	// fh.DirectBlock = nil  // Don't nil yet - needed for backward compat
+
+	// Update heap header
+	fh.Header.CurrentNumRows = numRows
+
+	return nil
+}
+
+// needsTransition checks if heap should transition from direct to indirect root.
+//
+// Transition is needed when:
+// - Currently using direct block root (no indirect block yet)
+// - Direct block is full or nearly full
+// - New object doesn't fit in remaining space.
+func (fh *WritableFractalHeap) needsTransition(objectSize uint64) bool {
+	// Already using indirect block
+	if fh.RootIndirectBlock != nil {
+		return false
+	}
+
+	// Check if object fits in current direct block
+	if fh.DirectBlock.FreeOffset+objectSize <= fh.DirectBlock.Size {
+		return false // Still fits
+	}
+
+	// Object doesn't fit - need transition
+	return true
+}
+
 // InsertObject inserts a variable-length object into the fractal heap.
+//
+// This method handles both direct block root (small heaps) and indirect block root (large heaps).
+// When the heap grows beyond a single direct block, it automatically transitions to indirect structure.
 //
 // Parameters:
 // - data: object data (e.g., link name as []byte)
@@ -200,6 +298,31 @@ func (fh *WritableFractalHeap) InsertObject(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%w: object size %d exceeds max %d",
 			ErrObjectTooLarge, dataSize, fh.Header.MaxManagedObjectSize)
 	}
+
+	// Check if transition to indirect root is needed
+	if fh.needsTransition(dataSize) {
+		if err := fh.transitionToIndirectRoot(); err != nil {
+			return nil, fmt.Errorf("failed to transition to indirect root: %w", err)
+		}
+	}
+
+	// Route to appropriate insertion method
+	if fh.RootIndirectBlock != nil {
+		// Indirect root path (large heaps with multiple blocks)
+		return fh.insertViaIndirect(data)
+	}
+
+	// Direct root path (small heaps with single block)
+	return fh.insertViaDirect(data)
+}
+
+// insertViaDirect inserts object into direct block root (small heaps).
+//
+// This is the original insertion logic for single-block heaps.
+//
+// Reference: H5HF.c - H5HF__man_insert().
+func (fh *WritableFractalHeap) insertViaDirect(data []byte) ([]byte, error) {
+	dataSize := uint64(len(data))
 
 	// Check if enough space in direct block
 	if fh.DirectBlock.FreeOffset+dataSize > fh.DirectBlock.Size {
@@ -233,6 +356,105 @@ func (fh *WritableFractalHeap) InsertObject(data []byte) ([]byte, error) {
 	// Create heap ID for managed object
 	// Format: [flags | offset | length]
 	heapID := fh.encodeHeapID(objectOffset, dataSize)
+
+	return heapID, nil
+}
+
+// insertViaIndirect inserts object into indirect block structure (large heaps).
+//
+// This method navigates the doubling table to find an appropriate block,
+// allocates new child blocks as needed, and inserts the object.
+//
+// MVP Implementation:
+// - Single-level indirect blocks only
+// - Simple allocation strategy (fill first block, then second, etc.)
+// - No block splitting or compaction
+//
+// Reference: H5HFiblock.c - H5HF__man_iblock_alloc_row().
+func (fh *WritableFractalHeap) insertViaIndirect(data []byte) ([]byte, error) {
+	dataSize := uint64(len(data))
+
+	// Find a block with enough free space
+	// MVP: Simple linear search through child blocks
+	var targetBlock *WritableDirectBlock
+	var targetOffset uint64
+
+	// Try each existing child block
+	for offset, block := range fh.DirectBlocks {
+		if block.FreeOffset+dataSize <= block.Size {
+			targetBlock = block
+			targetOffset = offset
+			break
+		}
+	}
+
+	// If no block found, allocate a new child block
+	if targetBlock == nil {
+		// Calculate next block offset
+		// MVP: Use ManagedSpaceOffset (grows with heap)
+		nextBlockOffset := fh.Header.ManagedSpaceSize
+
+		// Create new child direct block
+		newBlock := &WritableDirectBlock{
+			Version:           0,
+			HeapHeaderAddress: 0, // Will be set during write
+			BlockOffset:       nextBlockOffset,
+			Size:              fh.MaxDirectBlockSize, // Use max block size
+			Objects:           make([]byte, 0, fh.MaxDirectBlockSize),
+			FreeOffset:        0,
+			ChecksumEnabled:   false,
+		}
+
+		// Add to DirectBlocks map
+		fh.DirectBlocks[nextBlockOffset] = newBlock
+
+		// Update heap statistics
+		fh.Header.ManagedSpaceSize += fh.MaxDirectBlockSize
+		fh.Header.AllocatedManagedSpace += fh.MaxDirectBlockSize
+		fh.Header.FreeSpace += fh.MaxDirectBlockSize
+
+		// Find entry in indirect block for this new child
+		// MVP: Simple append to next available entry
+		numExistingBlocks := len(fh.DirectBlocks) - 1 // -1 because we just added one
+		if numExistingBlocks >= len(fh.RootIndirectBlock.ChildAddresses) {
+			// Need to grow indirect block (add more rows)
+			// MVP: For now, return error (will implement growth in future)
+			return nil, fmt.Errorf("%w: indirect block full (need to grow)", ErrHeapFull)
+		}
+
+		// Set child address in indirect block (address will be set during write)
+		if err := fh.RootIndirectBlock.SetChildAddress(numExistingBlocks, 0); err != nil {
+			return nil, fmt.Errorf("failed to set child address: %w", err)
+		}
+
+		targetBlock = newBlock
+		targetOffset = nextBlockOffset
+	}
+
+	// Insert object into target block
+	objectOffset := targetBlock.FreeOffset
+
+	// Write object at free offset position
+	//nolint:gosec // G115: safe conversion, offset checked against block size above
+	neededLen := int(objectOffset + dataSize)
+	if neededLen > len(targetBlock.Objects) {
+		// Extend slice if needed
+		targetBlock.Objects = append(targetBlock.Objects, make([]byte, neededLen-len(targetBlock.Objects))...)
+	}
+	copy(targetBlock.Objects[objectOffset:], data)
+
+	// Update block offsets
+	targetBlock.FreeOffset += dataSize
+
+	// Update heap statistics
+	fh.Header.ManagedSpaceOffset += dataSize // Iterator offset (total objects inserted)
+	fh.Header.NumManagedObjects++
+	fh.Header.FreeSpace -= dataSize
+
+	// Create heap ID
+	// Offset is: block offset + object offset within block
+	globalOffset := targetOffset + objectOffset
+	heapID := fh.encodeHeapID(globalOffset, dataSize)
 
 	return heapID, nil
 }
@@ -723,11 +945,23 @@ func (fh *WritableFractalHeap) GetObject(heapID []byte) ([]byte, error) {
 	}
 
 	idx := 1
-	offset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
+	globalOffset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
 	idx += int(fh.Header.HeapOffsetSize)
 
 	length := readUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
 
+	// Route to appropriate retrieval method based on heap structure
+	if fh.RootIndirectBlock != nil {
+		// Indirect root: Find correct child block
+		return fh.getObjectFromIndirect(globalOffset, length)
+	}
+
+	// Direct root: Simple lookup
+	return fh.getObjectFromDirect(globalOffset, length)
+}
+
+// getObjectFromDirect retrieves object from direct block root.
+func (fh *WritableFractalHeap) getObjectFromDirect(offset, length uint64) ([]byte, error) {
 	// Validate offset and length
 	if offset >= uint64(len(fh.DirectBlock.Objects)) {
 		return nil, fmt.Errorf("%w: offset %d >= used space %d", ErrObjectNotFound, offset, len(fh.DirectBlock.Objects))
@@ -742,6 +976,40 @@ func (fh *WritableFractalHeap) GetObject(heapID []byte) ([]byte, error) {
 	copy(data, fh.DirectBlock.Objects[offset:offset+length])
 
 	return data, nil
+}
+
+// getObjectFromIndirect retrieves object from indirect block structure.
+//
+// The global offset encodes both the block and the offset within that block.
+// We need to find which child block contains this offset.
+func (fh *WritableFractalHeap) getObjectFromIndirect(globalOffset, length uint64) ([]byte, error) {
+	// Find which block contains this offset
+	// MVP: Simple linear search through blocks
+	for blockOffset, block := range fh.DirectBlocks {
+		blockEnd := blockOffset + block.Size
+		if globalOffset >= blockOffset && globalOffset < blockEnd {
+			// Object is in this block
+			localOffset := globalOffset - blockOffset
+
+			// Validate offset within block
+			if localOffset >= uint64(len(block.Objects)) {
+				return nil, fmt.Errorf("%w: local offset %d >= used space %d in block at 0x%X",
+					ErrObjectNotFound, localOffset, len(block.Objects), blockOffset)
+			}
+
+			if localOffset+length > uint64(len(block.Objects)) {
+				return nil, fmt.Errorf("%w: object extends beyond used space in block at 0x%X",
+					ErrObjectNotFound, blockOffset)
+			}
+
+			// Extract and return object data
+			data := make([]byte, length)
+			copy(data, block.Objects[localOffset:localOffset+length])
+			return data, nil
+		}
+	}
+
+	return nil, fmt.Errorf("%w: global offset %d not found in any block", ErrObjectNotFound, globalOffset)
 }
 
 // OverwriteObject overwrites an existing object in the heap (same size, in-place).

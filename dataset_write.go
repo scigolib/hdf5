@@ -407,6 +407,14 @@ func getDatatypeInfo(dt Datatype, config *datasetConfig) (*datatypeInfo, error) 
 	return handler.GetInfo(config)
 }
 
+// GroupMetadata stores metadata for a group (symbol table format).
+// Used for tracking non-root groups to enable nested dataset creation.
+type GroupMetadata struct {
+	heapAddr   uint64 // Local heap address (stores link names)
+	stNodeAddr uint64 // Symbol table node address (stores entries)
+	btreeAddr  uint64 // B-tree address (indexes symbol table)
+}
+
 // FileWriter represents an HDF5 file opened for writing.
 // It wraps a File handle and provides write operations.
 type FileWriter struct {
@@ -420,6 +428,11 @@ type FileWriter struct {
 	rootBTreeAddr  uint64 // Address of root group B-tree
 	rootHeapAddr   uint64 // Address of root group local heap
 	rootStNodeAddr uint64 // Address of root group symbol table node
+
+	// Group metadata tracking (supports nested groups)
+	// Maps group path → metadata (heap, symbol table, B-tree addresses)
+	// Example: "/mygroup" → {heapAddr, stNodeAddr, btreeAddr}
+	groups map[string]*GroupMetadata
 
 	// Rebalancing configurations (Phase 3)
 	// These are set via functional options: WithLazyRebalancing(), WithIncrementalRebalancing(), WithSmartRebalancing()
@@ -631,6 +644,8 @@ func CreateForWrite(filename string, mode CreateMode, opts ...interface{}) (*Fil
 		rootBTreeAddr:  rootInfo.btreeAddr,
 		rootHeapAddr:   rootInfo.heapAddr,
 		rootStNodeAddr: rootInfo.stNodeAddr,
+		// Initialize groups map for tracking nested groups
+		groups: make(map[string]*GroupMetadata),
 		// Copy rebalancing configs from tempFW
 		lazyRebalancingConfig:        tempFW.lazyRebalancingConfig,
 		incrementalRebalancingConfig: tempFW.incrementalRebalancingConfig,

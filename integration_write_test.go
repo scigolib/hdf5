@@ -20,7 +20,7 @@ func TestFullWriteWorkflow_GroupsAndDatasets(t *testing.T) {
 	defer func() { _ = fw.Close() }()
 
 	// Create groups (MVP: not linked, but structure is valid)
-	err = fw.CreateGroup("/data")
+	_, err = fw.CreateGroup("/data")
 	require.NoError(t, err)
 
 	// Create datasets (MVP: not linked, but structure is valid)
@@ -129,7 +129,7 @@ func TestFullWriteWorkflow_BinaryStructure(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a group
-	err = fw.CreateGroup("/mygroup")
+	_, err = fw.CreateGroup("/mygroup")
 	require.NoError(t, err)
 
 	// Create a dataset
@@ -195,7 +195,7 @@ func TestFullWriteWorkflow_CloseAndReopen(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create group
-		err = fw.CreateGroup("/data")
+		_, err = fw.CreateGroup("/data")
 		require.NoError(t, err)
 
 		// Create dataset
@@ -241,7 +241,7 @@ func TestFullWriteWorkflow_WithDiscovery(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create groups
-	err = fw.CreateGroup("/data")
+	_, err = fw.CreateGroup("/data")
 	require.NoError(t, err)
 
 	// Create datasets

@@ -9,6 +9,91 @@ import (
 	"github.com/scigolib/hdf5/internal/writer"
 )
 
+// GroupWriter represents an HDF5 group opened for writing.
+// Groups organize datasets and other groups in a hierarchical structure.
+//
+// This type enables writing attributes to groups, similar to datasets.
+// It provides a clean, object-oriented API consistent with DatasetWriter.
+//
+// Example:
+//
+//	fw, _ := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate)
+//	defer fw.Close()
+//
+//	// Create group
+//	group, _ := fw.CreateGroup("/mygroup")
+//
+//	// Write attributes to group
+//	group.WriteAttribute("description", "My data group")
+//	group.WriteAttribute("version", int32(1))
+//
+// Note: This is a write-only handle. For reading group contents, use
+// the file-level Walk() or Group() methods after reopening the file.
+type GroupWriter struct {
+	// path is the full path of this group (e.g., "/mygroup" or "/data/experiments")
+	path string
+
+	// headerAddr is the address of the group's object header in the HDF5 file.
+	// This is used for writing attributes and linking to this group.
+	headerAddr uint64
+
+	// file is a reference to the parent FileWriter.
+	// This is needed for attribute operations and accessing file-level structures.
+	file *FileWriter
+}
+
+// WriteAttribute writes an attribute to this group.
+//
+// Storage strategy (automatic):
+//   - 0-7 attributes: Compact storage (object header messages)
+//   - 8+ attributes: Dense storage (Fractal Heap + B-tree v2)
+//
+// Supported value types:
+//   - Scalars: int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64
+//   - Arrays: []int32, []float64, etc. (1D arrays only)
+//   - Strings: string (fixed-length, converted to byte array)
+//
+// Parameters:
+//   - name: Attribute name (ASCII, no null bytes)
+//   - value: Attribute value (Go scalar, slice, or string)
+//
+// Returns:
+//   - error: If attribute cannot be written
+//
+// Example:
+//
+//	group, _ := fw.CreateGroup("/mygroup")
+//	group.WriteAttribute("MATLAB_class", "double")
+//	group.WriteAttribute("MATLAB_complex", uint8(1))
+//	group.WriteAttribute("description", "Temperature measurements")
+//
+// Limitations:
+//   - No variable-length strings
+//   - No compound types
+//   - Attributes cannot be modified after creation (write-once)
+//   - No attribute deletion
+func (g *GroupWriter) WriteAttribute(name string, value interface{}) error {
+	// Delegate to existing attribute writing infrastructure
+	// This reuses the same code path as DatasetWriter.WriteAttribute
+	return writeAttribute(g.file, g.headerAddr, name, value)
+}
+
+// Path returns the full path of this group.
+//
+// This can be used to display the group's location in the file hierarchy
+// or for debugging purposes.
+//
+// Returns:
+//   - string: The group's path (e.g., "/mygroup" or "/data/experiments")
+//
+// Example:
+//
+//	group, _ := fw.CreateGroup("/mygroup")
+//	fmt.Println(group.Path()) // Output: /mygroup
+func (g *GroupWriter) Path() string {
+	return g.path
+}
+
 // validateGroupPath validates group path is not empty, starts with '/', and is not root.
 func validateGroupPath(path string) error {
 	if path == "" {
@@ -24,15 +109,15 @@ func validateGroupPath(path string) error {
 }
 
 // createGroupStructures creates and writes the local heap, symbol table node, and B-tree for a group.
-// Returns (heapAddr, btreeAddr, error).
-func (fw *FileWriter) createGroupStructures() (uint64, uint64, error) {
+// Returns (heapAddr, stNodeAddr, btreeAddr, error).
+func (fw *FileWriter) createGroupStructures() (uint64, uint64, uint64, error) {
 	offsetSize := int(fw.file.sb.OffsetSize)
 
 	// Create local heap
 	heap := structures.NewLocalHeap(256)
 	heapAddr, err := fw.writer.Allocate(heap.Size())
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to allocate heap: %w", err)
+		return 0, 0, 0, fmt.Errorf("failed to allocate heap: %w", err)
 	}
 
 	// Create symbol table node
@@ -41,35 +126,35 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, error) {
 	stNodeSize := uint64(8 + 32*entrySize) //nolint:gosec // Safe: small constant calculation
 	stNodeAddr, err := fw.writer.Allocate(stNodeSize)
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to allocate symbol table node: %w", err)
+		return 0, 0, 0, fmt.Errorf("failed to allocate symbol table node: %w", err)
 	}
 
 	if err := stNode.WriteAt(fw.writer, stNodeAddr, uint8(offsetSize), 32, fw.file.sb.Endianness); err != nil { //nolint:gosec // Safe: offsetSize is 8
-		return 0, 0, fmt.Errorf("failed to write symbol table node: %w", err)
+		return 0, 0, 0, fmt.Errorf("failed to write symbol table node: %w", err)
 	}
 
 	// Create B-tree
 	btree := structures.NewBTreeNodeV1(0, 16)
 	if err := btree.AddKey(0, stNodeAddr); err != nil {
-		return 0, 0, fmt.Errorf("failed to add B-tree key: %w", err)
+		return 0, 0, 0, fmt.Errorf("failed to add B-tree key: %w", err)
 	}
 
 	btreeSize := uint64(24 + (2*16+1)*offsetSize + 2*16*offsetSize) //nolint:gosec // Safe: small constant calculation
 	btreeAddr, err := fw.writer.Allocate(btreeSize)
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to allocate B-tree: %w", err)
+		return 0, 0, 0, fmt.Errorf("failed to allocate B-tree: %w", err)
 	}
 
 	if err := btree.WriteAt(fw.writer, btreeAddr, uint8(offsetSize), 16, fw.file.sb.Endianness); err != nil { //nolint:gosec // Safe: offsetSize is 8
-		return 0, 0, fmt.Errorf("failed to write B-tree: %w", err)
+		return 0, 0, 0, fmt.Errorf("failed to write B-tree: %w", err)
 	}
 
 	// Write heap
 	if err := heap.WriteTo(fw.writer, heapAddr); err != nil {
-		return 0, 0, fmt.Errorf("failed to write local heap: %w", err)
+		return 0, 0, 0, fmt.Errorf("failed to write local heap: %w", err)
 	}
 
-	return heapAddr, btreeAddr, nil
+	return heapAddr, stNodeAddr, btreeAddr, nil
 }
 
 // CreateGroup creates a new empty group in the HDF5 file.
@@ -82,6 +167,7 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, error) {
 //   - path: Group path (must start with "/", e.g., "/data" or "/data/experiments")
 //
 // Returns:
+//   - *GroupWriter: Handle for writing attributes to the group
 //   - error: If creation fails
 //
 // Example:
@@ -90,34 +176,45 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, error) {
 //	defer fw.Close()
 //
 //	// Create root-level group
-//	fw.CreateGroup("/data")
+//	group, _ := fw.CreateGroup("/data")
+//	group.WriteAttribute("description", "My data group")
 //
 //	// Create nested group
-//	fw.CreateGroup("/data/experiments")
+//	nested, _ := fw.CreateGroup("/data/experiments")
+//	nested.WriteAttribute("MATLAB_class", "double")
 //
 // Limitations for MVP (v0.11.0-beta):
 //   - Only symbol table structure (no indexed groups)
 //   - No link creation time tracking
 //   - Maximum 32 entries per group (symbol table node capacity)
 //   - Parent group must exist (create parents first)
-func (fw *FileWriter) CreateGroup(path string) error {
+func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 	// Validate path
 	if err := validateGroupPath(path); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Parse path into parent and name
 	parent, name := parsePath(path)
 
-	// For MVP: only support root-level groups (parent must be "/")
+	// Validate parent exists (if not root)
 	if parent != "" && parent != "/" {
-		return fmt.Errorf("nested groups not yet supported in MVP, parent must be root (got parent %q)", parent)
+		if _, exists := fw.groups[parent]; !exists {
+			return nil, fmt.Errorf("parent group %q does not exist (create it first)", parent)
+		}
 	}
 
 	// Create group structures (heap, symbol table, B-tree)
-	heapAddr, btreeAddr, err := fw.createGroupStructures()
+	heapAddr, stNodeAddr, btreeAddr, err := fw.createGroupStructures()
 	if err != nil {
-		return err
+		return nil, err
+	}
+
+	// Store group metadata for nested dataset linking
+	fw.groups[path] = &GroupMetadata{
+		heapAddr:   heapAddr,
+		stNodeAddr: stNodeAddr,
+		btreeAddr:  btreeAddr,
 	}
 
 	// Create object header for the group
@@ -140,25 +237,30 @@ func (fw *FileWriter) CreateGroup(path string) error {
 
 	headerAddr, err := fw.writer.Allocate(headerSize)
 	if err != nil {
-		return fmt.Errorf("failed to allocate object header: %w", err)
+		return nil, fmt.Errorf("failed to allocate object header: %w", err)
 	}
 
 	// Write object header
 	writtenSize, err := ohw.WriteTo(fw.writer, headerAddr)
 	if err != nil {
-		return fmt.Errorf("failed to write object header: %w", err)
+		return nil, fmt.Errorf("failed to write object header: %w", err)
 	}
 
 	if writtenSize != headerSize {
-		return fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
+		return nil, fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
 	}
 
 	// Link to parent group
 	if err := fw.linkToParent(parent, name, headerAddr); err != nil {
-		return fmt.Errorf("failed to link to parent: %w", err)
+		return nil, fmt.Errorf("failed to link to parent: %w", err)
 	}
 
-	return nil
+	// Return GroupWriter handle
+	return &GroupWriter{
+		path:       path,
+		headerAddr: headerAddr,
+		file:       fw,
+	}, nil
 }
 
 // parsePath splits a path into parent directory and name.
@@ -196,14 +298,21 @@ func parsePath(path string) (parent, name string) {
 // Returns:
 //   - error: If linking fails
 func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint64) error {
-	// For MVP, only support root group as parent
-	if parentPath != "" && parentPath != "/" {
-		return fmt.Errorf("linking to non-root groups not supported in MVP")
+	// Get parent group metadata
+	var heapAddr, stNodeAddr uint64
+	if parentPath == "" || parentPath == "/" {
+		// Root group - use root metadata
+		heapAddr = fw.rootHeapAddr
+		stNodeAddr = fw.rootStNodeAddr
+	} else {
+		// Non-root group - look up metadata
+		meta, exists := fw.groups[parentPath]
+		if !exists {
+			return fmt.Errorf("parent group %q not found (create it first)", parentPath)
+		}
+		heapAddr = meta.heapAddr
+		stNodeAddr = meta.stNodeAddr
 	}
-
-	// Use root group metadata
-	heapAddr := fw.rootHeapAddr
-	stNodeAddr := fw.rootStNodeAddr
 
 	// Step 1: Read existing local heap
 	heap, err := fw.readLocalHeap(heapAddr)
@@ -340,10 +449,14 @@ func (fw *FileWriter) CreateDenseGroup(name string, links map[string]string) err
 		return fmt.Errorf("failed to write dense group: %w", err)
 	}
 
-	// Link to parent (root group for MVP)
+	// Link to parent
 	parent, childName := parsePath(name)
+
+	// Validate parent exists (if not root)
 	if parent != "" && parent != "/" {
-		return fmt.Errorf("nested groups not yet supported in MVP, parent must be root (got parent %q)", parent)
+		if _, exists := fw.groups[parent]; !exists {
+			return fmt.Errorf("parent group %q does not exist (create it first)", parent)
+		}
 	}
 
 	if err := fw.linkToParent(parent, childName, ohAddr); err != nil {
@@ -356,19 +469,16 @@ func (fw *FileWriter) CreateDenseGroup(name string, links map[string]string) err
 // resolveObjectAddress resolves object path to file address.
 //
 // This is a helper for link creation - looks up the target object's
-// address in the file by its path.
-//
-// For MVP: Only supports root-level objects (direct lookup in root group).
-// Future: Full path resolution with nested groups.
+// address in the file by its path. Supports both root-level and nested objects.
 //
 // Parameters:
 //   - path: Object path (e.g., "/data/dataset1" or "/dataset1")
 //
 // Returns:
 //   - uint64: File address of object header
-//   - error: Non-nil if object not found
+//   - error: Non-nil if object not found or parent doesn't exist
 func (fw *FileWriter) resolveObjectAddress(path string) (uint64, error) {
-	// For MVP: only support root-level paths
+	// Handle root group
 	if path == "/" {
 		return fw.rootGroupAddr, nil
 	}
@@ -380,18 +490,29 @@ func (fw *FileWriter) resolveObjectAddress(path string) (uint64, error) {
 	// Parse path
 	parent, name := parsePath(path)
 
-	// For MVP: only root-level objects supported
-	if parent != "" && parent != "/" {
-		return 0, fmt.Errorf("nested paths not yet supported in MVP (got %q)", path)
+	// Get parent group metadata
+	var stNodeAddr, heapAddr uint64
+	if parent == "" || parent == "/" {
+		// Root group
+		stNodeAddr = fw.rootStNodeAddr
+		heapAddr = fw.rootHeapAddr
+	} else {
+		// Non-root group - look up metadata
+		meta, exists := fw.groups[parent]
+		if !exists {
+			return 0, fmt.Errorf("parent group %q not found", parent)
+		}
+		stNodeAddr = meta.stNodeAddr
+		heapAddr = meta.heapAddr
 	}
 
-	// Read root group's symbol table to find the object
-	stNode, err := fw.readSymbolTableNode(fw.rootStNodeAddr)
+	// Read parent group's symbol table to find the object
+	stNode, err := fw.readSymbolTableNode(stNodeAddr)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read symbol table: %w", err)
 	}
 
-	heap, err := fw.readLocalHeap(fw.rootHeapAddr)
+	heap, err := fw.readLocalHeap(heapAddr)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read local heap: %w", err)
 	}
@@ -454,7 +575,8 @@ func (fw *FileWriter) CreateGroupWithLinks(name string, links map[string]string)
 
 	// Use symbol table format for small groups
 	// Create empty group first
-	if err := fw.CreateGroup(name); err != nil {
+	_, err := fw.CreateGroup(name)
+	if err != nil {
 		return err
 	}
 

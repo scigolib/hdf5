@@ -17,7 +17,7 @@ func TestCreateGroup_RootLevel(t *testing.T) {
 	defer func() { _ = fw.Close() }()
 
 	// Create root-level group
-	err = fw.CreateGroup("/data")
+	_, err = fw.CreateGroup("/data")
 	require.NoError(t, err)
 
 	// Close and verify file is valid
@@ -64,15 +64,15 @@ func TestCreateGroup_ValidationErrors(t *testing.T) {
 			wantErr: "root group already exists",
 		},
 		{
-			name:    "nested group (not supported in MVP)",
+			name:    "nested group (parent doesn't exist)",
 			path:    "/data/experiments",
-			wantErr: "nested groups not yet supported",
+			wantErr: "parent group \"/data\" does not exist",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := fw.CreateGroup(tt.path)
+			_, err := fw.CreateGroup(tt.path)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tt.wantErr)
 		})
@@ -90,7 +90,7 @@ func TestCreateGroup_Multiple(t *testing.T) {
 	// Create multiple root-level groups
 	groups := []string{"/data", "/metadata", "/results"}
 	for _, g := range groups {
-		err := fw.CreateGroup(g)
+		_, err := fw.CreateGroup(g)
 		require.NoError(t, err)
 	}
 
@@ -163,7 +163,7 @@ func TestCreateGroup_BinaryFormat(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create group
-	err = fw.CreateGroup("/testgroup")
+	_, err = fw.CreateGroup("/testgroup")
 	require.NoError(t, err)
 
 	err = fw.Close()

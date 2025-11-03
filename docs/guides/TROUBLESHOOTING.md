@@ -702,7 +702,7 @@ Include:
 
 ```markdown
 **Go version**: go1.25.1 linux/amd64
-**Library version**: github.com/scigolib/hdf5 v0.11.4-beta
+**Library version**: github.com/scigolib/hdf5 v0.11.5-beta
 **OS**: Ubuntu 22.04
 
 **Problem**: Cannot read string dataset

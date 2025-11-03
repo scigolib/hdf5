@@ -7,10 +7,10 @@
 [![CI](https://github.com/scigolib/hdf5/actions/workflows/test.yml/badge.svg)](https://github.com/scigolib/hdf5/actions)
 [![Coverage](https://img.shields.io/badge/coverage-86.1%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.11.4--beta-green.svg)](ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-v0.11.5--beta-green.svg)](ROADMAP.md)
 [![GoDoc](https://pkg.go.dev/badge/github.com/scigolib/hdf5.svg)](https://pkg.go.dev/github.com/scigolib/hdf5)
 
-A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. Read support is feature-complete, write support advancing rapidly!
+A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. Read support is feature-complete, write support advancing rapidly! **v0.11.5-beta validated by real users in production MATLAB project!**
 
 ---
 
@@ -92,8 +92,8 @@ func main() {
 
 ### Advanced
 - **[Architecture Overview](docs/architecture/OVERVIEW.md)** - How it works internally
-- **[Performance Tuning](docs/guides/performance-tuning.md)** - B-tree rebalancing strategies for optimal performance
-- **[Rebalancing API](docs/guides/rebalancing-api.md)** - Complete API reference for rebalancing options
+- **[Performance Tuning](docs/guides/PERFORMANCE_TUNING.md)** - B-tree rebalancing strategies for optimal performance
+- **[Rebalancing API](docs/guides/REBALANCING_API.md)** - Complete API reference for rebalancing options
 - **[Examples](examples/)** - Working code examples (7 examples with detailed documentation)
 
 ---
@@ -186,8 +186,8 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 | **Smart** | 88% | Varies | Unknown workloads |
 
 **Learn more**:
-- **[Performance Tuning Guide](docs/guides/performance-tuning.md)**: Comprehensive guide with benchmarks, recommendations, troubleshooting
-- **[Rebalancing API Reference](docs/guides/rebalancing-api.md)**: Complete API documentation
+- **[Performance Tuning Guide](docs/guides/PERFORMANCE_TUNING.md)**: Comprehensive guide with benchmarks, recommendations, troubleshooting
+- **[Rebalancing API Reference](docs/guides/REBALANCING_API.md)**: Complete API documentation
 - **[Examples](examples/07-rebalancing/)**: 4 working examples demonstrating each mode
 
 ---
