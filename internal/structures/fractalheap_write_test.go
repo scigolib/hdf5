@@ -419,6 +419,11 @@ func TestFractalHeapFillBlock(t *testing.T) {
 	objectSize := 100
 	maxObjects := int(blockSize) / objectSize
 
+	// Verify we start with direct block root
+	if heap.RootIndirectBlock != nil {
+		t.Error("Expected direct block root initially")
+	}
+
 	// Fill the block
 	for i := 0; i < maxObjects; i++ {
 		data := bytes.Repeat([]byte("x"), objectSize)
@@ -428,16 +433,32 @@ func TestFractalHeapFillBlock(t *testing.T) {
 		}
 	}
 
-	// Try to insert one more - should fail
-	data := bytes.Repeat([]byte("x"), objectSize)
-	_, err := heap.InsertObject(data)
-	if err == nil {
-		t.Error("Expected heap full error, got nil")
+	// Verify direct block is full
+	if heap.RootIndirectBlock != nil {
+		t.Error("Should still be direct block before overflow")
 	}
 
-	// Verify free space is minimal
-	if heap.Header.FreeSpace >= uint64(objectSize) {
-		t.Errorf("Expected less than %d free bytes, got %d", objectSize, heap.Header.FreeSpace)
+	// Insert one more - should trigger transition to indirect block
+	data := bytes.Repeat([]byte("x"), objectSize)
+	_, err := heap.InsertObject(data)
+	if err != nil {
+		t.Fatalf("Expected automatic transition to indirect block, got error: %v", err)
+	}
+
+	// Verify transition occurred
+	if heap.RootIndirectBlock == nil {
+		t.Error("Expected transition to indirect block root")
+	}
+
+	// Verify we now have 2 blocks (original + new)
+	if len(heap.DirectBlocks) != 2 {
+		t.Errorf("Expected 2 direct blocks after transition, got %d", len(heap.DirectBlocks))
+	}
+
+	// Verify total object count
+	expectedObjects := maxObjects + 1
+	if heap.Header.NumManagedObjects != uint64(expectedObjects) {
+		t.Errorf("Expected %d objects, got %d", expectedObjects, heap.Header.NumManagedObjects)
 	}
 }
 
