@@ -153,16 +153,28 @@ v1.0.0 STABLE → Production release (all HDF5 formats supported!)
 
 ---
 
-### **v0.11.6-beta - Advanced Features** (Later)
+### **v0.11.6-beta - Advanced Features** 🎯 **IN PLANNING** (Start: 2025-11-07)
 
-**Goal**: Complete advanced write features
+**Goal**: Complete advanced write features + Read enhancement
+
+**Selected Scope**: Option A - All 3 Features
 
 **Planned Features**:
-1. ⭐ Variable-length datatypes
-2. ⭐ Dataset resize and extension
-3. ⭐ h5dump compatibility improvements
+1. ✅ **TASK-018**: Dataset resize and extension (write) - 1 day with AI
+2. ✅ **TASK-017**: Variable-length datatypes (write) - 1 day with AI
+3. ✅ **TASK-019**: Hyperslab selection/data slicing (read) - 1.5-2 days with AI
+   - Community request from HDF expert apollo3zehn-h5
+   - Expert technical feedback incorporated
 
-**Target**: 2-3 weeks
+**Implementation Order**: TASK-018 → TASK-017 → TASK-019 (simple to complex)
+
+**Estimate**:
+- Traditional: 10-15 days (80-120 hours)
+- With AI (30x): **3-5 days (30-40 hours active work)**
+
+**Detailed Plan**: `docs/dev/planning/DETAILED_PLAN_v0.11.6-beta_Option_A.md`
+
+**Target**: 3-5 days ✅ **READY TO START!**
 
 ---
 
@@ -181,7 +193,11 @@ v1.0.0 STABLE → Production release (all HDF5 formats supported!)
 
 **Quality Targets**:
 - ✅ Test coverage >80%
-- ✅ 100+ reference files tested
+- ✅ **Official HDF5 Test Suite**: 452 .h5 files from HDF5 1.14.6 distribution
+  - Comprehensive format validation
+  - Edge cases and invalid files
+  - DDL validation (593 .ddl files)
+  - Recommended by HDF expert dave.allured
 - ✅ Performance within 2x of C library
 - ✅ Complete documentation
 
