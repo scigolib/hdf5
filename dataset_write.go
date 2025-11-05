@@ -101,6 +101,10 @@ const (
 	Opaque Datatype = 400
 )
 
+// Unlimited represents unlimited dimension size for resizable datasets.
+// Use with WithMaxDims option to allow dimension to grow indefinitely.
+const Unlimited uint64 = 0xFFFFFFFFFFFFFFFF
+
 // datatypeInfo contains metadata about a datatype.
 type datatypeInfo struct {
 	class         core.DatatypeClass
@@ -718,9 +722,9 @@ func calculateTotalElements(dims []uint64) uint64 {
 //   - Only contiguous layout (no chunking)
 //   - No compression
 //   - Dataset must be in root group (no nested groups yet)
-//   - No resizable datasets (maxDims not supported)
+//   - Resizable datasets require chunked layout (use WithMaxDims with WithChunkDims)
 //
-//nolint:gocyclo,cyclop // Complex by nature: dataset creation handles multiple layout types and options
+//nolint:gocyclo,cyclop,gocognit,funlen // Complex by nature: dataset creation handles multiple layout types and options
 func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, opts ...DatasetOption) (*DatasetWriter, error) {
 	// Validate inputs
 	if err := validateDatasetName(name); err != nil {
@@ -734,6 +738,27 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 	config := &datasetConfig{}
 	for _, opt := range opts {
 		opt(config)
+	}
+
+	// Validate maxDims if specified
+	if len(config.maxDims) > 0 {
+		if len(config.maxDims) != len(dims) {
+			return nil, fmt.Errorf("maxDims length (%d) must match dims length (%d)",
+				len(config.maxDims), len(dims))
+		}
+
+		// Validate each maxDim >= dim
+		for i, maxDim := range config.maxDims {
+			if maxDim != Unlimited && maxDim < dims[i] {
+				return nil, fmt.Errorf("maxDims[%d] (%d) must be >= dims[%d] (%d)",
+					i, maxDim, i, dims[i])
+			}
+		}
+
+		// Require chunked layout for resizable datasets
+		if len(config.chunkDims) == 0 {
+			return nil, fmt.Errorf("resizable datasets (with maxDims) require chunked layout (use WithChunkDims)")
+		}
 	}
 
 	// Check if chunked layout requested
@@ -889,6 +914,7 @@ type DatasetWriter struct {
 	dataSize         uint64 // Total data size in bytes
 	dtype            *core.DatatypeMessage
 	dims             []uint64
+	maxDims          []uint64                 // Maximum dimensions (for resize support)
 	isChunked        bool                     // True if using chunked layout
 	chunkCoordinator *writer.ChunkCoordinator // For chunked datasets
 	chunkDims        []uint64                 // Chunk dimensions
@@ -963,6 +989,118 @@ func (dw *DatasetWriter) Write(data interface{}) error {
 	if err := dw.fileWriter.writer.WriteAtAddress(buf, dw.dataAddress); err != nil {
 		return fmt.Errorf("failed to write data: %w", err)
 	}
+
+	return nil
+}
+
+// Resize changes the dimensions of a dataset.
+// The dataset must have been created with maxDims (using WithMaxDims option).
+// Requires chunked layout.
+// newDims must be <= maxDims for each dimension.
+//
+// When extending (growing), new space is initialized with zeros.
+// When shrinking, data beyond new dimensions is lost.
+//
+// Example:
+//
+//	ds, _ := fw.CreateDataset("/data", hdf5.Float64, []uint64{10},
+//	    hdf5.WithChunkDims([]uint64{5}),
+//	    hdf5.WithMaxDims([]uint64{hdf5.Unlimited}))
+//	ds.Resize([]uint64{20})  // Extend to 20 elements
+//
+//nolint:gocyclo,cyclop // Complex by nature: resize involves validation, header update, and state management
+func (dw *DatasetWriter) Resize(newDims []uint64) error {
+	// 1. Validate input.
+	if !dw.isChunked {
+		return fmt.Errorf("resize requires chunked layout")
+	}
+
+	if len(dw.maxDims) == 0 {
+		return fmt.Errorf("dataset not resizable (maxDims not set)")
+	}
+
+	if len(newDims) != len(dw.dims) {
+		return fmt.Errorf("dimension count mismatch: got %d, expected %d",
+			len(newDims), len(dw.dims))
+	}
+
+	// 2. Check maxDims constraints.
+	for i, newDim := range newDims {
+		if dw.maxDims[i] != Unlimited && newDim > dw.maxDims[i] {
+			return fmt.Errorf("dimension %d (%d) exceeds maxDims[%d] (%d)",
+				i, newDim, i, dw.maxDims[i])
+		}
+	}
+
+	// 3. Read object header from file if not already loaded.
+	if dw.objectHeader == nil {
+		oh, err := core.ReadObjectHeader(dw.fileWriter.writer, dw.address,
+			dw.fileWriter.file.sb)
+		if err != nil {
+			return fmt.Errorf("read object header: %w", err)
+		}
+		dw.objectHeader = oh
+	}
+
+	// 4. Find and update dataspace message.
+	var dataspaceMsg *core.DataspaceMessage
+	var dataspaceIdx int
+	found := false
+	for i, msg := range dw.objectHeader.Messages {
+		if msg.Type != core.MsgDataspace { // Skip non-dataspace messages
+			continue
+		}
+		// Found dataspace message.
+		ds, err := core.ParseDataspaceMessage(msg.Data)
+		if err != nil {
+			return fmt.Errorf("parse dataspace: %w", err)
+		}
+		dataspaceMsg = ds
+		dataspaceIdx = i
+		found = true
+		break
+	}
+
+	if !found {
+		return fmt.Errorf("dataspace message not found in object header")
+	}
+
+	// 5. Update dimensions.
+	dataspaceMsg.Dimensions = newDims
+
+	// 6. Re-encode dataspace message.
+	newDataspaceData, err := core.EncodeDataspaceMessage(newDims, dw.maxDims)
+	if err != nil {
+		return fmt.Errorf("encode dataspace: %w", err)
+	}
+
+	// 7. Update message in object header.
+	dw.objectHeader.Messages[dataspaceIdx].Data = newDataspaceData
+
+	// 8. Write updated object header back to file.
+	err = core.WriteObjectHeader(dw.fileWriter.writer, dw.address,
+		dw.objectHeader, dw.fileWriter.file.sb)
+	if err != nil {
+		return fmt.Errorf("write object header: %w", err)
+	}
+
+	// 9. Update internal state.
+	dw.dims = newDims
+
+	// 10. Update dataSize based on new dimensions.
+	totalElements := calculateTotalElements(newDims)
+	dw.dataSize = totalElements * uint64(dw.dtype.Size)
+
+	// 11. Update chunk coordinator with new dimensions.
+	// ChunkCoordinator needs to know about new dataset shape for future writes.
+	newCoordinator, err := writer.NewChunkCoordinator(newDims, dw.chunkDims)
+	if err != nil {
+		return fmt.Errorf("update chunk coordinator: %w", err)
+	}
+	dw.chunkCoordinator = newCoordinator
+
+	// Note: For extending datasets, new chunks will be allocated and initialized
+	// with zeros on first write to those regions. This is standard HDF5 behavior.
 
 	return nil
 }
@@ -1208,6 +1346,7 @@ type datasetConfig struct {
 	chunkDims     []uint64               // For chunked layout
 	pipeline      *writer.FilterPipeline // Filter pipeline for chunked datasets
 	enableShuffle bool                   // Add shuffle filter before compression
+	maxDims       []uint64               // Maximum dimensions (for resizable datasets)
 }
 
 // WithStringSize sets the fixed string size for String datasets.
@@ -1275,6 +1414,30 @@ func WithOpaqueTag(tag string, size uint32) DatasetOption {
 	return func(cfg *datasetConfig) {
 		cfg.opaqueTag = tag
 		cfg.opaqueSize = size
+	}
+}
+
+// WithMaxDims sets maximum dimensions for resizable datasets.
+// Use hdf5.Unlimited (0xFFFFFFFFFFFFFFFF) for unlimited dimensions.
+// Requires chunked layout (use WithChunkDims).
+//
+// The maxDims slice must have the same length as the dataset dimensions.
+// Each maxDim value must be >= the corresponding dimension, or Unlimited.
+//
+// Example:
+//
+//	// 1D dataset with unlimited dimension
+//	ds, _ := fw.CreateDataset("/data", hdf5.Float64, []uint64{10},
+//	    hdf5.WithChunkDims([]uint64{5}),
+//	    hdf5.WithMaxDims([]uint64{hdf5.Unlimited}))
+//
+//	// 2D dataset with one unlimited dimension
+//	ds2, _ := fw.CreateDataset("/matrix", hdf5.Float64, []uint64{10, 20},
+//	    hdf5.WithChunkDims([]uint64{5, 10}),
+//	    hdf5.WithMaxDims([]uint64{hdf5.Unlimited, 20}))  // Rows unlimited, cols fixed
+func WithMaxDims(maxDims []uint64) DatasetOption {
+	return func(cfg *datasetConfig) {
+		cfg.maxDims = maxDims
 	}
 }
 

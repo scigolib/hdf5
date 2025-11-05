@@ -66,7 +66,7 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 	}
 
 	// 6. Create dataspace message
-	dataspaceData, err := core.EncodeDataspaceMessage(dims, nil)
+	dataspaceData, err := core.EncodeDataspaceMessage(dims, config.maxDims)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode dataspace: %w", err)
 	}
@@ -178,6 +178,7 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 		dataSize:         dataSize,
 		dtype:            dsMsgForWriter,
 		dims:             dims,
+		maxDims:          config.maxDims, // Maximum dimensions for resize support
 		isChunked:        true,
 		chunkCoordinator: chunkCoordinator,
 		chunkDims:        config.chunkDims,
