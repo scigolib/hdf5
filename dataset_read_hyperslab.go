@@ -110,6 +110,9 @@ func (d *Dataset) ReadSlice(start, count []uint64) (interface{}, error) {
 		Block:  nil, // Default to all 1s (single elements)
 	}
 
+	// Fill in defaults for Stride and Block
+	fillHyperslabDefaults(selection, len(dataspace.Dimensions))
+
 	return d.readHyperslab(selection, header)
 }
 

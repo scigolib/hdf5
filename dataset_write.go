@@ -417,7 +417,7 @@ func (h *vlenTypeHandler) EncodeDatatypeMessage(_ *datatypeInfo) ([]byte, error)
 		baseMsg := &core.DatatypeMessage{
 			Class:         core.DatatypeString,
 			Version:       1,
-			Size:          1, // Character size
+			Size:          1,    // Character size
 			ClassBitField: 0x00, // ASCII, null-pad
 		}
 		baseTypeMsg, err = core.EncodeDatatypeMessage(baseMsg)
@@ -449,7 +449,7 @@ func (h *vlenTypeHandler) EncodeDatatypeMessage(_ *datatypeInfo) ([]byte, error)
 
 	msg := &core.DatatypeMessage{
 		Class:         core.DatatypeVarLen,
-		Version:       0, // Version 0 for VLen
+		Version:       0,  // Version 0 for VLen
 		Size:          16, // Heap ID size
 		ClassBitField: classBitField,
 		Properties:    baseTypeMsg, // Nested base type message

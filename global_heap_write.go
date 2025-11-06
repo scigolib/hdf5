@@ -11,19 +11,19 @@ import (
 // Global heaps store variable-length data (strings, ragged arrays) separately from datasets.
 // Datasets store heap IDs (references) that point to the actual data in the heap.
 type globalHeapWriter struct {
-	fileWriter       *FileWriter
-	currentHeap      *globalHeapCollectionBuilder
+	fileWriter        *FileWriter
+	currentHeap       *globalHeapCollectionBuilder
 	minCollectionSize uint64 // Minimum heap collection size (4KB default)
 }
 
 // globalHeapCollectionBuilder is used to build a global heap collection before writing.
 type globalHeapCollectionBuilder struct {
-	address    uint64
-	size       uint64
-	objects    []*globalHeapObjectBuilder
-	nextIndex  uint16
-	usedSpace  uint64 // Space used by objects (including headers)
-	freeSpace  uint64 // Remaining free space
+	address   uint64
+	size      uint64
+	objects   []*globalHeapObjectBuilder
+	nextIndex uint16
+	usedSpace uint64 // Space used by objects (including headers)
+	freeSpace uint64 // Remaining free space
 }
 
 // globalHeapObjectBuilder represents an object being added to the heap.
@@ -43,7 +43,7 @@ type HeapID struct {
 // newGlobalHeapWriter creates a new global heap writer.
 func newGlobalHeapWriter(fw *FileWriter) *globalHeapWriter {
 	return &globalHeapWriter{
-		fileWriter:       fw,
+		fileWriter:        fw,
 		minCollectionSize: 4096, // 4KB default minimum
 	}
 }
