@@ -1288,6 +1288,5 @@ Contact library maintainers if:
 
 ---
 
-**Version**: v0.11.5-beta
 **Last Updated**: 2025-11-02
 **Related Guides**: [Rebalancing API Reference](REBALANCING_API.md), [FAQ](FAQ.md)

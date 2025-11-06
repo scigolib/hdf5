@@ -1010,6 +1010,5 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 
 ---
 
-**Version**: v0.11.5-beta
 **Last Updated**: 2025-11-02
 **API Status**: Stable

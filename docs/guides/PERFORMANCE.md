@@ -1,9 +1,8 @@
 # Performance Guide - HDF5 Go Library
 
 > **Best practices for optimal performance with B-tree rebalancing and batch operations**
->
-> **Version**: v0.11.5-beta
-> **Last Updated**: 2025-11-02
+
+**Last Updated**: 2025-11-02
 
 ---
 
@@ -478,4 +477,4 @@ fw.RebalanceAllBTrees()
 
 ---
 
-*Last Updated: 2025-11-02 | Version: v0.11.5-beta*
+*Last Updated: 2025-11-02*

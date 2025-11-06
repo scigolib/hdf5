@@ -2,7 +2,7 @@
 
 > **Modern HDF5 Go Library** - Pure Go implementation without CGo dependencies
 
-**Last Updated**: 2025-11-02 | **Version**: v0.11.5-beta
+**Last Updated**: 2025-11-02
 
 ---
 
