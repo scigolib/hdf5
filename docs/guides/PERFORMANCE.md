@@ -476,5 +476,3 @@ fw.RebalanceAllBTrees()
 - [Benchmarks](../../btree_rebalancing_bench_test.go)
 
 ---
-
-*Last Updated: 2025-11-02*
