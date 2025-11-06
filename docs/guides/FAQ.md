@@ -31,7 +31,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 - ✅ **Actively maintained** - Regular updates and improvements
 
 **Trade-offs**:
-- ⚠️ **Write support advancing** - v0.11.5-beta has smart rebalancing + attribute modification complete, more features coming in v0.11.5+
+- ⚠️ **Write support advancing** - v0.11.6-beta has dataset resizing, variable-length datatypes, and hyperslab selection complete
 - ⚠️ **Some advanced features missing** - Compound write, virtual datasets, parallel I/O, SWMR (planned for v0.12.0-rc.1)
 - ⚠️ **Slightly slower** - Pure Go is 2-3x slower than C for some operations (but fast enough for most use cases)
 
@@ -58,7 +58,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 
 **For reading**: **Feature-complete!** ✅ Production-ready for reading HDF5 files.
 
-**For writing**: **Advancing rapidly!** ✅ v0.11.5-beta has smart rebalancing + attribute modification complete.
+**For writing**: **Advancing rapidly!** ✅ v0.11.6-beta has dataset resizing, variable-length datatypes, and hyperslab selection complete.
 
 **Read Support**:
 - ✅ All datatypes (integers, floats, strings, compounds, arrays, enums, references, opaque)
@@ -68,22 +68,18 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 - ✅ Attributes (compact and dense)
 - ✅ Both old (pre-1.8) and modern (1.8+) HDF5 files
 
-**Write Support (v0.11.5-beta)**:
-- ✅ File creation (Truncate/Exclusive modes)
-- ✅ Dataset writing (contiguous + chunked layouts, all datatypes)
-- ✅ Chunked datasets (B-tree v1 indexing, chunk storage)
-- ✅ Compression (GZIP/deflate, Shuffle filter, Fletcher32 checksum)
-- ✅ Group creation (symbol table + dense groups with automatic transition)
-- ✅ Attribute writing (compact 0-7 + dense 8+ with automatic transition)
-- ✅ **Dense storage RMW** (Read-Modify-Write for existing dense attributes) ✨ NEW
+**Write Support (v0.11.6-beta)**:
+- ✅ Datasets (contiguous/chunked/compact layouts, all datatypes)
+- ✅ Dataset resizing with unlimited dimensions
+- ✅ Variable-length datatypes (strings, ragged arrays)
+- ✅ Groups (symbol table format)
+- ✅ Attributes (dense & compact storage, RMW operations)
+- ✅ Compression (GZIP, Shuffle, Fletcher32)
 - ✅ Advanced datatypes (arrays, enums, references, opaque)
-- ✅ Legacy formats (Superblock v0 + Object Header v1)
+- ✅ Links (hard links full, soft/external MVP)
 
-**Limitations (v0.11.5-beta)**:
-- ⚠️ Attribute modification/deletion (write-once only)
-- ⚠️ Soft/external links not yet supported
-- ⚠️ Compound datatypes write support
-- ⚠️ Other compression formats (SZIP, LZF) - planned for v1.1.0+
+**Read Enhancements (v0.11.6-beta)**:
+- ✅ Hyperslab selection (efficient data slicing) - 10-250x faster!
 
 **Quality metrics**:
 - Test coverage: 86.1%
@@ -132,9 +128,9 @@ See [Reading Data Guide](READING_DATA.md) for details.
 
 ### Can I write HDF5 files?
 
-**Yes! Write support advancing rapidly in v0.11.5-beta.** ✅
+**Yes! Write support advancing rapidly in v0.11.6-beta.** ✅
 
-**What's supported (v0.11.5-beta)**:
+**What's supported (v0.11.6-beta)**:
 ```go
 // Create new HDF5 file
 fw, err := hdf5.CreateForWrite("output.h5", hdf5.CreateTruncate)
@@ -158,13 +154,12 @@ enumDs, _ := fw.CreateDataset("/status", hdf5.EnumInt8, []uint64{5},
     hdf5.WithEnumValues([]string{"OK", "ERROR"}, []int64{0, 1}))
 ```
 
-**Current limitations (v0.11.5-beta)**:
-- Attribute modification/deletion (write-once only)
-- Soft/external links not yet supported
-- Compound datatype write support
+**Current limitations (v0.11.6-beta)**:
+- Compound datatype writing (read works perfectly)
+- Some advanced filters
 
 **Coming soon**:
-- **v0.11.5-beta**: Links support, attribute modifications
+- **v0.11.7-beta**: Compound datatype writing
 - **v0.12.0-rc.1**: Feature complete, API freeze, community testing
 - **v1.0.0**: Production-ready write support
 
@@ -563,20 +558,24 @@ if err == nil {
 
 ### What's the current write support status?
 
-**Already Available** (v0.11.5-beta):
+**Already Available** (v0.11.6-beta):
 - ✅ File creation with multiple superblock formats (v0, v2)
 - ✅ Dataset writing: contiguous and chunked layouts
+- ✅ **Dataset resizing** with unlimited dimensions (NEW!)
+- ✅ **Variable-length datatypes**: strings, ragged arrays (NEW!)
 - ✅ Compression: GZIP, Shuffle filter, Fletcher32 checksum
 - ✅ Groups: symbol table and dense formats
 - ✅ Attributes: compact (0-7) and dense (8+) storage
-- ✅ **Dense storage RMW** (add to existing after reopen) ✨ NEW
+- ✅ Attribute modification and deletion
+- ✅ Links support (hard links full, soft/external MVP)
 - ✅ Advanced datatypes: arrays, enums, references, opaque
 - ✅ Legacy format support (v0 superblock + Object Header v1)
 
-**Coming Soon** (v0.11.5-beta):
-- Attribute modification and deletion
-- Links support (soft/external)
-- Indirect blocks for fractal heap
+**Read Enhancements** (NEW in v0.11.6-beta):
+- ✅ **Hyperslab selection** (data slicing) - 10-250x faster!
+
+**Coming Soon**:
+- Compound datatype writing
 
 See [ROADMAP.md](../../ROADMAP.md) for complete roadmap.
 
@@ -588,8 +587,12 @@ See [ROADMAP.md](../../ROADMAP.md) for complete roadmap.
 - ✅ Dense groups and attributes
 - ✅ Legacy format support (v0 superblock)
 - ✅ Dense storage RMW ✨ COMPLETE
-- ⏳ Attribute modification/deletion (next)
-- ⏳ Links support (soft/external) (next)
+- ✅ Attribute modification/deletion ✨ COMPLETE
+- ✅ Links support (hard links full, soft/external MVP) ✨ COMPLETE
+- ✅ Dataset resizing and extension ✨ COMPLETE
+- ✅ Variable-length datatypes ✨ COMPLETE
+- ✅ Hyperslab selection (read) ✨ COMPLETE
+- ⏳ Compound datatype writing (next)
 
 **Feature Complete** (v0.12.0-rc.1 - Q1 2026):
 - Compound datatypes write
@@ -663,5 +666,5 @@ See [ROADMAP.md](../../ROADMAP.md) for versioning strategy.
 
 ---
 
-*Last Updated: 2025-11-02*
-*Version: 0.11.4-beta*
+*Last Updated: 2025-11-06*
+*Version: 0.11.6-beta*
