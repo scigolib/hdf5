@@ -3,6 +3,7 @@ package hdf5
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"time"
 	"unsafe"
 
@@ -99,6 +100,42 @@ const (
 	// Opaque represents opaque datatype (uninterpreted bytes with tag).
 	// Example: JPEG image, binary blob, etc.
 	Opaque Datatype = 400
+
+	// Variable-length datatypes - sequences of variable length.
+	// Data is stored in global heap, dataset contains heap references.
+	// Use for strings of different lengths or ragged arrays.
+
+	// VLenString represents variable-length string (most common vlen type!).
+	// Each element can have different length.
+	// Go type: []string
+	// Example: []string{"short", "very long string"}.
+	VLenString Datatype = 500
+
+	// VLenInt32 represents variable-length int32 sequences (ragged arrays).
+	// Each element can have different number of values.
+	// Go type: [][]int32
+	// Example: [][]int32{{1,2}, {3,4,5}, {6}}.
+	VLenInt32 Datatype = 501
+
+	// VLenInt64 represents variable-length int64 sequences.
+	// Go type: [][]int64.
+	VLenInt64 Datatype = 502
+
+	// VLenFloat32 represents variable-length float32 sequences.
+	// Go type: [][]float32.
+	VLenFloat32 Datatype = 503
+
+	// VLenFloat64 represents variable-length float64 sequences.
+	// Go type: [][]float64.
+	VLenFloat64 Datatype = 504
+
+	// VLenUint32 represents variable-length uint32 sequences.
+	// Go type: [][]uint32.
+	VLenUint32 Datatype = 505
+
+	// VLenUint64 represents variable-length uint64 sequences.
+	// Go type: [][]uint64.
+	VLenUint64 Datatype = 506
 )
 
 // Unlimited represents unlimited dimension size for resizable datasets.
@@ -346,6 +383,81 @@ func (h *opaqueTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, e
 	return core.EncodeDatatypeMessage(msg)
 }
 
+// vlenTypeHandler handles variable-length datatypes (strings, ragged arrays).
+// VLen data is stored in global heap, dataset contains heap IDs (16 bytes each).
+type vlenTypeHandler struct {
+	baseType Datatype // Base type for sequences (e.g., Int32 for VLenInt32)
+	// For VLenString, baseType is unused (strings are special case)
+}
+
+func (h *vlenTypeHandler) GetInfo(_ *datasetConfig) (*datatypeInfo, error) {
+	// VLen datasets always store 16-byte heap IDs (8 address + 4 index + 4 padding)
+	// Don't set baseType here - VLen is the actual type for data writing
+	return &datatypeInfo{
+		class: core.DatatypeVarLen,
+		size:  16, // Heap ID size
+	}, nil
+}
+
+func (h *vlenTypeHandler) EncodeDatatypeMessage(_ *datatypeInfo) ([]byte, error) {
+	// VLen datatype message structure (HDF5 spec section 3.2.2.2):
+	// - Version (1 byte): 0 or 1
+	// - Class (3 bytes): 9 (VarLen), 0, 0
+	// - ClassBitField (4 bytes): type (1 byte), padding (1 byte), charset (2 bytes for strings)
+	// - Size (4 bytes): 16 (heap ID size)
+	// - Base type message (nested)
+
+	// Determine base type encoding
+	var baseTypeMsg []byte
+	var err error
+
+	if h.baseType == 0 {
+		// VLenString - base type is character (1-byte)
+		// Use ASCII string as base type
+		baseMsg := &core.DatatypeMessage{
+			Class:         core.DatatypeString,
+			Version:       1,
+			Size:          1, // Character size
+			ClassBitField: 0x00, // ASCII, null-pad
+		}
+		baseTypeMsg, err = core.EncodeDatatypeMessage(baseMsg)
+	} else {
+		// VLen sequence - use numeric base type
+		baseHandler, ok := datatypeRegistry[h.baseType]
+		if !ok {
+			return nil, fmt.Errorf("unsupported vlen base type: %d", h.baseType)
+		}
+		baseInfo, err2 := baseHandler.GetInfo(nil)
+		if err2 != nil {
+			return nil, fmt.Errorf("get base type info: %w", err2)
+		}
+		baseTypeMsg, err = baseHandler.EncodeDatatypeMessage(baseInfo)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("encode base type: %w", err)
+	}
+
+	// Build VLen message
+	// VLen type indicator: 0x00 = sequence, 0x01 = string
+	vlenType := byte(0x00) // Sequence by default
+	if h.baseType == 0 {
+		vlenType = 0x01 // String
+	}
+
+	// ClassBitField for VLen: type (1 byte) + padding (1 byte) + charset (2 bytes)
+	classBitField := uint32(vlenType) | (uint32(0x00) << 8) | (uint32(0x00) << 16) // UTF-8 charset
+
+	msg := &core.DatatypeMessage{
+		Class:         core.DatatypeVarLen,
+		Version:       0, // Version 0 for VLen
+		Size:          16, // Heap ID size
+		ClassBitField: classBitField,
+		Properties:    baseTypeMsg, // Nested base type message
+	}
+
+	return core.EncodeDatatypeMessage(msg)
+}
+
 // datatypeRegistry is the global registry mapping Datatype constants to their handlers.
 // This follows the Go stdlib pattern (encoding/json, database/sql, net/http).
 var datatypeRegistry map[Datatype]datatypeHandler
@@ -398,6 +510,15 @@ func init() {
 
 		// Opaque
 		Opaque: &opaqueTypeHandler{},
+
+		// Variable-length (vlen)
+		VLenString:  &vlenTypeHandler{0}, // baseType 0 = string
+		VLenInt32:   &vlenTypeHandler{Int32},
+		VLenInt64:   &vlenTypeHandler{Int64},
+		VLenFloat32: &vlenTypeHandler{Float32},
+		VLenFloat64: &vlenTypeHandler{Float64},
+		VLenUint32:  &vlenTypeHandler{Uint32},
+		VLenUint64:  &vlenTypeHandler{Uint64},
 	}
 }
 
@@ -437,6 +558,9 @@ type FileWriter struct {
 	// Maps group path → metadata (heap, symbol table, B-tree addresses)
 	// Example: "/mygroup" → {heapAddr, stNodeAddr, btreeAddr}
 	groups map[string]*GroupMetadata
+
+	// Global heap writer for variable-length data (vlen strings, ragged arrays)
+	globalHeapWriter *globalHeapWriter
 
 	// Rebalancing configurations (Phase 3)
 	// These are set via functional options: WithLazyRebalancing(), WithIncrementalRebalancing(), WithSmartRebalancing()
@@ -655,6 +779,9 @@ func CreateForWrite(filename string, mode CreateMode, opts ...interface{}) (*Fil
 		incrementalRebalancingConfig: tempFW.incrementalRebalancingConfig,
 		smartRebalancingConfig:       tempFW.smartRebalancingConfig,
 	}
+
+	// Initialize global heap writer for variable-length data
+	fileWriter.globalHeapWriter = newGlobalHeapWriter(fileWriter)
 
 	return fileWriter, nil
 }
@@ -950,6 +1077,11 @@ type DatasetWriter struct {
 //	// Flatten row-major: [[1,2,3,4], [5,6,7,8], [9,10,11,12]]
 //	ds2.Write([]float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
 func (dw *DatasetWriter) Write(data interface{}) error {
+	// Handle variable-length data separately (uses global heap)
+	if dw.dtype.Class == core.DatatypeVarLen {
+		return dw.writeVLen(data)
+	}
+
 	// Convert data to bytes based on datatype
 	var buf []byte
 	var err error
@@ -988,6 +1120,180 @@ func (dw *DatasetWriter) Write(data interface{}) error {
 	// Write data to file (contiguous layout)
 	if err := dw.fileWriter.writer.WriteAtAddress(buf, dw.dataAddress); err != nil {
 		return fmt.Errorf("failed to write data: %w", err)
+	}
+
+	return nil
+}
+
+// writeVLen handles writing variable-length data (strings, ragged arrays).
+// Data is written to global heap, and heap IDs are stored in the dataset.
+//
+//nolint:gocyclo,gocognit,cyclop,funlen // Complex by nature: handles multiple vlen types with validation
+func (dw *DatasetWriter) writeVLen(data interface{}) error {
+	// Calculate expected number of elements
+	elemCount := uint64(1)
+	for _, dim := range dw.dims {
+		elemCount *= dim
+	}
+
+	// Collect heap IDs for each element
+	heapIDs := make([]HeapID, elemCount)
+
+	// Handle different vlen data types
+	switch v := data.(type) {
+	case []string:
+		// Variable-length strings
+		if uint64(len(v)) != elemCount {
+			return fmt.Errorf("data length %d doesn't match dataset size %d", len(v), elemCount)
+		}
+
+		for i, str := range v {
+			// Write string to global heap
+			heapID, err := dw.fileWriter.globalHeapWriter.WriteToGlobalHeap([]byte(str))
+			if err != nil {
+				return fmt.Errorf("write string %d to heap: %w", i, err)
+			}
+			heapIDs[i] = heapID
+		}
+
+	case [][]int32:
+		// Variable-length int32 sequences (ragged arrays)
+		if uint64(len(v)) != elemCount {
+			return fmt.Errorf("data length %d doesn't match dataset size %d", len(v), elemCount)
+		}
+
+		for i, seq := range v {
+			// Convert sequence to bytes (little-endian)
+			seqBytes := make([]byte, len(seq)*4)
+			for j, val := range seq {
+				//nolint:gosec // G115: Safe conversion int32->uint32 for binary encoding
+				binary.LittleEndian.PutUint32(seqBytes[j*4:], uint32(val))
+			}
+
+			// Write to global heap
+			heapID, err := dw.fileWriter.globalHeapWriter.WriteToGlobalHeap(seqBytes)
+			if err != nil {
+				return fmt.Errorf("write int32 sequence %d to heap: %w", i, err)
+			}
+			heapIDs[i] = heapID
+		}
+
+	case [][]int64:
+		// Variable-length int64 sequences
+		if uint64(len(v)) != elemCount {
+			return fmt.Errorf("data length %d doesn't match dataset size %d", len(v), elemCount)
+		}
+
+		for i, seq := range v {
+			seqBytes := make([]byte, len(seq)*8)
+			for j, val := range seq {
+				//nolint:gosec // G115: Safe conversion int64->uint64 for binary encoding
+				binary.LittleEndian.PutUint64(seqBytes[j*8:], uint64(val))
+			}
+
+			heapID, err := dw.fileWriter.globalHeapWriter.WriteToGlobalHeap(seqBytes)
+			if err != nil {
+				return fmt.Errorf("write int64 sequence %d to heap: %w", i, err)
+			}
+			heapIDs[i] = heapID
+		}
+
+	case [][]uint32:
+		// Variable-length uint32 sequences
+		if uint64(len(v)) != elemCount {
+			return fmt.Errorf("data length %d doesn't match dataset size %d", len(v), elemCount)
+		}
+
+		for i, seq := range v {
+			seqBytes := make([]byte, len(seq)*4)
+			for j, val := range seq {
+				binary.LittleEndian.PutUint32(seqBytes[j*4:], val)
+			}
+
+			heapID, err := dw.fileWriter.globalHeapWriter.WriteToGlobalHeap(seqBytes)
+			if err != nil {
+				return fmt.Errorf("write uint32 sequence %d to heap: %w", i, err)
+			}
+			heapIDs[i] = heapID
+		}
+
+	case [][]uint64:
+		// Variable-length uint64 sequences
+		if uint64(len(v)) != elemCount {
+			return fmt.Errorf("data length %d doesn't match dataset size %d", len(v), elemCount)
+		}
+
+		for i, seq := range v {
+			seqBytes := make([]byte, len(seq)*8)
+			for j, val := range seq {
+				binary.LittleEndian.PutUint64(seqBytes[j*8:], val)
+			}
+
+			heapID, err := dw.fileWriter.globalHeapWriter.WriteToGlobalHeap(seqBytes)
+			if err != nil {
+				return fmt.Errorf("write uint64 sequence %d to heap: %w", i, err)
+			}
+			heapIDs[i] = heapID
+		}
+
+	case [][]float32:
+		// Variable-length float32 sequences
+		if uint64(len(v)) != elemCount {
+			return fmt.Errorf("data length %d doesn't match dataset size %d", len(v), elemCount)
+		}
+
+		for i, seq := range v {
+			seqBytes := make([]byte, len(seq)*4)
+			for j, val := range seq {
+				binary.LittleEndian.PutUint32(seqBytes[j*4:], math.Float32bits(val))
+			}
+
+			heapID, err := dw.fileWriter.globalHeapWriter.WriteToGlobalHeap(seqBytes)
+			if err != nil {
+				return fmt.Errorf("write float32 sequence %d to heap: %w", i, err)
+			}
+			heapIDs[i] = heapID
+		}
+
+	case [][]float64:
+		// Variable-length float64 sequences
+		if uint64(len(v)) != elemCount {
+			return fmt.Errorf("data length %d doesn't match dataset size %d", len(v), elemCount)
+		}
+
+		for i, seq := range v {
+			seqBytes := make([]byte, len(seq)*8)
+			for j, val := range seq {
+				binary.LittleEndian.PutUint64(seqBytes[j*8:], math.Float64bits(val))
+			}
+
+			heapID, err := dw.fileWriter.globalHeapWriter.WriteToGlobalHeap(seqBytes)
+			if err != nil {
+				return fmt.Errorf("write float64 sequence %d to heap: %w", i, err)
+			}
+			heapIDs[i] = heapID
+		}
+
+	default:
+		return fmt.Errorf("unsupported vlen data type: %T (expected []string or [][]numeric)", data)
+	}
+
+	// Encode heap IDs to bytes (16 bytes each: 8 addr + 4 index + 4 padding)
+	heapIDData := make([]byte, len(heapIDs)*16)
+	for i, hid := range heapIDs {
+		encoded := hid.Encode() // Returns 16 bytes
+		copy(heapIDData[i*16:], encoded)
+	}
+
+	// Write heap IDs to dataset (contiguous or chunked)
+	if dw.isChunked {
+		// Write via chunk coordinator
+		return dw.writeChunkedData(heapIDData)
+	}
+
+	// Contiguous layout - write directly
+	if err := dw.fileWriter.writer.WriteAtAddress(heapIDData, dw.dataAddress); err != nil {
+		return fmt.Errorf("write heap IDs: %w", err)
 	}
 
 	return nil
@@ -1772,6 +2078,13 @@ func (fw *FileWriter) Close() error {
 	// Note: For MVP, this is a no-op (incremental mode is per-dataset).
 	// Future: Will stop all tracked BTrees automatically.
 	_ = fw.StopIncrementalRebalancing() // Ignore error - likely "not enabled" (MVP)
+
+	// Flush global heap before closing (for variable-length data)
+	if fw.globalHeapWriter != nil {
+		if err := fw.globalHeapWriter.Flush(); err != nil {
+			return fmt.Errorf("failed to flush global heap: %w", err)
+		}
+	}
 
 	// Flush buffered writes
 	if err := fw.writer.Flush(); err != nil {

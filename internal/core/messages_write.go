@@ -193,6 +193,9 @@ func EncodeDatatypeMessage(dt *DatatypeMessage) ([]byte, error) {
 	case DatatypeCompound:
 		// Compound type: 8 bytes header + member definitions
 		return encodeDatatypeCompound(dt)
+	case DatatypeVarLen:
+		// Variable-length type: header + base type
+		return encodeDatatypeVLen(dt)
 	default:
 		return nil, fmt.Errorf("unsupported datatype class for writing: %d", dt.Class)
 	}
@@ -316,6 +319,43 @@ func encodeDatatypeCompound(_ *DatatypeMessage) ([]byte, error) {
 	// In full implementation, this would encode member definitions
 	// For now, return error as compound writing is not fully supported in MVP
 	return nil, fmt.Errorf("compound datatype encoding not yet implemented in MVP")
+}
+
+// encodeDatatypeVLen encodes variable-length datatype (strings, ragged arrays).
+// VLen data is stored in global heap, dataset contains 16-byte heap IDs.
+func encodeDatatypeVLen(dt *DatatypeMessage) ([]byte, error) {
+	// VLen datatype format (HDF5 spec section 3.2.2.2):
+	// Header (8 bytes):
+	//   - Byte 0: Version (low 4 bits) | Class (high 4 bits)
+	//   - Bytes 1-3: Reserved (0)
+	//   - Bytes 4-7: Size (always 16 for vlen - heap ID size)
+	// Class-specific data (4 bytes):
+	//   - Byte 0: VLen type (0x00=sequence, 0x01=string)
+	//   - Byte 1: Padding (0x00)
+	//   - Bytes 2-3: Character set (for strings, 0x00=ASCII, 0x01=UTF-8)
+	// Base type message (variable length, nested datatype)
+
+	// For version 0 VLen (most common)
+	version := uint8(0)
+
+	// Build header (8 bytes)
+	buf := make([]byte, 8+4+len(dt.Properties))
+
+	// Byte 0: version (low 4 bits) + class (high 4 bits)
+	buf[0] = version | (byte(dt.Class) << 4)
+
+	// Bytes 1-3: reserved (already zeros)
+
+	// Bytes 4-7: Size (16 bytes - heap ID size)
+	binary.LittleEndian.PutUint32(buf[4:8], dt.Size)
+
+	// Bytes 8-11: Class-specific data (ClassBitField contains type/padding/charset)
+	binary.LittleEndian.PutUint32(buf[8:12], dt.ClassBitField)
+
+	// Bytes 12+: Base type message (nested datatype)
+	copy(buf[12:], dt.Properties)
+
+	return buf, nil
 }
 
 // EncodeDataspaceMessage encodes a Dataspace message (simple N-dimensional array).
