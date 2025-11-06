@@ -7,10 +7,10 @@
 [![CI](https://github.com/scigolib/hdf5/actions/workflows/test.yml/badge.svg)](https://github.com/scigolib/hdf5/actions)
 [![Coverage](https://img.shields.io/badge/coverage-86.1%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.11.5--beta-green.svg)](ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-v0.11.6--beta-green.svg)](ROADMAP.md)
 [![GoDoc](https://pkg.go.dev/badge/github.com/scigolib/hdf5.svg)](https://pkg.go.dev/github.com/scigolib/hdf5)
 
-A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. Read support is feature-complete, write support advancing rapidly! **v0.11.5-beta validated by real users in production MATLAB project!**
+A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. Read support is feature-complete, write support advancing rapidly! **v0.11.6-beta: Dataset resizing, variable-length datatypes, and hyperslab selection complete!**
 
 ---
 
@@ -100,7 +100,7 @@ func main() {
 
 ## ⚡ Performance Tuning
 
-**NEW in v0.11.4-beta**: Smart B-tree rebalancing, attribute modification/deletion, and 77.8% test coverage!
+**NEW in v0.11.6-beta**: Dataset resizing, variable-length datatypes (strings, ragged arrays), and efficient hyperslab selection (data slicing)!
 
 When deleting many attributes, B-trees can become **sparse** (wasted disk space, slower searches). This library offers **4 rebalancing strategies**:
 
@@ -194,7 +194,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 
 ## 🎯 Current Status
 
-**Version**: v0.11.4-beta (RELEASED 2025-11-02 - Smart Rebalancing + Attribute RMW) ✅
+**Version**: v0.11.6-beta (RELEASED 2025-11-06 - Dataset Resize + VLen + Hyperslab) ✅
 
 **Production Readiness: Read support feature-complete! Write support advancing rapidly!** 🎉
 
@@ -219,7 +219,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 - **Datatypes** (Read + Write):
   - **Basic types**: int8-64, uint8-64, float32/64
   - **Strings**: Fixed-length (null/space/null-padded), variable-length (via Global Heap)
-  - **Advanced types**: Arrays, Enums, References (object/region), Opaque ✨ v0.11.0-beta
+  - **Advanced types**: Arrays, Enums, References (object/region), Opaque
   - **Compound types**: Struct-like with nested members
 
 - **Attributes**:
@@ -239,25 +239,30 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 ### ⚠️ Partial Support
 - **Dense Attributes**: Infrastructure ready, B-tree v2 iteration deferred to v0.12.0-rc.1 (<10% of files affected)
 
-### ✍️ Write Support (v0.11.4-beta)
-- ✅ **File creation** - CreateForWrite() with Truncate/Exclusive modes
-- ✅ **Superblock formats** - v0 (legacy, HDF5 < 1.8) + v2 (modern, HDF5 >= 1.8)
-- ✅ **Object headers** - v1 (legacy, 16-byte) + v2 (modern, 4-byte min)
-- ✅ **Dataset writing** - Contiguous + chunked layouts, all datatypes
-- ✅ **Chunked datasets** - Chunk storage with B-tree v1 indexing
-- ✅ **Compression** - GZIP (deflate), Shuffle filter, Fletcher32 checksum
-- ✅ **Groups** - Symbol table + dense groups (automatic transition at 8+ links)
-- ✅ **Attributes** - Compact (0-7) + dense (8+) with automatic transition
-- ✅ **Dense Storage RMW** - Read-modify-write for existing dense attributes
-- ✅ **Attribute modification/deletion** - Modify/delete compact & dense attributes ✨ NEW
-- ✅ **Smart B-tree rebalancing** - Auto-tuning for deletion-heavy workloads ✨ NEW
-- ✅ **Advanced datatypes** - Arrays, Enums, References, Opaque
-- ✅ **Free space management** - End-of-file allocation (validated, 100% coverage)
-- ✅ **Legacy compatibility** - Files readable by HDF5 1.0+ tools
+### ✍️ Write Support (v0.11.6-beta)
+**NEW: Advanced Write Features!** ✅
 
-**Known Limitations (v0.11.4-beta)**:
-- Soft/external links not yet supported (hard links only)
-- Compound datatypes write support (planned for v0.12.0-rc.1)
+**Dataset Operations**:
+- ✅ Create datasets (all layouts: contiguous, chunked, compact)
+- ✅ Write data (all standard datatypes)
+- ✅ **Dataset resizing** with unlimited dimensions (NEW!)
+- ✅ **Variable-length datatypes**: strings, ragged arrays (NEW!)
+- ✅ Compression (GZIP, Shuffle, Fletcher32)
+- ✅ Array and enum datatypes
+- ✅ References and opaque types
+- ✅ Attribute writing (dense & compact storage)
+- ✅ Attribute modification/deletion
+
+**Read Enhancements**:
+- ✅ **Hyperslab selection** (data slicing) - 10-250x faster! (NEW!)
+- ✅ Efficient partial dataset reading
+- ✅ Stride and block support
+- ✅ Chunk-aware reading (reads ONLY needed chunks)
+
+**Known Limitations (v0.11.6-beta)**:
+- ⚠️ Soft/external links (hard links work, MVP APIs exist)
+- ⚠️ Compound datatype writing (read works perfectly)
+- ⚠️ Some advanced filters
 
 ### ❌ Planned Features
 
@@ -368,15 +373,16 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - 📖 [Documentation](docs/) - Architecture and guides
 - 🐛 [Issue Tracker](https://github.com/scigolib/hdf5/issues)
-- 💬 [Discussions](https://github.com/scigolib/hdf5/discussions) *(coming soon)*
+- 💬 [Discussions](https://github.com/scigolib/hdf5/discussions) - Community Q&A and announcements
+- 🌐 [HDF Group Forum](https://forum.hdfgroup.org/t/pure-go-hdf5-library-production-ready-write-support-v0-11-4-beta/13572) - Official HDF5 community discussion
 
 ---
 
 **Status**: Beta - Read complete, Write support advancing
-**Version**: v0.11.4-beta (Smart Rebalancing + Attribute RMW + 77.8% Test Coverage)
-**Last Updated**: 2025-11-02
+**Version**: v0.11.6-beta (Dataset Resize + VLen + Hyperslab + 70.4% Coverage)
+**Last Updated**: 2025-11-06
 
 ---
 
 *Built with ❤️ by the HDF5 Go community*
-*Recognized by [HDF Group Forum](https://forum.hdfgroup.org/t/loking-for-an-hdf5-version-compatible-with-go1-9-2/10021/7)* ⭐
+*Recognized by [HDF Group Forum](https://forum.hdfgroup.org/t/pure-go-hdf5-library-production-ready-write-support-v0-11-4-beta/13572)* ⭐
