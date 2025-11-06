@@ -18,6 +18,8 @@ func findDatasetByName(f *File, name string) (*Dataset, bool) {
 }
 
 // TestReadSlice1D tests reading a 1D slice from a dataset.
+//
+//nolint:gocognit // Table-driven test with multiple subtests - acceptable complexity for tests
 func TestReadSlice1D(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_read_slice_1d.h5")
@@ -144,6 +146,8 @@ func TestReadSlice1D(t *testing.T) {
 }
 
 // TestReadSlice2D tests reading a 2D slice from a dataset.
+//
+//nolint:gocognit // Table-driven test with multiple subtests - acceptable complexity for tests
 func TestReadSlice2D(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_read_slice_2d.h5")
@@ -290,6 +294,8 @@ func TestReadSlice2D(t *testing.T) {
 }
 
 // TestReadHyperslabWithStride tests reading with stride parameter.
+//
+//nolint:gocognit // Table-driven test with multiple subtests - acceptable complexity for tests
 func TestReadHyperslabWithStride(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_read_hyperslab_stride.h5")
@@ -504,6 +510,8 @@ func TestReadHyperslabWithStride(t *testing.T) {
 }
 
 // TestReadHyperslabOutOfBounds tests error handling for out-of-bounds selection.
+//
+//nolint:gocognit // Table-driven test with many error cases - acceptable complexity for tests
 func TestReadHyperslabOutOfBounds(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_read_hyperslab_bounds.h5")
