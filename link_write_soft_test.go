@@ -9,7 +9,6 @@ import (
 )
 
 // TestCreateSoftLink_BasicCreation tests basic soft link creation API.
-// MVP v0.11.5-beta: Tests that API exists and returns not-implemented error.
 func TestCreateSoftLink_BasicCreation(t *testing.T) {
 	tempDir := t.TempDir()
 	filename := filepath.Join(tempDir, "test_softlink_basic.h5")
@@ -31,15 +30,30 @@ func TestCreateSoftLink_BasicCreation(t *testing.T) {
 	err = ds.Write(data)
 	require.NoError(t, err)
 
-	// Try to create soft link to dataset
-	// MVP v0.11.5-beta: Should return not-implemented error
+	// Create soft link to dataset
 	err = fw.CreateSoftLink("/data/temp_link", "/data/temperature")
-	assert.Error(t, err, "Soft link creation should return not-implemented error in MVP")
-	assert.Contains(t, err.Error(), "not yet implemented", "Error should indicate feature not yet implemented")
+	assert.NoError(t, err, "Soft link creation should succeed")
+
+	// Verify file was written
+	err = fw.Close()
+	require.NoError(t, err)
+
+	// Verify file can be opened (round-trip test)
+	f, err := Open(filename)
+	require.NoError(t, err)
+	defer f.Close()
+
+	// Verify root group exists (soft link written successfully)
+	root := f.Root()
+	require.NotNil(t, root)
+
+	// Verify groups exist in structure
+	children := root.Children()
+	require.NotNil(t, children, "root should have children")
+	assert.Greater(t, len(children), 0, "root should have at least one child (data group)")
 }
 
-// TestCreateSoftLink_ToGroup tests soft link to a group (validation).
-// MVP v0.11.5-beta: Tests that API validates paths before returning not-implemented.
+// TestCreateSoftLink_ToGroup tests soft link to a group.
 func TestCreateSoftLink_ToGroup(t *testing.T) {
 	tempDir := t.TempDir()
 	filename := filepath.Join(tempDir, "test_softlink_group.h5")
@@ -54,16 +68,30 @@ func TestCreateSoftLink_ToGroup(t *testing.T) {
 	_, err = fw.CreateGroup("/links")
 	require.NoError(t, err)
 
-	// Try to create soft link to group
-	// MVP v0.11.5-beta: Should validate paths, then return not-implemented
+	// Create soft link to group
 	err = fw.CreateSoftLink("/links/group_link", "/group1")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not yet implemented")
+	assert.NoError(t, err, "Soft link to group should succeed")
+
+	// Verify file was written
+	err = fw.Close()
+	require.NoError(t, err)
+
+	// Verify file can be opened
+	f, err := Open(filename)
+	require.NoError(t, err)
+	defer f.Close()
+
+	// Verify groups exist
+	root := f.Root()
+	require.NotNil(t, root)
+
+	children := root.Children()
+	require.NotNil(t, children)
+	assert.GreaterOrEqual(t, len(children), 2, "should have group1 and links groups")
 }
 
 // TestCreateSoftLink_DanglingLink tests creating a soft link to a non-existent target.
 // This should be allowed in HDF5 - the target can be created later.
-// MVP v0.11.5-beta: Tests validation accepts dangling targets.
 func TestCreateSoftLink_DanglingLink(t *testing.T) {
 	tempDir := t.TempDir()
 	filename := filepath.Join(tempDir, "test_softlink_dangling.h5")
@@ -72,11 +100,22 @@ func TestCreateSoftLink_DanglingLink(t *testing.T) {
 	require.NoError(t, err)
 	defer fw.Close()
 
-	// Try to create soft link to non-existent target
-	// MVP: Should pass validation (dangling links allowed), then return not-implemented
+	// Create soft link to non-existent target (dangling link allowed)
 	err = fw.CreateSoftLink("/link_to_future", "/data/future_dataset")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not yet implemented", "Should get not-implemented, not validation error")
+	assert.NoError(t, err, "Dangling soft links should be allowed")
+
+	// Verify file was written
+	err = fw.Close()
+	require.NoError(t, err)
+
+	// Verify file can be opened
+	f, err := Open(filename)
+	require.NoError(t, err)
+	defer f.Close()
+
+	root := f.Root()
+	require.NotNil(t, root)
+	// Note: link exists in symbol table, but target does not (dangling link)
 }
 
 // TestCreateSoftLink_RelativePath tests that relative paths are rejected.
@@ -167,14 +206,12 @@ func TestCreateSoftLink_TargetPathFormat(t *testing.T) {
 		{
 			name:       "valid absolute path",
 			targetPath: "/data/dataset1",
-			wantErr:    true, // MVP: not implemented
-			errMsg:     "not yet implemented",
+			wantErr:    false,
 		},
 		{
 			name:       "valid nested path",
 			targetPath: "/group1/group2/group3/dataset",
-			wantErr:    true, // MVP: not implemented
-			errMsg:     "not yet implemented",
+			wantErr:    false,
 		},
 		{
 			name:       "empty target path",

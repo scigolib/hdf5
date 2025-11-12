@@ -201,8 +201,6 @@ func ensureRefCountMessage(fw *FileWriter, oh *core.ObjectHeader) error {
 
 // CreateSoftLink creates a symbolic link to a path within the HDF5 file.
 //
-// **STATUS: NOT YET IMPLEMENTED (MVP v0.11.5-beta)**
-//
 // Soft links (symbolic links) store a path string that is resolved when accessed.
 // Unlike hard links, soft links do not increment reference counts and can point
 // to objects that don't exist yet (dangling links are allowed).
@@ -212,17 +210,17 @@ func ensureRefCountMessage(fw *FileWriter, oh *core.ObjectHeader) error {
 //   - targetPath: Target path within file (e.g., "/group2/dataset1")
 //
 // Returns:
-//   - error: ErrNotImplemented for MVP v0.11.5-beta
+//   - error: Non-nil if link creation fails
 //
-// Planned Behavior (v0.12.0):
+// Behavior:
 //   - Validates linkPath format (must be absolute path)
 //   - Target path does NOT need to exist (dangling links allowed)
-//   - Creates object header with soft link message
-//   - Adds link entry in parent group's symbol table pointing to the object header
+//   - Creates link message with soft link type
+//   - Adds link entry in parent group's symbol table
 //   - Link stores target path as string (not object address)
 //   - When accessed, target path is resolved dynamically
 //
-// Example (future):
+// Example:
 //
 //	fw, _ := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate)
 //	defer fw.Close()
@@ -240,15 +238,15 @@ func ensureRefCountMessage(fw *FileWriter, oh *core.ObjectHeader) error {
 //	err = fw.CreateSoftLink("/links/future_link", "/data/future_dataset")
 //	// This is allowed - target can be created later
 //
-// Roadmap:
-//   - v0.12.0: Implement soft link creation
-//   - v0.12.0: Implement soft link resolution
-//   - v0.13.0: External links support
+// Limitations:
+//   - Symbol table format only (dense groups not yet supported)
+//   - No soft link resolution yet (reading soft links not implemented)
+//   - No circular link detection
 //
 // HDF5 Spec: Section IV.A.2.f "Link Message" - Type 1 (Soft Link)
 // Reference: H5L.c - H5Lcreate_soft().
 func (fw *FileWriter) CreateSoftLink(linkPath, targetPath string) error {
-	// Validate paths for early error detection
+	// Validate paths
 	if err := validateLinkPath(linkPath); err != nil {
 		return fmt.Errorf("invalid link path: %w", err)
 	}
@@ -257,8 +255,79 @@ func (fw *FileWriter) CreateSoftLink(linkPath, targetPath string) error {
 		return fmt.Errorf("invalid target path: %w", err)
 	}
 
-	// Return not implemented error
-	return fmt.Errorf("soft links not yet implemented in MVP v0.11.5-beta (planned for v0.12.0)")
+	// Parse link path to find parent and link name
+	parent, linkName := parsePath(linkPath)
+
+	// Validate parent exists
+	if parent != "" && parent != "/" {
+		if _, exists := fw.groups[parent]; !exists {
+			return fmt.Errorf("parent group %q does not exist (create it first)", parent)
+		}
+	}
+
+	// Create soft link message
+	linkMsg := &core.LinkMessage{
+		Version: 1,
+		Flags:   core.LinkFlagLinkTypeFieldBit | core.LinkFlagCharSetBit, // Bits 3 + 4 set
+		Type:    core.LinkTypeSoft,
+		CharSet: 0, // ASCII
+		Name:    linkName,
+		// LinkValue: target path as bytes (will be set below)
+	}
+
+	// Encode target path as link value
+	// Soft link format: 2-byte length + path string
+	targetPathBytes := []byte(targetPath)
+	if len(targetPathBytes) > 65535 {
+		return fmt.Errorf("target path too long: %d bytes (max 65535)", len(targetPathBytes))
+	}
+	linkValue := make([]byte, 2+len(targetPathBytes))
+	fw.file.sb.Endianness.PutUint16(linkValue[0:2], uint16(len(targetPathBytes))) //nolint:gosec // Validated above
+	copy(linkValue[2:], targetPathBytes)
+	linkMsg.LinkValue = linkValue
+
+	// Encode link message
+	linkMsgData, err := core.EncodeLinkMessage(linkMsg, fw.file.sb)
+	if err != nil {
+		return fmt.Errorf("failed to encode soft link message: %w", err)
+	}
+
+	// Create object header writer for the soft link
+	linkOHW := &core.ObjectHeaderWriter{
+		Version: 2, // Use v2 for modern format
+		Flags:   0,
+		Messages: []core.MessageWriter{
+			{
+				Type: core.MsgLinkMessage, // 0x0006 - Link message
+				Data: linkMsgData,
+			},
+		},
+	}
+
+	// Calculate object header size
+	headerSize, err := calculateObjectHeaderSize(linkOHW)
+	if err != nil {
+		return fmt.Errorf("failed to calculate header size: %w", err)
+	}
+
+	// Allocate space for object header
+	linkAddr, err := fw.writer.Allocate(headerSize)
+	if err != nil {
+		return fmt.Errorf("failed to allocate space for soft link object header: %w", err)
+	}
+
+	// Write object header
+	_, err = linkOHW.WriteTo(fw.writer, linkAddr)
+	if err != nil {
+		return fmt.Errorf("failed to write soft link object header: %w", err)
+	}
+
+	// Add link to parent group's symbol table
+	if err := fw.linkToParent(parent, linkName, linkAddr); err != nil {
+		return fmt.Errorf("failed to add soft link to parent group: %w", err)
+	}
+
+	return nil
 }
 
 // validateSoftLinkTargetPath validates the target path format for soft links.
@@ -305,26 +374,34 @@ func (fw *FileWriter) resolveSoftLink(linkAddr uint64, visitedPaths map[string]b
 // The link stores the external file path and object path within that file.
 // Both files must exist when the external link is accessed (lazy resolution).
 //
-// **STATUS: MVP v0.11.5-beta** - API exists with validation.
-// Returns "not yet implemented" error. Full implementation planned for v0.12.0.
-//
 // Parameters:
 //   - linkPath: Path where external link will be created (e.g., "/links/external1")
 //   - fileName: External HDF5 file name (absolute or relative path)
 //   - objectPath: Path to object within external file (e.g., "/dataset1")
 //
 // Returns:
-//   - error: if validation fails or (MVP) not yet implemented
+//   - error: if validation fails or creation fails
 //
 // Examples:
 //
 //	fw.CreateExternalLink("/links/ext1", "other.h5", "/data/dataset1")
 //	fw.CreateExternalLink("/links/ext2", "/absolute/path/file.h5", "/group1")
 //
-// Validation:
-//   - linkPath: Must be valid HDF5 path (absolute, no consecutive slashes)
-//   - fileName: Cannot be empty, should have .h5/.hdf5 extension (warning if not)
-//   - objectPath: Must be absolute path within external file
+// Behavior:
+//   - Validates all paths
+//   - Creates link message with external link type
+//   - Stores external file name and object path
+//   - Adds link entry in parent group's symbol table
+//   - No file existence check (lazy resolution)
+//
+// Security:
+//   - Path traversal prevention (blocks ".." in file names)
+//   - File path stored as-is (absolute or relative)
+//
+// Limitations:
+//   - Symbol table format only (dense groups not yet supported)
+//   - No external link resolution yet (reading external links not implemented)
+//   - No file caching or performance optimization
 //
 // HDF5 Spec: Section IV.A.2.f "Link Message" - Type 64 (External Link)
 // Reference: H5Lcreate_external() in H5L.c.
@@ -344,8 +421,101 @@ func (fw *FileWriter) CreateExternalLink(linkPath, fileName, objectPath string) 
 		return fmt.Errorf("invalid object path: %w", err)
 	}
 
-	// Return not implemented error
-	return fmt.Errorf("external links not yet implemented in MVP v0.11.5-beta (planned for v0.12.0)")
+	// Parse link path to find parent and link name
+	parent, linkName := parsePath(linkPath)
+
+	// Validate parent exists
+	if parent != "" && parent != "/" {
+		if _, exists := fw.groups[parent]; !exists {
+			return fmt.Errorf("parent group %q does not exist (create it first)", parent)
+		}
+	}
+
+	// Create external link message
+	linkMsg := &core.LinkMessage{
+		Version: 1,
+		Flags:   core.LinkFlagLinkTypeFieldBit | core.LinkFlagCharSetBit, // Bits 3 + 4 set
+		Type:    core.LinkTypeExternal,
+		CharSet: 0, // ASCII
+		Name:    linkName,
+		// LinkValue: file name + object path (will be set below)
+	}
+
+	// Encode external link value
+	// External link format: fileNameLength(2) + fileName + pathLength(2) + path
+	fileNameBytes := []byte(fileName)
+	objectPathBytes := []byte(objectPath)
+
+	// Validate lengths fit in uint16
+	if len(fileNameBytes) > 65535 {
+		return fmt.Errorf("file name too long: %d bytes (max 65535)", len(fileNameBytes))
+	}
+	if len(objectPathBytes) > 65535 {
+		return fmt.Errorf("object path too long: %d bytes (max 65535)", len(objectPathBytes))
+	}
+
+	linkValue := make([]byte, 2+len(fileNameBytes)+2+len(objectPathBytes))
+	offset := 0
+
+	// Write file name length (2 bytes)
+	fw.file.sb.Endianness.PutUint16(linkValue[offset:offset+2], uint16(len(fileNameBytes))) //nolint:gosec // Validated above
+	offset += 2
+
+	// Write file name
+	copy(linkValue[offset:], fileNameBytes)
+	offset += len(fileNameBytes)
+
+	// Write object path length (2 bytes)
+	fw.file.sb.Endianness.PutUint16(linkValue[offset:offset+2], uint16(len(objectPathBytes))) //nolint:gosec // Validated above
+	offset += 2
+
+	// Write object path
+	copy(linkValue[offset:], objectPathBytes)
+
+	linkMsg.LinkValue = linkValue
+
+	// Encode link message
+	linkMsgData, err := core.EncodeLinkMessage(linkMsg, fw.file.sb)
+	if err != nil {
+		return fmt.Errorf("failed to encode external link message: %w", err)
+	}
+
+	// Create object header writer for the external link
+	linkOHW := &core.ObjectHeaderWriter{
+		Version: 2, // Use v2 for modern format
+		Flags:   0,
+		Messages: []core.MessageWriter{
+			{
+				Type: core.MsgLinkMessage, // 0x0006 - Link message
+				Data: linkMsgData,
+			},
+		},
+	}
+
+	// Calculate object header size
+	headerSize, err := calculateObjectHeaderSize(linkOHW)
+	if err != nil {
+		return fmt.Errorf("failed to calculate header size: %w", err)
+	}
+
+	// Allocate space for object header
+	linkAddr, err := fw.writer.Allocate(headerSize)
+	if err != nil {
+		return fmt.Errorf("failed to allocate space for external link object header: %w", err)
+	}
+
+	// Write object header
+	_, err = linkOHW.WriteTo(fw.writer, linkAddr)
+	if err != nil {
+		return fmt.Errorf("failed to write external link object header: %w", err)
+	}
+
+	// Add link to parent group's symbol table
+	if err := fw.linkToParent(parent, linkName, linkAddr); err != nil {
+		return fmt.Errorf("failed to add external link to parent group: %w", err)
+	}
+
+	return nil
 }
 
 // validateExternalFileName validates the external file name.
