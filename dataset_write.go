@@ -1007,6 +1007,158 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 	return dsw, nil
 }
 
+// CreateCompoundDataset creates a dataset with a compound (struct-like) datatype.
+// This is an advanced method for creating datasets with complex structured data.
+//
+// Parameters:
+//   - name: Dataset path (e.g., "/data" or "/group/dataset")
+//   - compoundType: Pre-configured compound datatype (use core.CreateCompoundTypeFromFields)
+//   - dims: Dataset dimensions (e.g., []uint64{10} for 1D, []uint64{3, 4} for 2D)
+//   - opts: Optional configuration (chunking, compression, etc.)
+//
+// Returns:
+//   - *DatasetWriter: Dataset writer for writing data with WriteRaw()
+//   - error: If creation fails
+//
+// Example:
+//
+//	// Define compound type: struct { int32 id; float32 value }
+//	int32Type, _ := core.CreateBasicDatatypeMessage(core.DatatypeFixed, 4)
+//	float32Type, _ := core.CreateBasicDatatypeMessage(core.DatatypeFloat, 4)
+//	fields := []core.CompoundFieldDef{
+//	    {Name: "id", Offset: 0, Type: int32Type},
+//	    {Name: "value", Offset: 4, Type: float32Type},
+//	}
+//	compoundType, _ := core.CreateCompoundTypeFromFields(fields)
+//
+//	// Create dataset
+//	fw, _ := hdf5.CreateForWrite("file.h5", hdf5.CreateTruncate)
+//	ds, _ := fw.CreateCompoundDataset("/data", compoundType, []uint64{100})
+//
+//	// Write raw struct data
+//	data := []byte{/* encoded structs */}
+//	ds.WriteRaw(data)
+//
+// Reference: H5Dcreate2.c - H5D__create(), H5Tcompound.c - compound datatype handling.
+//
+//nolint:gocyclo,cyclop // Dataset creation requires validation and setup (complexity justified for public API)
+func (fw *FileWriter) CreateCompoundDataset(name string, compoundType *core.DatatypeMessage, dims []uint64, opts ...DatasetOption) (*DatasetWriter, error) {
+	// Validate inputs
+	if err := validateDatasetName(name); err != nil {
+		return nil, err
+	}
+	if err := validateDimensions(dims); err != nil {
+		return nil, err
+	}
+	if compoundType == nil {
+		return nil, fmt.Errorf("compound datatype cannot be nil")
+	}
+	if compoundType.Class != core.DatatypeCompound {
+		return nil, fmt.Errorf("datatype must be compound (class=%d), got class=%d", core.DatatypeCompound, compoundType.Class)
+	}
+
+	// Apply options
+	config := &datasetConfig{}
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	// Check if chunked layout requested
+	if len(config.chunkDims) > 0 {
+		// Chunked compound dataset
+		return nil, fmt.Errorf("chunked compound datasets not yet implemented (MVP: contiguous only)")
+	}
+
+	// Calculate total data size
+	// For compound types: totalElements * compoundSize
+	totalElements := calculateTotalElements(dims)
+	dataSize := totalElements * uint64(compoundType.Size)
+
+	// Allocate space for dataset data
+	dataAddress, err := fw.writer.Allocate(dataSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate space for data: %w", err)
+	}
+
+	// Encode datatype message (compound type is already encoded in DatatypeMessage)
+	// We need to re-encode it as a message (header + properties)
+	datatypeData, err := core.EncodeDatatypeMessage(compoundType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode compound datatype: %w", err)
+	}
+
+	// Create dataspace message
+	dataspaceData, err := core.EncodeDataspaceMessage(dims, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode dataspace: %w", err)
+	}
+
+	// Create layout message (contiguous)
+	layoutData, err := core.EncodeLayoutMessage(
+		core.LayoutContiguous,
+		dataSize,
+		dataAddress,
+		fw.file.sb,
+		nil, // No chunk dimensions for contiguous layout
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode layout: %w", err)
+	}
+
+	// Create object header writer
+	ohw := &core.ObjectHeaderWriter{
+		Version: 2,
+		Flags:   0, // Minimal flags
+		Messages: []core.MessageWriter{
+			{Type: core.MsgDatatype, Data: datatypeData},
+			{Type: core.MsgDataspace, Data: dataspaceData},
+			{Type: core.MsgDataLayout, Data: layoutData},
+		},
+	}
+
+	// Calculate object header size for pre-allocation
+	headerSize, err := calculateObjectHeaderSize(ohw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate header size: %w", err)
+	}
+
+	// Allocate space for object header
+	headerAddress, err := fw.writer.Allocate(headerSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate space for object header: %w", err)
+	}
+
+	// Write object header
+	writtenSize, err := ohw.WriteTo(fw.writer, headerAddress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to write object header: %w", err)
+	}
+
+	if writtenSize != headerSize {
+		return nil, fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
+	}
+
+	// Link dataset to parent group's symbol table
+	parent, datasetName := parsePath(name)
+	if err := fw.linkToParent(parent, datasetName, headerAddress); err != nil {
+		return nil, fmt.Errorf("failed to link dataset to parent: %w", err)
+	}
+
+	// Create DatasetWriter (for WriteRaw)
+	dsw := &DatasetWriter{
+		fileWriter:  fw,
+		name:        name,
+		address:     headerAddress,
+		dataAddress: dataAddress,
+		dataSize:    dataSize,
+		dtype:       compoundType,
+		dims:        dims,
+		isChunked:   false,
+	}
+
+	return dsw, nil
+}
+
 // calculateObjectHeaderSize calculates the size of an object header before writing.
 // This is needed for pre-allocation.
 func calculateObjectHeaderSize(ohw *core.ObjectHeaderWriter) (uint64, error) {
@@ -1120,6 +1272,40 @@ func (dw *DatasetWriter) Write(data interface{}) error {
 	// Write data to file (contiguous layout)
 	if err := dw.fileWriter.writer.WriteAtAddress(buf, dw.dataAddress); err != nil {
 		return fmt.Errorf("failed to write data: %w", err)
+	}
+
+	return nil
+}
+
+// WriteRaw writes raw bytes directly to the dataset without type conversion.
+// This is useful for advanced use cases like compound datatypes where the user
+// has already prepared the binary representation.
+//
+// Parameters:
+//   - data: Raw bytes to write (must match dataset size exactly)
+//
+// Returns:
+//   - error: If write fails or size mismatch
+//
+// Example for compound datatype:
+//
+//	// Write pre-encoded compound struct data
+//	data := []byte{/* encoded struct bytes */}
+//	err := ds.WriteRaw(data)
+func (dw *DatasetWriter) WriteRaw(data []byte) error {
+	// Verify size matches expected dataset size
+	if uint64(len(data)) != dw.dataSize {
+		return fmt.Errorf("data size mismatch: expected %d bytes, got %d bytes", dw.dataSize, len(data))
+	}
+
+	// Handle chunked vs contiguous layout
+	if dw.isChunked {
+		return dw.writeChunkedData(data)
+	}
+
+	// Write raw data to file (contiguous layout)
+	if err := dw.fileWriter.writer.WriteAtAddress(data, dw.dataAddress); err != nil {
+		return fmt.Errorf("failed to write raw data: %w", err)
 	}
 
 	return nil

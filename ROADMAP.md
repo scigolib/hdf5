@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2025-11-06 | **Current Version**: v0.11.6-beta | **Strategy**: Feature-complete at v0.12.0-rc.1, then community testing → v1.0.0 stable | **Target**: v0.12.0-rc.1 (2026-03-15) → v1.0.0 stable (2026-07+)
+**Last Updated**: 2025-11-06 | **Current Version**: v0.11.6-beta | **Strategy**: Feature-complete at v0.12.0, validation → v0.13.0-rc.1, community testing → v1.0.0 stable | **Target**: v0.12.0 (2025-11-20) → v0.13.0-rc.1 (Q1 2026) → v1.0.0 stable (Mid 2026)
 
 ---
 
@@ -34,37 +34,45 @@ Build a **production-ready, pure Go HDF5 library** with full read/write capabili
 
 ---
 
-## 🚀 Version Strategy (UPDATED 2025-10-30)
+## 🚀 Version Strategy (UPDATED 2025-11-06)
 
-### Philosophy: Feature-Complete → Community Testing → Stable
+### Philosophy: Feature-Complete → Validation → Community Testing → Stable
 
 ```
 v0.10.0-beta (READ complete) ✅ RELEASED 2025-10-29
-         ↓ (2-3 months)
+         ↓ (2 weeks)
 v0.11.x-beta (WRITE features) → Incremental write features
-         ↓ (1-2 months)
-v0.12.0-rc.1 (FEATURE COMPLETE) 🎯 KEY MILESTONE
+         ↓ (~75% → ~100%)
+v0.12.0 (FEATURE COMPLETE) 🎯 KEY MILESTONE (2025-11-20)
+         ↓ (2-4 weeks validation with official test suite)
+v0.13.0-rc.1 (VALIDATED + API FROZEN) 🔒
          ↓ (2-3 months community testing)
-v0.12.x-rc.x (bug fixes) → Patch releases based on feedback
+v0.13.x-rc.x (bug fixes) → Patch releases based on feedback
          ↓ (proven stable + user validation)
-v1.0.0-rc.1 → Final validation (API proven in production)
-         ↓ (community approval)
 v1.0.0 STABLE → Production release (all HDF5 formats supported!)
 ```
 
 ### Critical Milestones
 
-**v0.12.0-rc.1** = ALL features done + API stable
-- This is where we freeze API
-- This is where community testing begins
-- After this: ONLY bug fixes, no new features
-- Path to v1.0.0 is validation and stability
+**v0.12.0** = ALL write features implemented + Official test suite validation
+- Compound datatypes, soft/external links, all filters
+- **452 official HDF5 test files** validated (TASK-020)
+- ~100% write support achieved
+- API may still change based on test findings
+
+**v0.13.0-rc.1** = API frozen + Production-ready
+- API frozen (breaking changes only in v2.0.0+)
+- Community testing begins
+- ONLY bug fixes and performance improvements
+- Path to v1.0.0 is stability and adoption
 
 **v1.0.0** = Production with ALL HDF5 format support
 - Supports HDF5 v0, v2, v3 superblocks ✅
 - Ready for their future HDF5 2.0.0 format (will be added in v1.x.x updates)
 - Ultra-modern library = all formats from day one!
 - Our v2.0.0 = only if WE change Go API (not HDF5 formats!)
+
+**Why no beta in v0.12.0?**: v0.x already implies "may have breaking changes". Beta was useful for experimentation; now we're in "completion" phase.
 
 **See**: `docs/dev/notes/VERSIONING_STRATEGY.md` for complete strategy
 
@@ -170,41 +178,76 @@ v1.0.0 STABLE → Production release (all HDF5 formats supported!)
 - Expert technical guidance incorporated
 - Standard HDF5 feature now available in Go
 
-*Current: v0.11.6-beta | Next: v0.11.7-beta | Target: v1.0.0 (Late 2026)*
+*Current: v0.11.6-beta | Next: v0.12.0 | Target: v1.0.0 (Mid 2026)*
 
 ---
 
-### **v0.12.0-rc.1 - Feature Complete** 🎯 (Mid 2026)
+### **v0.12.0 - Feature Complete** 🎯 (Target: 2025-11-20)
 
-**Goal**: ALL HDF5 features implemented + API stable
+**Goal**: ALL write features implemented + Official test suite validation
 
-**Key Features to Add**:
-- ✅ Dataset resize and extension
-- ✅ All standard filters (Fletcher32, etc.)
-- ✅ Variable-length datatypes
-- ✅ Fill values
-- ✅ Thread-safety (SWMR)
-- ✅ Error recovery
-- ✅ Performance optimization
+**Duration**: 1-2 weeks (estimated 10-15 days traditional, 3-5 days with AI 30x speedup)
+
+**Key Features to Implement**:
+1. **TASK-021: Compound Datatype Writing** (4-5 days → 1-2 days with AI)
+   - Last major datatype for 100% support
+   - Structured data (C structs / Go structs)
+   - Nested compounds, all field types
+   - Scientific records, database-like storage
+
+2. **TASK-022: Soft/External Links Full Implementation** (3-4 days → 1-2 days with AI)
+   - Complete soft links (symbolic path references)
+   - Complete external links (cross-file references)
+   - Currently MVP (API exists, returns "not implemented")
+   - Path resolution, security validation
+
+3. **TASK-020: Official HDF5 Test Suite** (5-7 days → 2-3 days with AI)
+   - **452 official .h5 test files** from HDF5 1.14.6
+   - Comprehensive format validation
+   - Edge cases and invalid files
+   - DDL validation (593 .ddl files)
+   - Recommended by HDF expert dave.allured
+
+**What This Achieves**:
+- ✅ **~100% write support** (up from ~75%)
+- ✅ **All HDF5 datatypes** implemented
+- ✅ **All linking features** working
+- ✅ **Official validation** against C library test suite
+- ✅ **Production quality** confirmed
 
 **Quality Targets**:
-- ✅ Test coverage >80%
-- ✅ **Official HDF5 Test Suite**: 452 .h5 files from HDF5 1.14.6 distribution
-  - Comprehensive format validation
-  - Edge cases and invalid files
-  - DDL validation (593 .ddl files)
-  - Recommended by HDF expert dave.allured
-- ✅ Performance within 2x of C library
-- ✅ Complete documentation
+- ✅ Test coverage >75%
+- ✅ Official HDF5 test suite passing
+- ✅ 0 linter issues
+- ✅ Comprehensive documentation
 
-**After v0.12.0-rc.1**:
-- API FROZEN (no breaking changes until v2.0.0)
-- Community testing phase begins
-- Only bug fixes and performance improvements
+**After v0.12.0**:
+- Feature complete, but API may still evolve based on test findings
+- Ready for v0.13.0-rc.1 (API freeze)
 
 ---
 
-### **v0.12.x-rc.x - Stability Testing** (2-3 months)
+### **v0.13.0-rc.1 - API Frozen + Community Testing** 🔒 (Q1 2026)
+
+**Goal**: API frozen, production-ready, community validation
+
+**Changes from v0.12.0**:
+- API refinements based on test suite findings
+- Performance optimizations
+- Bug fixes discovered during validation
+- Documentation improvements
+
+**API Freeze**:
+- ⛔ NO breaking API changes after this (until v2.0.0)
+- Community testing phase begins
+- ONLY bug fixes and performance improvements
+- Path to v1.0.0 is stability and adoption
+
+**Duration**: 2-3 months community testing
+
+---
+
+### **v0.13.x-rc.x - Stability Testing** (2-3 months)
 
 **Goal**: Community testing and bug fixes
 
