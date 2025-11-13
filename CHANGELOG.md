@@ -45,18 +45,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### ✨ Added
 
 #### HDF5 Format v4 Superblock Support (TASK-024)
-- **Superblock Version 4** parsing (52-byte structure)
+- **Superblock Version 4** read and write support (52-byte structure)
+- **Read Support**: Parse v4 superblocks with checksum validation
+- **Write Support**: Create v4 superblocks with CRC32/Fletcher32 checksums
 - **Checksum Validation** - CRC32, Fletcher32, none
 - **Mandatory Extension Validation** - Format v4 compliance
 - **Backward Compatibility** - Full support for v0, v2, v3 formats
 
 **Implementation**:
 - Extended Superblock struct with v4 fields
-- `validateSuperblockChecksum()` with 3 algorithms
+- `validateSuperblockChecksum()` with 3 algorithms (read)
+- `writeV4()` with checksum generation (write)
 - `computeFletcher32()` per HDF5 specification
+- Round-trip validation tests (write → read → compare)
 - Mock-based testing (real v4 files when HDF5 2.0.0 becomes available)
 
-**Files**: `superblock.go` (+103 lines), `superblock_test.go` (+285 lines)
+**Files**: `superblock.go` (+203 lines), `superblock_test.go` (+435 lines), `superblock_write_test.go` (+157 lines)
 
 #### 64-bit Chunk Dimensions Support (TASK-025)
 - **BREAKING CHANGE**: `DataLayoutMessage.ChunkSize` changed from `[]uint32` to `[]uint64`

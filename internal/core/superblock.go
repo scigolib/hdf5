@@ -329,9 +329,9 @@ func computeFletcher32(data []byte) uint32 {
 //
 // Returns error if write fails or if superblock version is not supported.
 func (sb *Superblock) WriteTo(w io.WriterAt, eofAddress uint64) error {
-	// Support v0 (legacy) and v2 (modern)
-	if sb.Version != Version0 && sb.Version != Version2 {
-		return fmt.Errorf("only superblock version 0 and 2 are supported for writing, got version %d", sb.Version)
+	// Support v0 (legacy), v2 (modern), and v4 (HDF5 2.0.0)
+	if sb.Version != Version0 && sb.Version != Version2 && sb.Version != Version4 {
+		return fmt.Errorf("only superblock version 0, 2, and 4 are supported for writing, got version %d", sb.Version)
 	}
 
 	// Dispatch to version-specific writer
@@ -340,6 +340,8 @@ func (sb *Superblock) WriteTo(w io.WriterAt, eofAddress uint64) error {
 		return sb.writeV0(w, eofAddress)
 	case Version2:
 		return sb.writeV2(w, eofAddress)
+	case Version4:
+		return sb.writeV4(w, eofAddress)
 	default:
 		return fmt.Errorf("unsupported superblock version: %d", sb.Version)
 	}
@@ -522,6 +524,105 @@ func (sb *Superblock) writeV0(w io.WriterAt, eofAddress uint64) error {
 
 	if n != 96 {
 		return fmt.Errorf("incomplete superblock v0 write: wrote %d bytes, expected 96", n)
+	}
+
+	return nil
+}
+
+// writeV4 writes superblock version 4 (HDF5 2.0.0 format with enhanced checksums).
+//
+// Superblock v4 structure (52 bytes):
+//
+//	Bytes 0-7: Format Signature (\211HDF\r\n\032\n)
+//	Byte 8: Superblock Version (4)
+//	Byte 9: Size of Offsets (8)
+//	Byte 10: Size of Lengths (8)
+//	Byte 11: File Consistency Flags (0)
+//	Bytes 12-19: Base Address
+//	Bytes 20-27: Superblock Extension Address (REQUIRED for v4)
+//	Bytes 28-35: End of File Address
+//	Bytes 36-43: Root Group Object Header Address
+//	Byte 44: Checksum Algorithm (0=None, 1=CRC32, 2=Fletcher32)
+//	Bytes 45-47: Reserved (3 bytes, must be 0)
+//	Bytes 48-51: Checksum (covers bytes 8-47)
+func (sb *Superblock) writeV4(w io.WriterAt, eofAddress uint64) error {
+	// Validate required fields
+	if sb.OffsetSize != 8 || sb.LengthSize != 8 {
+		return fmt.Errorf("only 8-byte offsets and lengths are supported for writing v4, got offset=%d, length=%d",
+			sb.OffsetSize, sb.LengthSize)
+	}
+
+	// V4 requires superblock extension (cannot be UNDEFINED)
+	if sb.SuperExtension == 0 || sb.SuperExtension == 0xFFFFFFFFFFFFFFFF {
+		return errors.New("superblock v4 requires valid extension address")
+	}
+
+	// Default to CRC32 if not specified
+	checksumAlgo := sb.ChecksumAlgorithm
+	if checksumAlgo == 0 {
+		checksumAlgo = 1 // CRC32
+	}
+
+	// Allocate buffer for superblock v4 (52 bytes)
+	buf := make([]byte, 52)
+
+	// Bytes 0-7: Signature
+	copy(buf[0:8], Signature)
+
+	// Byte 8: Version 4
+	buf[8] = 4
+
+	// Byte 9: Size of offsets (8 bytes)
+	buf[9] = 8
+
+	// Byte 10: Size of lengths (8 bytes)
+	buf[10] = 8
+
+	// Byte 11: File consistency flags (0 for now)
+	buf[11] = 0
+
+	// Bytes 12-19: Base address (typically 0)
+	binary.LittleEndian.PutUint64(buf[12:20], sb.BaseAddress)
+
+	// Bytes 20-27: Superblock extension address (REQUIRED for v4)
+	binary.LittleEndian.PutUint64(buf[20:28], sb.SuperExtension)
+
+	// Bytes 28-35: End-of-file address
+	binary.LittleEndian.PutUint64(buf[28:36], eofAddress)
+
+	// Bytes 36-43: Root group object header address
+	binary.LittleEndian.PutUint64(buf[36:44], sb.RootGroup)
+
+	// Byte 44: Checksum algorithm
+	buf[44] = checksumAlgo
+
+	// Bytes 45-47: Reserved (already zero)
+
+	// Bytes 48-51: Checksum (covers bytes 8-47)
+	var checksum uint32
+	dataToChecksum := buf[8:48]
+
+	switch checksumAlgo {
+	case 0: // None
+		checksum = 0
+	case 1: // CRC32
+		checksum = crc32.ChecksumIEEE(dataToChecksum)
+	case 2: // Fletcher32
+		checksum = computeFletcher32(dataToChecksum)
+	default:
+		return fmt.Errorf("unsupported checksum algorithm: %d", checksumAlgo)
+	}
+
+	binary.LittleEndian.PutUint32(buf[48:52], checksum)
+
+	// Write superblock at offset 0
+	n, err := w.WriteAt(buf, 0)
+	if err != nil {
+		return fmt.Errorf("failed to write superblock v4: %w", err)
+	}
+
+	if n != 52 {
+		return fmt.Errorf("incomplete superblock v4 write: wrote %d bytes, expected 52", n)
 	}
 
 	return nil
