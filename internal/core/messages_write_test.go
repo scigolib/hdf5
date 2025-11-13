@@ -1014,7 +1014,7 @@ func TestChunkedLayoutRoundTrip(t *testing.T) {
 			require.Len(t, parsed.ChunkSize, len(tt.chunkDims), "dimensionality mismatch")
 
 			for i, dim := range tt.chunkDims {
-				require.Equal(t, uint32(dim), parsed.ChunkSize[i], "chunk dim %d mismatch", i)
+				require.Equal(t, dim, parsed.ChunkSize[i], "chunk dim %d mismatch", i)
 			}
 		})
 	}

@@ -526,7 +526,7 @@ func TestAttributeReadValue_Errors(t *testing.T) {
 				},
 				Data: []byte{1, 2, 3, 4}, // Only 4 bytes
 			},
-			wantError: "data too short for element",
+			wantError: "attribute data size mismatch",
 		},
 		{
 			name: "unsupported datatype class",

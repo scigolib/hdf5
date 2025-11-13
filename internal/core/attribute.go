@@ -116,7 +116,15 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 
 	// Remaining data is the attribute value.
 	if offset < len(data) {
-		attr.Data = make([]byte, len(data)-offset)
+		//nolint:gosec // G115: Safe conversion - offset is bounded by len(data)
+		attrDataSize := uint64(len(data) - offset)
+
+		// CVE-2025-6269 fix: Validate attribute data size before allocation.
+		if err := utils.ValidateBufferSize(attrDataSize, utils.MaxAttributeSize, "attribute data"); err != nil {
+			return nil, fmt.Errorf("invalid attribute size: %w", err)
+		}
+
+		attr.Data = make([]byte, attrDataSize)
 		copy(attr.Data, data[offset:])
 	}
 
@@ -143,12 +151,20 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 	case DatatypeFixed:
 		switch a.Datatype.Size {
 		case 4:
+			// CVE-2025-6269 fix: Check for multiplication overflow before processing.
+			totalBytes, err := utils.SafeMultiply(totalElements, 4)
+			if err != nil {
+				return nil, fmt.Errorf("attribute size overflow (int32): %w", err)
+			}
+
+			if totalBytes > uint64(len(a.Data)) {
+				return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
+					totalBytes, len(a.Data))
+			}
+
 			values := make([]int32, totalElements)
 			for i := uint64(0); i < totalElements; i++ {
 				offset := i * 4
-				if offset+4 > uint64(len(a.Data)) {
-					return nil, fmt.Errorf("data too short for element %d", i)
-				}
 				//nolint:gosec // G115: HDF5 binary format requires uint32 to int32 conversion
 				values[i] = int32(binary.LittleEndian.Uint32(a.Data[offset : offset+4]))
 			}
@@ -157,12 +173,20 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 			}
 			return values, nil
 		case 8:
+			// CVE-2025-6269 fix: Check for multiplication overflow before processing.
+			totalBytes, err := utils.SafeMultiply(totalElements, 8)
+			if err != nil {
+				return nil, fmt.Errorf("attribute size overflow (int64): %w", err)
+			}
+
+			if totalBytes > uint64(len(a.Data)) {
+				return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
+					totalBytes, len(a.Data))
+			}
+
 			values := make([]int64, totalElements)
 			for i := uint64(0); i < totalElements; i++ {
 				offset := i * 8
-				if offset+8 > uint64(len(a.Data)) {
-					return nil, fmt.Errorf("data too short for element %d", i)
-				}
 				//nolint:gosec // G115: HDF5 binary format requires uint64 to int64 conversion
 				values[i] = int64(binary.LittleEndian.Uint64(a.Data[offset : offset+8]))
 			}
@@ -175,12 +199,20 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 	case DatatypeFloat:
 		switch a.Datatype.Size {
 		case 4:
+			// CVE-2025-6269 fix: Check for multiplication overflow before processing.
+			totalBytes, err := utils.SafeMultiply(totalElements, 4)
+			if err != nil {
+				return nil, fmt.Errorf("attribute size overflow (float32): %w", err)
+			}
+
+			if totalBytes > uint64(len(a.Data)) {
+				return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
+					totalBytes, len(a.Data))
+			}
+
 			values := make([]float32, totalElements)
 			for i := uint64(0); i < totalElements; i++ {
 				offset := i * 4
-				if offset+4 > uint64(len(a.Data)) {
-					return nil, fmt.Errorf("data too short for element %d", i)
-				}
 				bits := binary.LittleEndian.Uint32(a.Data[offset : offset+4])
 				values[i] = float32frombits(bits)
 			}
@@ -189,12 +221,20 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 			}
 			return values, nil
 		case 8:
+			// CVE-2025-6269 fix: Check for multiplication overflow before processing.
+			totalBytes, err := utils.SafeMultiply(totalElements, 8)
+			if err != nil {
+				return nil, fmt.Errorf("attribute size overflow (float64): %w", err)
+			}
+
+			if totalBytes > uint64(len(a.Data)) {
+				return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
+					totalBytes, len(a.Data))
+			}
+
 			values := make([]float64, totalElements)
 			for i := uint64(0); i < totalElements; i++ {
 				offset := i * 8
-				if offset+8 > uint64(len(a.Data)) {
-					return nil, fmt.Errorf("data too short for element %d", i)
-				}
 				bits := binary.LittleEndian.Uint64(a.Data[offset : offset+8])
 				values[i] = float64frombits(bits)
 			}

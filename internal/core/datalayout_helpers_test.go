@@ -148,7 +148,7 @@ func TestDataLayoutString(t *testing.T) {
 			name: "chunked layout",
 			dl: &DataLayoutMessage{
 				Class:     LayoutChunked,
-				ChunkSize: []uint32{10, 20, 30},
+				ChunkSize: []uint64{10, 20, 30},
 			},
 			want: "chunked (chunks=[10 20 30])",
 		},

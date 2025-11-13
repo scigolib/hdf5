@@ -10,7 +10,7 @@ func TestCopyNDChunk(t *testing.T) {
 	tests := []struct {
 		name        string
 		chunkCoords []uint64
-		chunkSize   []uint32
+		chunkSize   []uint64
 		dataDims    []uint64
 		elemSize    uint64
 		setupChunk  func() []byte // Returns chunk data.
@@ -19,7 +19,7 @@ func TestCopyNDChunk(t *testing.T) {
 		{
 			name:        "2D chunk at origin",
 			chunkCoords: []uint64{0, 0},
-			chunkSize:   []uint32{2, 3},
+			chunkSize:   []uint64{2, 3},
 			dataDims:    []uint64{4, 6},
 			elemSize:    4, // int32.
 			setupChunk: func() []byte {
@@ -55,7 +55,7 @@ func TestCopyNDChunk(t *testing.T) {
 		{
 			name:        "2D chunk at offset",
 			chunkCoords: []uint64{1, 1},
-			chunkSize:   []uint32{2, 2},
+			chunkSize:   []uint64{2, 2},
 			dataDims:    []uint64{4, 4},
 			elemSize:    4,
 			setupChunk: func() []byte {
@@ -86,7 +86,7 @@ func TestCopyNDChunk(t *testing.T) {
 		{
 			name:        "3D chunk at origin",
 			chunkCoords: []uint64{0, 0, 0},
-			chunkSize:   []uint32{2, 2, 2},
+			chunkSize:   []uint64{2, 2, 2},
 			dataDims:    []uint64{4, 4, 4},
 			elemSize:    1, // uint8 for simplicity.
 			setupChunk: func() []byte {
@@ -154,7 +154,7 @@ func TestCopyNDChunk_PartialChunks(t *testing.T) {
 
 	// Chunk [1,2] with chunk size [3,3] starts at [1*3, 2*3] = [3, 6].
 	// Dataset 5x7 means only 2 rows and 1 col fit: 2x1 sub-chunk.
-	err := copyNDChunk(chunkData, fullData, []uint64{1, 2}, []uint32{3, 3}, []uint64{5, 7}, 1)
+	err := copyNDChunk(chunkData, fullData, []uint64{1, 2}, []uint64{3, 3}, []uint64{5, 7}, 1)
 	if err != nil {
 		t.Fatalf("copyNDChunk failed: %v", err)
 	}

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // CompoundValue represents a single compound structure instance as a map of field names to values.
@@ -179,6 +181,12 @@ func parseMemberValue(data []byte, datatype *DatatypeMessage, r io.ReaderAt, sb 
 		return int64(byteOrder.Uint64(data[0:8])), nil
 
 	case datatype.IsFixedString():
+		// CVE-2025-2926 fix: Validate string size before processing.
+		stringSize := uint64(datatype.Size)
+		if err := utils.ValidateBufferSize(stringSize, utils.MaxStringSize, "compound string field"); err != nil {
+			return nil, fmt.Errorf("string field too large: %w", err)
+		}
+
 		//nolint:gosec // G115: Safe length comparison
 		if uint32(len(data)) < datatype.Size {
 			return nil, errors.New("insufficient data for string")

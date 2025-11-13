@@ -478,4 +478,3 @@ fw.RebalanceAllBTrees()
 ---
 
 *Last Updated: 2025-11-13*
-*Version: 0.12.0*

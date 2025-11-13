@@ -46,7 +46,7 @@ func TestParseBTreeV1Node_LeafNode(t *testing.T) {
 
 	// Parse node
 	reader := bytes.NewReader(buf.Bytes())
-	chunkDims := []uint32{10, 20} // Chunk dimensions
+	chunkDims := []uint64{10, 20} // Chunk dimensions
 	node, err := ParseBTreeV1Node(reader, 0, 8, 2, chunkDims)
 
 	require.NoError(t, err)
@@ -103,7 +103,7 @@ func TestParseBTreeV1Node_InternalNode(t *testing.T) {
 	binary.Write(buf, binary.LittleEndian, uint64(50))
 
 	reader := bytes.NewReader(buf.Bytes())
-	node, err := ParseBTreeV1Node(reader, 0, 8, 1, []uint32{50})
+	node, err := ParseBTreeV1Node(reader, 0, 8, 1, []uint64{50})
 
 	require.NoError(t, err)
 	require.NotNil(t, node)
@@ -130,7 +130,7 @@ func TestParseBTreeV1Node_EmptyNode(t *testing.T) {
 	// No keys or children
 
 	reader := bytes.NewReader(buf.Bytes())
-	node, err := ParseBTreeV1Node(reader, 0, 8, 2, []uint32{10, 20})
+	node, err := ParseBTreeV1Node(reader, 0, 8, 2, []uint64{10, 20})
 
 	require.NoError(t, err)
 	require.NotNil(t, node)
@@ -152,7 +152,7 @@ func TestParseBTreeV1Node_InvalidSignature(t *testing.T) {
 	binary.Write(buf, binary.LittleEndian, uint64(0xFFFFFFFFFFFFFFFF))
 
 	reader := bytes.NewReader(buf.Bytes())
-	node, err := ParseBTreeV1Node(reader, 0, 8, 1, []uint32{10})
+	node, err := ParseBTreeV1Node(reader, 0, 8, 1, []uint64{10})
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid B-tree signature")
@@ -185,7 +185,7 @@ func TestParseBTreeV1Node_ZeroChunkDimension(t *testing.T) {
 	reader := bytes.NewReader(buf.Bytes())
 
 	// Chunk dimension is zero - should error
-	node, err := ParseBTreeV1Node(reader, 0, 8, 1, []uint32{0})
+	node, err := ParseBTreeV1Node(reader, 0, 8, 1, []uint64{0})
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "chunk dimension")
@@ -207,7 +207,7 @@ func TestParseBTreeV1Node_TruncatedData(t *testing.T) {
 	// No actual entry data provided
 
 	reader := bytes.NewReader(buf.Bytes())
-	node, err := ParseBTreeV1Node(reader, 0, 8, 1, []uint32{10})
+	node, err := ParseBTreeV1Node(reader, 0, 8, 1, []uint64{10})
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to read B-tree node data")
@@ -259,7 +259,7 @@ func TestParseBTreeV1Node_DifferentOffsetSizes(t *testing.T) {
 			binary.Write(buf, binary.LittleEndian, uint64(10))
 
 			reader := bytes.NewReader(buf.Bytes())
-			node, err := ParseBTreeV1Node(reader, 0, tt.offsetSize, 1, []uint32{10})
+			node, err := ParseBTreeV1Node(reader, 0, tt.offsetSize, 1, []uint64{10})
 
 			require.NoError(t, err)
 			require.NotNil(t, node)
@@ -302,7 +302,7 @@ func TestBTreeV1Node_FindChunk(t *testing.T) {
 	// compareCoords([0,0], [0,1]) = -1 (<), break
 	// Returns Children[1] = 0x1200
 	// (This matches actual HDF5 B-tree behavior)
-	addr, err := node.FindChunk(emptyReader, []uint64{0, 0}, 8, []uint32{10, 20})
+	addr, err := node.FindChunk(emptyReader, []uint64{0, 0}, 8, []uint64{10, 20})
 	require.NoError(t, err)
 	require.Equal(t, uint64(0x1200), addr, "chunk [0,0] should map to children[1]")
 
@@ -331,7 +331,7 @@ func TestBTreeV1Node_CollectAllChunks(t *testing.T) {
 	}
 
 	emptyReader := &emptyReaderAt{}
-	chunks, err := node.CollectAllChunks(emptyReader, 8, []uint32{10, 20})
+	chunks, err := node.CollectAllChunks(emptyReader, 8, []uint64{10, 20})
 
 	require.NoError(t, err)
 	require.Len(t, chunks, 3)
@@ -384,7 +384,7 @@ func TestParseBTreeV1Node_3DChunks(t *testing.T) {
 	binary.Write(buf, binary.LittleEndian, uint64(150))
 
 	reader := bytes.NewReader(buf.Bytes())
-	chunkDims := []uint32{10, 20, 30}
+	chunkDims := []uint64{10, 20, 30}
 	node, err := ParseBTreeV1Node(reader, 0, 8, 3, chunkDims)
 
 	require.NoError(t, err)
