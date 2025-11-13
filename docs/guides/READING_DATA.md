@@ -826,5 +826,5 @@ func main() {
 
 ---
 
-*Last Updated: 2025-11-02*
-*Version: 0.11.4-beta*
+*Last Updated: 2025-11-13*
+*Version: 0.12.0*
