@@ -375,7 +375,7 @@ func TestCopyChunkToArray(t *testing.T) {
 		chunkData   []byte
 		fullData    []byte
 		chunkCoords []uint64
-		chunkSize   []uint32
+		chunkSize   []uint64
 		dataDims    []uint64
 		elemSize    uint64
 		wantData    []byte
@@ -386,7 +386,7 @@ func TestCopyChunkToArray(t *testing.T) {
 			chunkData:   []byte{1, 2, 3, 4},
 			fullData:    make([]byte, 8),
 			chunkCoords: []uint64{0},
-			chunkSize:   []uint32{4},
+			chunkSize:   []uint64{4},
 			dataDims:    []uint64{8},
 			elemSize:    1,
 			wantData:    []byte{1, 2, 3, 4, 0, 0, 0, 0},
@@ -397,7 +397,7 @@ func TestCopyChunkToArray(t *testing.T) {
 			chunkData:   []byte{5, 6, 7, 8},
 			fullData:    []byte{1, 2, 3, 4, 0, 0, 0, 0},
 			chunkCoords: []uint64{1},
-			chunkSize:   []uint32{4},
+			chunkSize:   []uint64{4},
 			dataDims:    []uint64{8},
 			elemSize:    1,
 			wantData:    []byte{1, 2, 3, 4, 5, 6, 7, 8},
@@ -408,7 +408,7 @@ func TestCopyChunkToArray(t *testing.T) {
 			chunkData:   []byte{1, 2},
 			fullData:    make([]byte, 6),
 			chunkCoords: []uint64{0, 0},
-			chunkSize:   []uint32{1, 2},
+			chunkSize:   []uint64{1, 2},
 			dataDims:    []uint64{2, 3},
 			elemSize:    1,
 			wantData:    []byte{1, 2, 0, 0, 0, 0},
@@ -419,7 +419,7 @@ func TestCopyChunkToArray(t *testing.T) {
 			chunkData:   []byte{3, 4},
 			fullData:    []byte{1, 2, 0, 0, 0, 0},
 			chunkCoords: []uint64{1, 0},
-			chunkSize:   []uint32{1, 2},
+			chunkSize:   []uint64{1, 2},
 			dataDims:    []uint64{2, 3},
 			elemSize:    1,
 			wantData:    []byte{1, 2, 0, 3, 4, 0},
@@ -430,7 +430,7 @@ func TestCopyChunkToArray(t *testing.T) {
 			chunkData:   []byte{1, 2},
 			fullData:    make([]byte, 6),
 			chunkCoords: []uint64{0},
-			chunkSize:   []uint32{1, 2},
+			chunkSize:   []uint64{1, 2},
 			dataDims:    []uint64{2, 3},
 			elemSize:    1,
 			wantData:    nil,

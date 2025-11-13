@@ -309,7 +309,7 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 
 // copyChunkToArray copies chunk data to the correct position in full array.
 // This handles multi-dimensional indexing and partial chunks at boundaries.
-func copyChunkToArray(chunkData, fullData []byte, chunkCoords []uint64, chunkSize []uint32, dataDims []uint64, elemSize uint64) error {
+func copyChunkToArray(chunkData, fullData []byte, chunkCoords, chunkSize, dataDims []uint64, elemSize uint64) error {
 	ndims := len(chunkCoords)
 	if ndims != len(chunkSize) || ndims != len(dataDims) {
 		return errors.New("dimension mismatch")
@@ -321,7 +321,7 @@ func copyChunkToArray(chunkData, fullData []byte, chunkCoords []uint64, chunkSiz
 
 // copyNDChunk copies an N-dimensional chunk to the full N-dimensional array.
 // Uses general algorithm that works for any number of dimensions.
-func copyNDChunk(chunkData, fullData []byte, chunkCoords []uint64, chunkSize []uint32, dataDims []uint64, elemSize uint64) error {
+func copyNDChunk(chunkData, fullData []byte, chunkCoords, chunkSize, dataDims []uint64, elemSize uint64) error {
 	ndims := len(chunkCoords)
 
 	// Calculate strides for both chunk and full array.
@@ -332,7 +332,7 @@ func copyNDChunk(chunkData, fullData []byte, chunkCoords []uint64, chunkSize []u
 	chunkStrides[ndims-1] = 1
 	dataStrides[ndims-1] = 1
 	for i := ndims - 2; i >= 0; i-- {
-		chunkStrides[i] = chunkStrides[i+1] * uint64(chunkSize[i+1])
+		chunkStrides[i] = chunkStrides[i+1] * chunkSize[i+1]
 		dataStrides[i] = dataStrides[i+1] * dataDims[i+1]
 	}
 
@@ -340,9 +340,9 @@ func copyNDChunk(chunkData, fullData []byte, chunkCoords []uint64, chunkSize []u
 	copyDims := make([]uint64, ndims)
 	for i := 0; i < ndims; i++ {
 		// Starting position of this chunk in dataset.
-		startPos := chunkCoords[i] * uint64(chunkSize[i])
+		startPos := chunkCoords[i] * chunkSize[i]
 		// Maximum elements we can copy in this dimension.
-		maxCopy := uint64(chunkSize[i])
+		maxCopy := chunkSize[i]
 		if startPos+maxCopy > dataDims[i] {
 			maxCopy = dataDims[i] - startPos
 		}
@@ -352,7 +352,7 @@ func copyNDChunk(chunkData, fullData []byte, chunkCoords []uint64, chunkSize []u
 	// Calculate starting offset in full array for this chunk.
 	dataOffset := uint64(0)
 	for i := 0; i < ndims; i++ {
-		dataOffset += chunkCoords[i] * uint64(chunkSize[i]) * dataStrides[i]
+		dataOffset += chunkCoords[i] * chunkSize[i] * dataStrides[i]
 	}
 
 	// Use recursive N-dimensional iteration to copy elements.

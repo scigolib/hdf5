@@ -33,7 +33,11 @@ type ChunkKey struct {
 
 // ParseBTreeV1Node parses a B-tree v1 node from file.
 // chunkDims: chunk dimensions for converting byte offsets to scaled indices.
-func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int, chunkDims []uint32) (*BTreeV1Node, error) {
+//
+// Note: B-tree coordinates are ALWAYS stored as uint64 in the file format.
+// The chunk dimensions in the layout message can be uint32 or uint64 depending on file version,
+// but the B-tree keys always use uint64 for backward compatibility.
+func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int, chunkDims []uint64) (*BTreeV1Node, error) {
 	// Read node header (fixed size part).
 	headerSize := 4 + 1 + 1 + 2 + int(offsetSize)*2 // signature + type + level + entries + 2 siblings.
 	header := make([]byte, headerSize)
@@ -78,6 +82,10 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 	// - Each key consists of: nbytes (4) + filter_mask (4) + ndims*8 (coordinates as byte offsets).
 	// - Each child pointer is offsetSize bytes.
 	// - Format: key0, child0, key1, child1, ..., keyN, childN.
+	//
+	// NOTE: Coordinates in B-tree keys are ALWAYS stored as uint64 (8 bytes each).
+	// The chunkKeySize parameter only affects the layout message chunk dimensions,
+	// not the B-tree key coordinates!
 
 	if node.EntriesUsed == 0 {
 		return node, nil
@@ -87,7 +95,7 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 	// Key format (from H5D__btree_decode_key):
 	// - 4 bytes: nbytes (chunk size).
 	// - 4 bytes: filter_mask.
-	// - ndims * 8 bytes: coordinates (as byte offsets).
+	// - ndims * 8 bytes: coordinates (as byte offsets, ALWAYS uint64).
 	keySize := 4 + 4 + ndims*8
 	childSize := int(offsetSize)
 	entrySize := keySize + childSize
@@ -131,7 +139,7 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 			if chunkDims[j] == 0 {
 				return nil, fmt.Errorf("chunk dimension %d is zero", j)
 			}
-			key.Scaled[j] = byteOffset / uint64(chunkDims[j])
+			key.Scaled[j] = byteOffset / chunkDims[j]
 		}
 
 		node.Keys[i] = key
@@ -151,7 +159,7 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 
 // FindChunk searches B-tree for chunk at given scaled coordinates.
 // coords: scaled chunk indices (not byte offsets).
-func (node *BTreeV1Node) FindChunk(r io.ReaderAt, coords []uint64, offsetSize uint8, chunkDims []uint32) (uint64, error) {
+func (node *BTreeV1Node) FindChunk(r io.ReaderAt, coords []uint64, offsetSize uint8, chunkDims []uint64) (uint64, error) {
 	ndims := len(coords)
 
 	// Find which child to follow.
@@ -235,7 +243,7 @@ type ChunkEntry struct {
 
 // CollectAllChunks recursively collects all chunks from B-tree.
 // This handles both leaf and non-leaf nodes.
-func (node *BTreeV1Node) CollectAllChunks(r io.ReaderAt, offsetSize uint8, chunkDims []uint32) ([]ChunkEntry, error) {
+func (node *BTreeV1Node) CollectAllChunks(r io.ReaderAt, offsetSize uint8, chunkDims []uint64) ([]ChunkEntry, error) {
 	ndims := len(chunkDims)
 	var chunks []ChunkEntry
 

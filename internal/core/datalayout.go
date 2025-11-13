@@ -21,12 +21,13 @@ const (
 
 // DataLayoutMessage represents HDF5 data layout message.
 type DataLayoutMessage struct {
-	Version     uint8
-	Class       DataLayoutClass
-	DataAddress uint64   // Address where data is stored (for contiguous/chunked).
-	DataSize    uint64   // Size of data (for contiguous).
-	CompactData []byte   // Data itself (for compact layout).
-	ChunkSize   []uint32 // Chunk dimensions (for chunked layout).
+	Version      uint8
+	Class        DataLayoutClass
+	DataAddress  uint64   // Address where data is stored (for contiguous/chunked).
+	DataSize     uint64   // Size of data (for contiguous).
+	CompactData  []byte   // Data itself (for compact layout).
+	ChunkSize    []uint64 // Chunk dimensions (for chunked layout) - uint64 for HDF5 2.0.0+ support.
+	ChunkKeySize uint8    // Size of chunk keys in bytes: 4 (uint32) or 8 (uint64).
 }
 
 // ParseDataLayoutMessage parses a data layout message from header message data.
@@ -43,7 +44,8 @@ func ParseDataLayoutMessage(data []byte, sb *Superblock) (*DataLayoutMessage, er
 	}
 
 	msg := &DataLayoutMessage{
-		Version: version,
+		Version:      version,
+		ChunkKeySize: determineChunkKeySize(sb.Version),
 	}
 
 	switch version {
@@ -54,6 +56,19 @@ func ParseDataLayoutMessage(data []byte, sb *Superblock) (*DataLayoutMessage, er
 	}
 
 	return nil, fmt.Errorf("layout version %d not implemented", version)
+}
+
+// determineChunkKeySize determines the chunk key size based on file format version.
+// HDF5 2.0.0+ (superblock v4) uses 64-bit chunk dimensions.
+// HDF5 < 2.0.0 (superblock v0-v3) uses 32-bit chunk dimensions.
+func determineChunkKeySize(superblockVersion uint8) uint8 {
+	// HDF5 2.0.0+ uses superblock version 4.
+	// These files use 64-bit chunk dimensions to support chunks >4GB.
+	if superblockVersion >= 4 {
+		return 8
+	}
+	// HDF5 < 2.0.0 uses 32-bit chunk dimensions.
+	return 4
 }
 
 func parseLayoutV3(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLayoutMessage, error) {
@@ -108,14 +123,30 @@ func parseLayoutV3(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLa
 		msg.DataAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
 		offset += int(sb.OffsetSize)
 
-		// Now read chunk dimensions.
-		msg.ChunkSize = make([]uint32, dimensionality)
-		for i := 0; i < int(dimensionality); i++ {
-			if offset+4 > len(data) {
-				return nil, errors.New("chunked layout dimensions truncated")
+		// Read chunk dimensions.
+		// HDF5 2.0.0+ (superblock v4) uses 64-bit chunk dimensions.
+		// HDF5 < 2.0.0 (superblock v0-v3) uses 32-bit chunk dimensions.
+		msg.ChunkSize = make([]uint64, dimensionality)
+
+		if msg.ChunkKeySize == 8 {
+			// Read as uint64 (HDF5 2.0.0+).
+			for i := 0; i < int(dimensionality); i++ {
+				if offset+8 > len(data) {
+					return nil, fmt.Errorf("chunked layout dimension %d truncated (64-bit)", i)
+				}
+				msg.ChunkSize[i] = binary.LittleEndian.Uint64(data[offset : offset+8])
+				offset += 8
 			}
-			msg.ChunkSize[i] = binary.LittleEndian.Uint32(data[offset : offset+4])
-			offset += 4
+		} else {
+			// Read as uint32 (HDF5 < 2.0.0) and convert to uint64 for internal consistency.
+			for i := 0; i < int(dimensionality); i++ {
+				if offset+4 > len(data) {
+					return nil, fmt.Errorf("chunked layout dimension %d truncated (32-bit)", i)
+				}
+				chunk32 := binary.LittleEndian.Uint32(data[offset : offset+4])
+				msg.ChunkSize[i] = uint64(chunk32) // Safe widening conversion.
+				offset += 4
+			}
 		}
 
 	default:

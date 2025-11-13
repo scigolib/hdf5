@@ -212,7 +212,7 @@ func TestParseDataLayoutMessage_ChunkedDetails(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, got.IsChunked())
 	require.Equal(t, uint64(0x7000), got.DataAddress)
-	require.Equal(t, []uint32{10, 20, 30}, got.ChunkSize)
+	require.Equal(t, []uint64{10, 20, 30}, got.ChunkSize)
 }
 
 // TestParseDataLayoutMessage_SmallOffsets tests with 4-byte offsets.

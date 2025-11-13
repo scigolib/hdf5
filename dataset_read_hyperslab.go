@@ -723,7 +723,7 @@ type chunkIndexEntry struct {
 
 // findOverlappingChunks identifies all chunks that overlap with the hyperslab selection.
 // Returns chunk coordinates (scaled chunk indices, not element indices).
-func findOverlappingChunks(sel *HyperslabSelection, chunkDims []uint32, datasetDims []uint64) [][]uint64 {
+func findOverlappingChunks(sel *HyperslabSelection, chunkDims, datasetDims []uint64) [][]uint64 {
 	ndims := len(sel.Start)
 
 	// Calculate first and last chunk indices for each dimension
@@ -732,7 +732,7 @@ func findOverlappingChunks(sel *HyperslabSelection, chunkDims []uint32, datasetD
 
 	for i := 0; i < ndims; i++ {
 		// First chunk containing start of selection
-		firstChunk[i] = sel.Start[i] / uint64(chunkDims[i])
+		firstChunk[i] = sel.Start[i] / chunkDims[i]
 
 		// Last chunk containing end of selection
 		// End position = start + (count-1)*stride + block - 1
@@ -743,7 +743,7 @@ func findOverlappingChunks(sel *HyperslabSelection, chunkDims []uint32, datasetD
 			endPos = datasetDims[i] - 1
 		}
 
-		lastChunk[i] = endPos / uint64(chunkDims[i])
+		lastChunk[i] = endPos / chunkDims[i]
 	}
 
 	// Generate all combinations of chunk coordinates
@@ -807,7 +807,7 @@ func chunkCoordsToKey(coords []uint64) string {
 func (d *Dataset) extractFromChunk(
 	chunkCoord []uint64,
 	chunkIndex map[string]chunkIndexEntry,
-	chunkDims []uint32,
+	chunkDims []uint64,
 	datasetDims []uint64,
 	selection *HyperslabSelection,
 	datatype *core.DatatypeMessage,
@@ -858,7 +858,7 @@ func (d *Dataset) extractFromChunk(
 func extractChunkPortion(
 	chunkData []byte,
 	chunkCoord []uint64,
-	chunkDims []uint32,
+	chunkDims []uint64,
 	datasetDims []uint64,
 	selection *HyperslabSelection,
 	elementSize uint64,
@@ -871,8 +871,8 @@ func extractChunkPortion(
 	chunkStart := make([]uint64, ndims)
 	chunkEnd := make([]uint64, ndims)
 	for i := 0; i < ndims; i++ {
-		chunkStart[i] = chunkCoord[i] * uint64(chunkDims[i])
-		chunkEnd[i] = chunkStart[i] + uint64(chunkDims[i])
+		chunkStart[i] = chunkCoord[i] * chunkDims[i]
+		chunkEnd[i] = chunkStart[i] + chunkDims[i]
 		if chunkEnd[i] > datasetDims[i] {
 			chunkEnd[i] = datasetDims[i]
 		}
@@ -895,7 +895,7 @@ func extractChunkPortion(
 func extractChunkPortionRecursive(
 	chunkData []byte,
 	chunkStart, chunkEnd []uint64,
-	chunkDims []uint32,
+	chunkDims []uint64,
 	selection *HyperslabSelection,
 	coords []uint64,
 	dim int,
@@ -925,7 +925,7 @@ func extractChunkPortionRecursive(
 		for i := ndims - 1; i >= 0; i-- {
 			relCoord := coords[i] - chunkStart[i]
 			chunkOffset += relCoord * chunkStride
-			chunkStride *= uint64(chunkDims[i])
+			chunkStride *= chunkDims[i]
 		}
 
 		// Copy element from chunk to output

@@ -45,7 +45,7 @@ func TestDatasetInfoString(t *testing.T) {
 				},
 				Layout: &DataLayoutMessage{
 					Class:     LayoutChunked,
-					ChunkSize: []uint32{10, 20},
+					ChunkSize: []uint64{10, 20},
 				},
 			},
 			want: "Dataset: integer (size=4 bytes), 2D array [50 x 100], chunked (chunks=[10 20])",
