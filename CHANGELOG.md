@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.1] - 2025-11-13
+
+### 🔧 Hotfix
+
+**Correction**: Clarified superblock version support in documentation and code
+
+#### Fixed
+- **Documentation Correction**: Removed incorrect references to "Superblock Version 4"
+  - **Root Cause**: Confusion between "HDF5 Format Specification v4.0" (document version) and "Superblock Version" (data structure version)
+  - **Reality**: HDF5 Format Spec v4.0 defines Superblock versions 0, 1, 2, and 3 only
+  - **HDF5 2.0.0**: Uses Superblock Version 3, not Version 4
+  - **Files Affected**: README.md, CHANGELOG.md, docs/architecture/OVERVIEW.md, docs/guides/QUICKSTART.md
+
+- **Code Cleanup**: Removed non-existent v4 superblock implementation (~800 lines)
+  - Removed `Version4` constant
+  - Removed `ChecksumAlgorithm` and `Checksum` fields from Superblock struct
+  - Removed `validateSuperblockChecksum()`, `computeFletcher32()`, `writeV4()` functions
+  - Removed v4 test cases and helper functions
+  - **Note**: v2 and v3 superblocks use identical 48-byte structure (only byte 11 differs for file consistency flags)
+
+- **Corrected Comments**: Updated datalayout.go comments regarding chunk dimension sizes
+
+#### Impact
+- **No functional changes**: Existing v3 read/write support works correctly
+- **No breaking changes**: Public API unchanged
+- **Improved accuracy**: Documentation now matches HDF5 specification and reference implementation
+
+**Files**:
+- internal/core/superblock.go (~150 lines removed)
+- internal/core/superblock_test.go (~200 lines removed)
+- internal/core/superblock_write_test.go (~150 lines removed)
+- internal/core/datalayout.go (comments corrected)
+- Documentation files (v4 references removed)
+
+---
+
 ## [v0.13.0] - 2025-11-13
 
 ### 🚀 HDF5 2.0.0 Compatibility Release
@@ -44,23 +80,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Added
 
-#### HDF5 Format v4 Superblock Support (TASK-024)
-- **Superblock Version 4** read and write support (52-byte structure)
-- **Read Support**: Parse v4 superblocks with checksum validation
-- **Write Support**: Create v4 superblocks with CRC32/Fletcher32 checksums
-- **Checksum Validation** - CRC32, Fletcher32, none
-- **Mandatory Extension Validation** - Format v4 compliance
+#### HDF5 2.0.0 Superblock Support (TASK-024)
+- **Superblock Version 3** read and write support (48-byte structure)
+- **HDF5 2.0.0 Compatibility** - v3 superblocks (not v4, which doesn't exist)
+- **Read Support**: Parse v3 superblocks with CRC32 checksum validation
+- **Write Support**: Create v2/v3 superblocks with CRC32 checksums
+- **Checksum Validation** - CRC32 (v2/v3 use same 48-byte structure)
 - **Backward Compatibility** - Full support for v0, v2, v3 formats
 
-**Implementation**:
-- Extended Superblock struct with v4 fields
-- `validateSuperblockChecksum()` with 3 algorithms (read)
-- `writeV4()` with checksum generation (write)
-- `computeFletcher32()` per HDF5 specification
-- Round-trip validation tests (write → read → compare)
-- Mock-based testing (real v4 files when HDF5 2.0.0 becomes available)
+**Note**: Initial release incorrectly documented "v4 support". Corrected in v0.13.1.
+- HDF5 Format Specification v4.0 (document version) defines superblock versions 0-3 only
+- HDF5 2.0.0 uses Superblock Version 3, not 4
 
-**Files**: `superblock.go` (+203 lines), `superblock_test.go` (+435 lines), `superblock_write_test.go` (+157 lines)
+**Implementation**:
+- Enhanced Superblock v2/v3 write support (unified in `writeV2()`)
+- Version byte differentiation (v2=2, v3=3) at byte 8
+- CRC32 checksum validation for v2/v3
+- Round-trip validation tests (write → read → compare)
+
+**Files**: `superblock.go`, `superblock_test.go`, `superblock_write_test.go`
 
 #### 64-bit Chunk Dimensions Support (TASK-025)
 - **BREAKING CHANGE**: `DataLayoutMessage.ChunkSize` changed from `[]uint32` to `[]uint64`
@@ -71,11 +109,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Backward Compatibility** - Full support for existing files
 
 **Implementation**:
-- Added `ChunkKeySize` field (4 bytes for v0-v3, 8 bytes for v4+)
+- Added `ChunkKeySize` field (4 bytes for v0-v2, 8 bytes for future v3+)
 - Version-based detection in `ParseDataLayoutMessage()`
 - Updated all chunk processing functions to uint64
-- Superblock v0-v3: Read as uint32, convert to uint64
-- Superblock v4+: Read as uint64 directly
+- Superblock v0-v2: Read as uint32, convert to uint64
+- Future superblock versions: Prepared for uint64 directly
 
 **Files**: 12 files modified (datalayout.go, dataset_reader.go, btree_v1.go, 8 test files)
 

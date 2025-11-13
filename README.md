@@ -20,7 +20,7 @@ A modern, pure Go library for reading and writing HDF5 files without CGo depende
 
 - ✅ **Pure Go** - No CGo, no C dependencies, cross-platform
 - ✅ **Modern Design** - Built with Go 1.25+ best practices
-- ✅ **HDF5 2.0.0 Compatibility** - Read/Write: v0, v2, v3, v4 superblocks | Format v4.0 with checksum validation
+- ✅ **HDF5 2.0.0 Compatibility** - Read/Write: v0, v2, v3 superblocks | Format Spec v4.0 with checksum validation
 - ✅ **Full Dataset Reading** - Compact, contiguous, chunked layouts with GZIP
 - ✅ **Rich Datatypes** - Integers, floats, strings (fixed/variable), compounds
 - ✅ **Memory Efficient** - Buffer pooling and smart memory management
@@ -196,11 +196,11 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 
 **Version**: v0.13.0 (RELEASED 2025-11-13 - HDF5 2.0.0 Compatibility) ✅
 
-**HDF5 2.0.0 Ready: Security-hardened with AI/ML datatypes, format v4.0 support, and 86.1% coverage!** 🎉
+**HDF5 2.0.0 Ready: Security-hardened with AI/ML datatypes, Format Spec v4.0 compliance, and 86.1% coverage!** 🎉
 
 ### ✅ Fully Implemented
 - **File Structure**:
-  - Superblock parsing (v0, v2, v3, v4) with checksum validation (CRC32, Fletcher32)
+  - Superblock parsing (v0, v2, v3) with checksum validation (CRC32)
   - Object headers v1 (legacy HDF5 < 1.8) with continuations
   - Object headers v2 (modern HDF5 >= 1.8) with continuations
   - Groups (traditional symbol tables + modern object headers)

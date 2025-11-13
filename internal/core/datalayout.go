@@ -59,15 +59,15 @@ func ParseDataLayoutMessage(data []byte, sb *Superblock) (*DataLayoutMessage, er
 }
 
 // determineChunkKeySize determines the chunk key size based on file format version.
-// HDF5 2.0.0+ (superblock v4) uses 64-bit chunk dimensions.
-// HDF5 < 2.0.0 (superblock v0-v3) uses 32-bit chunk dimensions.
+// HDF5 < 2.0.0 (superblock v0-v2) uses 32-bit chunk dimensions.
+// Future versions may use 64-bit chunk dimensions.
 func determineChunkKeySize(superblockVersion uint8) uint8 {
-	// HDF5 2.0.0+ uses superblock version 4.
-	// These files use 64-bit chunk dimensions to support chunks >4GB.
+	// Conservative approach: use 32-bit for all current versions (0, 2, 3).
+	// All tested files (including HDF5 2.0.0) work correctly with 32-bit.
+	// This condition (>= 4) is prepared for potential future versions.
 	if superblockVersion >= 4 {
 		return 8
 	}
-	// HDF5 < 2.0.0 uses 32-bit chunk dimensions.
 	return 4
 }
 
@@ -131,8 +131,8 @@ func parseLayoutV3(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLa
 		offset += int(sb.OffsetSize)
 
 		// Read chunk dimensions.
-		// HDF5 2.0.0+ (superblock v4) uses 64-bit chunk dimensions.
-		// HDF5 < 2.0.0 (superblock v0-v3) uses 32-bit chunk dimensions.
+		// Current HDF5 formats (superblock v0-v3) use 32-bit chunk dimensions.
+		// Future formats may use 64-bit chunk dimensions.
 		msg.ChunkSize = make([]uint64, dimensionality)
 
 		if msg.ChunkKeySize == 8 {

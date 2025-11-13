@@ -230,8 +230,7 @@ GZIP compression fully supported (both reading and writing).
 - ✅ **Version 0** (HDF5 1.0 - 1.6)
 - ❌ Version 1 (rare, not needed)
 - ✅ **Version 2** (HDF5 1.8+)
-- ✅ **Version 3** (HDF5 1.10+ with SWMR)
-- ✅ **Version 4** (HDF5 2.0.0+ with checksums)
+- ✅ **Version 3** (HDF5 2.0.0 with checksums)
 
 **Object Header Versions**:
 - ✅ **Version 1** (pre-HDF5 1.8)
@@ -554,7 +553,7 @@ if err == nil {
 ### What's the current write support status?
 
 **Already Available**:
-- ✅ File creation with multiple superblock formats (v0, v2)
+- ✅ File creation with multiple superblock formats (v0, v2, v3)
 - ✅ Dataset writing: contiguous and chunked layouts
 - ✅ **Dataset resizing** with unlimited dimensions (NEW!)
 - ✅ **Variable-length datatypes**: strings, ragged arrays (NEW!)

@@ -19,6 +19,7 @@ on:
       - develop
       - 'feature/**'
       - 'release/**'
+      - 'hotfix/**'
   pull_request:
     branches:
       - main

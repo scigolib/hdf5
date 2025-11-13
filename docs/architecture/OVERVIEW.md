@@ -32,7 +32,7 @@ github.com/scigolib/hdf5/
 │
 ├── internal/                  # Internal implementation (not exported)
 │   ├── core/                  # Core HDF5 structures
-│   │   ├── superblock.go     # File metadata (versions 0, 2, 3, 4)
+│   │   ├── superblock.go     # File metadata (versions 0, 2, 3)
 │   │   ├── objectheader.go   # Object headers (v1 read, v1+v2 write)
 │   │   ├── attribute.go      # Attribute reading and writing
 │   │   ├── datatype.go       # All HDF5 datatypes
@@ -196,7 +196,7 @@ type ObjectHeader struct {
 
 **Responsibilities**:
 - Binary format parsing
-- Version-specific handling (v0, v2, v3, v4 superblocks)
+- Version-specific handling (v0, v2, v3 superblocks)
 - Metadata extraction and encoding
 - Read-Modify-Write (RMW) support
 
@@ -254,8 +254,8 @@ hdf5.Open(filename)
 [1] File signature validation
     ↓
 [2] Superblock parsing (core.ReadSuperblock)
-    ├─→ Determine version (0, 2, 3, or 4)
-    ├─→ Validate checksum (v4: CRC32/Fletcher32)
+    ├─→ Determine version (0, 2, or 3)
+    ├─→ Validate checksum (v2/v3: CRC32)
     ├─→ Read offset/length sizes
     ├─→ Determine endianness
     └─→ Extract root group address
@@ -287,7 +287,7 @@ hdf5.CreateForWrite(filename, mode)
     ├─→ Choose offset/length sizes
     ├─→ Initialize root group address
     └─→ Write checksum
-    Note: v4 read support added, write support planned for future releases
+    Note: v2/v3 read and write support fully implemented
     ↓
 [3] Initialize space allocator
     ↓
@@ -467,8 +467,7 @@ const (
 | 0 | ✅ | ✅ | Original format (HDF5 1.0-1.6) |
 | 1 | ❌ | ❌ | Same as v0 with B-tree K values |
 | 2 | ✅ | ✅ | Streamlined format (HDF5 1.8+) |
-| 3 | ✅ | ⚠️ | SWMR support (HDF5 1.10+) - read only |
-| 4 | ✅ | ⚠️ | Format 4.0 (HDF5 2.0.0+) with checksum - read only |
+| 3 | ✅ | ✅ | HDF5 2.0.0 format (48-byte, CRC32 checksum) |
 
 ### Object Header Versions
 
@@ -595,7 +594,7 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 ## 📊 Current Status
 
 ### Read Support: 100% ✅
-- All HDF5 formats (superblock v0, v2, v3, v4)
+- All HDF5 formats (superblock v0, v2, v3)
 - All datatypes
 - All layouts (compact, contiguous, chunked)
 - All storage types (compact, dense)
@@ -605,7 +604,7 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 
 ### Write Support: 100% ✅
 - File creation (Truncate/Exclusive modes)
-- Superblock v0 and v2 writing (v4 read-only)
+- Superblock v0, v2, and v3 writing
 - Object Header v1 and v2 writing
 - Dataset writing (contiguous, chunked)
 - All datatypes (including compound, arrays, enums, references)
