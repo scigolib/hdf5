@@ -10,11 +10,11 @@ import (
 // when multiplied by element size, causing heap buffer overflows.
 func TestCVE_2025_6269_AttributeOverflow(t *testing.T) {
 	tests := []struct {
-		name         string
-		elements     uint64
-		elementSize  uint64
-		shouldFail   bool
-		description  string
+		name        string
+		elements    uint64
+		elementSize uint64
+		shouldFail  bool
+		description string
 	}{
 		{
 			name:        "normal attribute - 100 int32 elements",
@@ -327,7 +327,7 @@ func TestCVE_2025_7067_ChunkOverflow(t *testing.T) {
 		},
 		{
 			name:        "max allowed chunk size",
-			dimensions:  []uint32{1024, 1024, 128},  // Close to 1GB
+			dimensions:  []uint32{1024, 1024, 128}, // Close to 1GB
 			elementSize: 8,
 			shouldFail:  false,
 			description: "Chunk close to MaxChunkSize should succeed",

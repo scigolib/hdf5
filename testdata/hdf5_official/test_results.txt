@@ -1,12 +1,12 @@
 ========================================
 Official HDF5 Test Suite Results
 ========================================
-Date:      2025-11-13 07:42:30
+Date:      2025-11-13 08:04:54
 Total:     433 files
 Pass:      380 files
 Fail:      0 files
 Skip:      53 files (known invalid/unsupported)
 Pass Rate: 100.0% (of 380 valid files)
-Duration:  86ms
+Duration:  3.608s
 ========================================
 
