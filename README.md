@@ -7,7 +7,7 @@
 [![CI](https://github.com/scigolib/hdf5/actions/workflows/test.yml/badge.svg)](https://github.com/scigolib/hdf5/actions)
 [![Coverage](https://img.shields.io/badge/coverage-86.1%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.12.0--stable-brightgreen.svg)](ROADMAP.md)
+[![GitHub release](https://img.shields.io/github/v/release/scigolib/hdf5?include_prereleases&label=version&color=brightgreen)](https://github.com/scigolib/hdf5/releases)
 [![GoDoc](https://pkg.go.dev/badge/github.com/scigolib/hdf5.svg)](https://pkg.go.dev/github.com/scigolib/hdf5)
 
 A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. **v0.12.0: Production-ready stable release with feature-complete read/write support and 98.2% official HDF5 test suite pass rate!**
