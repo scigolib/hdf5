@@ -2,13 +2,15 @@
 
 > **Pure Go implementation of the HDF5 file format** - No CGo required
 
-[![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat&logo=go)](https://golang.org)
-[![Go Report Card](https://goreportcard.com/badge/github.com/scigolib/hdf5)](https://goreportcard.com/report/github.com/scigolib/hdf5)
-[![CI](https://github.com/scigolib/hdf5/actions/workflows/test.yml/badge.svg)](https://github.com/scigolib/hdf5/actions)
-[![Coverage](https://img.shields.io/badge/coverage-86.1%25-brightgreen.svg)](https://github.com/scigolib/hdf5/actions)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![GitHub release](https://img.shields.io/github/v/release/scigolib/hdf5?include_prereleases&label=version&color=brightgreen)](https://github.com/scigolib/hdf5/releases)
-[![GoDoc](https://pkg.go.dev/badge/github.com/scigolib/hdf5.svg)](https://pkg.go.dev/github.com/scigolib/hdf5)
+[![Release](https://img.shields.io/github/v/release/scigolib/hdf5?include_prereleases&style=flat-square&logo=github&color=blue&label=version)](https://github.com/scigolib/hdf5/releases)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/scigolib/hdf5?style=flat-square&logo=go)](https://go.dev)
+[![Go Report Card](https://goreportcard.com/badge/github.com/scigolib/hdf5?style=flat-square)](https://goreportcard.com/report/github.com/scigolib/hdf5)
+[![GoDoc](https://img.shields.io/badge/godoc-reference-blue?style=flat-square&logo=go)](https://pkg.go.dev/github.com/scigolib/hdf5)
+[![CI](https://img.shields.io/github/actions/workflow/status/scigolib/hdf5/test.yml?branch=develop&style=flat-square&logo=github&label=tests)](https://github.com/scigolib/hdf5/actions)
+[![codecov](https://codecov.io/gh/scigolib/hdf5/graph/badge.svg)](https://codecov.io/gh/scigolib/hdf5)
+[![License](https://img.shields.io/github/license/scigolib/hdf5?style=flat-square&color=blue)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/scigolib/hdf5?style=flat-square&logo=github)](https://github.com/scigolib/hdf5/stargazers)
+[![Discussions](https://img.shields.io/github/discussions/scigolib/hdf5?style=flat-square&logo=github&label=discussions)](https://github.com/scigolib/hdf5/discussions)
 
 A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. **v0.12.0: Production-ready stable release with feature-complete read/write support and 98.2% official HDF5 test suite pass rate!**
 
