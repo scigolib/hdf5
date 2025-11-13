@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Status**: Stable Release
 **Focus**: HDF5 2.0.0 format compatibility, security hardening, AI/ML datatype support
 **Quality**: 86.1% coverage, 0 linter issues, production-ready
+**Announcement**: [HDF Group Forum](https://forum.hdfgroup.org/t/pure-go-hdf5-library-production-release-with-hdf5-2-0-0-compatibility/13584)
 
 ### 🔒 Security
 
