@@ -381,10 +381,10 @@ Not supported: H5T_TIME (deprecated in HDF5 spec)
 ### Q: What compression formats work?
 **A**: Currently:
 - ✅ GZIP/Deflate (most common)
-- ❌ SZIP, LZF, BZIP2 (optional filters, planned for v1.x)
+- ❌ SZIP, LZF, BZIP2, Blosc, LZ4, Zstd (optional filters, planned for v0.14.0+)
 
 ### Q: Is it thread-safe?
-**A**: Currently, each `File` instance should be used from a single goroutine. Concurrent file access support is planned for v2.0.
+**A**: Currently, each `File` instance should be used from a single goroutine. Thread-safe concurrent access and SWMR mode are planned for v0.14.0+.
 
 ### Q: What about performance?
 **A**: The library uses buffer pooling and efficient memory management. Performance is within 2-3x of the C library for most operations.
