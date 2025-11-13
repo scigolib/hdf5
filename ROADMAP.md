@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2025-11-13 | **Current Version**: v0.13.0 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.0 RELEASED! (2025-11-13) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2025-11-13 | **Current Version**: v0.13.1 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.1 RELEASED! (2025-11-13 hotfix) → v1.0.0 LTS (Q3 2026)
 
 ---
 
@@ -46,8 +46,10 @@ v0.11.x-beta (WRITE features) ✅ COMPLETE 2025-11-13
 v0.12.0 (FEATURE COMPLETE + STABLE) ✅ RELEASED 2025-11-13
          ↓ (1 day - HDF5 2.0.0 compatibility)
 v0.13.0 (HDF5 2.0.0 + SECURITY) ✅ RELEASED 2025-11-13
-         ↓ (community adoption + feedback)
-v0.13.x (patch releases) → Bug fixes and minor enhancements
+         ↓ (same day - documentation correction)
+v0.13.1 (HOTFIX - Documentation) ✅ RELEASED 2025-11-13
+         ↓ (community adoption + feedback + monitoring)
+v0.13.x (maintenance phase) → Stable maintenance, bug fixes, minor enhancements
          ↓ (6-9 months production validation)
 v1.0.0 LTS → Long-term support release (Q3 2026)
 ```
@@ -60,18 +62,25 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - 100% write support achieved
 - API stable, production-ready
 
-**v0.13.0** = HDF5 2.0.0 compatibility + Security hardening ✅ RELEASED
-- Format v4.0 superblock support (CRC32, Fletcher32 validation)
+**v0.13.0** = HDF5 2.0.0 Format Specification v4.0 + Security hardening ✅ RELEASED
+- HDF5 Format Spec v4.0 compliance (superblock v0, v2, v3)
 - 64-bit chunk dimensions (>4GB chunks)
 - AI/ML datatypes (FP8 E4M3/E5M2, bfloat16)
 - 4 CVEs fixed (overflow protection throughout)
 - 86.1% coverage, 0 linter issues
 
-**v0.13.x** = Maintenance and community feedback
-- Bug fixes from production use
-- Performance optimizations
-- Minor feature enhancements
+**v0.13.1** = Documentation Correction Hotfix ✅ RELEASED (same day)
+- Fixed incorrect "Superblock Version 4" references (non-existent)
+- Reality: HDF5 Format Spec v4.0 defines superblock versions 0-3 only
+- Added .codecov.yml to prevent false failures on documentation changes
+- No functional changes, documentation only
+
+**v0.13.x** = Stable Maintenance Phase (current)
+- Monitoring for bug reports from production use
+- Performance optimizations when identified
+- Minor feature enhancements from community feedback
 - NO breaking API changes
+- Focus: Stability, reliability, community support
 
 **v1.0.0** = Production with ALL HDF5 format support
 - Supports HDF5 v0, v2, v3 superblocks ✅
@@ -85,18 +94,19 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-## 📊 Current Status (v0.13.0)
+## 📊 Current Status (v0.13.1)
 
-**HDF5 2.0.0 Compatibility**: Complete! 🎉
+**Phase**: 🛡️ Stable Maintenance (monitoring, community support)
+**HDF5 2.0.0 Format Spec v4.0**: Complete! 🎉
 **Security**: Hardened with 4 CVEs fixed! 🔒
 **AI/ML Support**: FP8 & bfloat16 ready! 🤖
 
 **What Works**:
 - ✅ File creation (Truncate/Exclusive modes)
-- ✅ **HDF5 2.0.0 Format v4.0** support with checksum validation (CRC32, Fletcher32) ✨ NEW v0.13.0
-- ✅ **64-bit Chunk Dimensions** (>4GB chunks for scientific datasets) ✨ NEW v0.13.0
-- ✅ **AI/ML Datatypes** (FP8 E4M3, FP8 E5M2, bfloat16 - IEEE 754 compliant) ✨ NEW v0.13.0
-- ✅ **Security Hardening** (4 CVEs fixed, overflow protection throughout) ✨ NEW v0.13.0
+- ✅ **HDF5 Format Spec v4.0 compliance** (superblock v0, v2, v3 with CRC32 validation) ✨ v0.13.0
+- ✅ **64-bit Chunk Dimensions** (>4GB chunks for scientific datasets) ✨ v0.13.0
+- ✅ **AI/ML Datatypes** (FP8 E4M3, FP8 E5M2, bfloat16 - IEEE 754 compliant) ✨ v0.13.0
+- ✅ **Security Hardening** (4 CVEs fixed, overflow protection throughout) ✨ v0.13.0
 - ✅ Datasets (all layouts: contiguous, chunked, compact)
 - ✅ Dataset resizing with unlimited dimensions
 - ✅ Variable-length datatypes: strings, ragged arrays
@@ -243,22 +253,70 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-### **v0.12.x - Maintenance & Community Feedback** (2025-11 → 2026-Q2)
+### **v0.13.x - Stable Maintenance Phase** ✅ **CURRENT** (2025-11 → 2026-Q2)
 
-**Goal**: Production validation and stability
+**Goal**: Production validation, stability, and community support
+
+**Status**: Monitoring phase after v0.13.1 hotfix
 
 **Scope**:
-- 🐛 Bug fixes from production use
-- ⚡ Performance optimizations
-- 📝 Documentation improvements
-- ✨ Minor feature enhancements
+- 🐛 Bug fixes from production use (high priority)
+- 🛡️ Security updates if needed (critical priority)
+- ⚡ Performance optimizations based on profiling
+- 📝 Documentation improvements from user feedback
+- ✨ Minor feature enhancements (community-driven)
 - ⛔ NO breaking API changes
 
 **Community Adoption**:
 - 👥 Real-world project validation
-- 📊 Performance feedback
-- 🔍 Edge case discovery
+- 📊 Performance benchmarks and profiling
+- 🔍 Edge case discovery and handling
 - 💬 API refinement suggestions
+- 🌐 Forum and GitHub Discussions engagement
+
+**Quality Focus**:
+- 📈 Maintain >70% test coverage
+- 🔒 Zero security vulnerabilities
+- ✅ >98% HDF5 test suite pass rate
+- 📋 Responsive issue triage and resolution
+
+---
+
+### **v0.14.0+ - Future Enhancements** (2026-Q2+) [PLANNING]
+
+**Goal**: Community-driven improvements and advanced features
+
+**Potential Focus Areas** (priority TBD based on feedback):
+
+**Performance Optimizations**:
+- ⚡ Parallel chunk reading/writing (goroutine-based)
+- 🧠 Intelligent caching strategies
+- 📊 Memory-mapped I/O for large files
+- 🔄 Lazy loading optimizations
+
+**Advanced Format Features**:
+- 📐 Object header v2 support (B-tree v2 indexed attributes)
+- 🗂️ Group indexed format (B-tree v2 for large groups)
+- 🔗 Advanced linking features (user-defined links)
+- 📦 Dataset filters extensibility
+
+**Developer Experience**:
+- 🛠️ Higher-level APIs for common workflows
+- 📚 More examples and tutorials
+- 🧪 Testing utilities for users
+- 📖 Comprehensive API documentation
+
+**Enterprise Features**:
+- 🔍 File validation and repair tools
+- 📊 Performance profiling tools
+- 🔒 Enhanced security options
+- 📈 Metrics and telemetry
+
+**Note**: Features will be prioritized based on:
+1. Community requests and votes
+2. Production use case needs
+3. HDF5 standard evolution
+4. Maintainability and complexity
 
 ---
 
@@ -320,6 +378,6 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-*Version 5.0 (Updated 2025-11-13)*
-*Current: v0.12.0 (STABLE) | Next: v0.12.x (maintenance) | Target: v1.0.0 LTS (Q3 2026)*
+*Version 5.1 (Updated 2025-11-13)*
+*Current: v0.13.1 (STABLE + HOTFIX) | Phase: Maintenance | Next: v0.14.0+ (community-driven) | Target: v1.0.0 LTS (Q3 2026)*
 
