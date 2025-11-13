@@ -1,0 +1,98 @@
+# Known Invalid Files in Official HDF5 Test Suite
+#
+# This file lists HDF5 test files that are known to be invalid or
+# intentionally corrupted for edge case testing. These files are
+# expected to fail validation and are skipped during test suite runs.
+#
+# Format:
+# - One filename per line
+# - Lines starting with # are comments
+# - Empty lines are ignored
+#
+# Last Updated: 2025-11-13
+
+# ===================================================
+# Family File Format (Multi-File HDF5)
+# ===================================================
+# These files use the HDF5 "family" file driver which splits a single
+# logical HDF5 file across multiple physical files. This is not a
+# single-file format and requires special driver support.
+# Status: Not supported (deferred to v0.13.0+)
+
+family_file00001.h5
+family_file00002.h5
+family_file00003.h5
+family_file00004.h5
+family_file00005.h5
+family_file00006.h5
+family_file00007.h5
+family_file00008.h5
+family_file00009.h5
+family_file00010.h5
+family_file00011.h5
+family_file00012.h5
+family_file00013.h5
+family_file00014.h5
+family_file00015.h5
+family_file00016.h5
+family_file00017.h5
+family_v16-000001.h5
+family_v16-000002.h5
+family_v16-000003.h5
+tfamily00000.h5
+tfamily00001.h5
+tfamily00002.h5
+tfamily00003.h5
+tfamily00004.h5
+tfamily00005.h5
+tfamily00006.h5
+tfamily00007.h5
+tfamily00008.h5
+tfamily00009.h5
+tfamily00010.h5
+
+# ===================================================
+# Multi-File Format (Split Driver)
+# ===================================================
+# These files use the HDF5 "multi" or "split" file driver which splits
+# metadata and raw data into separate files.
+# Status: Not supported (deferred to v0.13.0+)
+
+tmulti-b.h5
+tmulti-g.h5
+tmulti-l.h5
+tmulti-o.h5
+tmulti-r.h5
+tmulti-s.h5
+tsplit_file-r.h5
+multi_file_v16-r.h5
+
+# ===================================================
+# Superblock Version 1 (Legacy Format)
+# ===================================================
+# Our library supports superblock versions 0, 2, and 3.
+# Version 1 is rare and deferred to future releases.
+# Status: Not supported (deferred to v0.13.0+)
+
+old_h5fc_ext1_i.h5
+
+# ===================================================
+# Intentionally Corrupted/Incomplete Files
+# ===================================================
+# These files are intentionally corrupted or incomplete for testing
+# error handling in the HDF5 library.
+# Status: Expected to fail (test edge cases)
+
+3790_infinite_loop.h5
+h5clear_fsm_persist_noclose.h5
+h5clear_fsm_persist_user_equal.h5
+h5clear_fsm_persist_user_greater.h5
+h5clear_fsm_persist_user_less.h5
+h5clear_mdc_image.h5
+h5clear_status_noclose.h5
+h5stat_tsohm.h5
+test_subfiling_precreate_rank_0.h5
+test_subfiling_stripe_sizes.h5
+tsizeslheap.h5
+twithub.h5
+twithub513.h5
