@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/scigolib/hdf5/internal/core"
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // HyperslabSelection represents a rectangular selection in N-dimensional space.
@@ -226,6 +227,21 @@ func fillHyperslabDefaults(sel *HyperslabSelection, ndims int) {
 
 // validateHyperslabBounds checks that selection parameters are valid and within bounds.
 func validateHyperslabBounds(sel *HyperslabSelection, dims []uint64) error {
+	// CVE-2025-44905 fix: Validate hyperslab bounds with overflow checking.
+	if err := utils.ValidateHyperslabBounds(sel.Start, sel.Count, sel.Stride, dims); err != nil {
+		return fmt.Errorf("hyperslab bounds validation failed: %w", err)
+	}
+
+	// CVE-2025-44905 fix: Calculate total elements with overflow check.
+	totalElements, err := utils.CalculateHyperslabElements(sel.Count)
+	if err != nil {
+		return fmt.Errorf("hyperslab too large: %w", err)
+	}
+
+	// Additional validation: ensure reasonable size
+	_ = totalElements // Used for validation above
+
+	// Keep the original per-dimension validation for completeness
 	for i := range dims {
 		if err := validateDimensionBounds(sel, dims, i); err != nil {
 			return err

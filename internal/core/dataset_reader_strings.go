@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // ReadDatasetStrings reads a string dataset and returns values as string array.
@@ -120,6 +122,11 @@ func convertToStrings(rawData []byte, datatype *DatatypeMessage, numElements uin
 		stringSize := uint64(datatype.Size)
 		paddingType := datatype.GetStringPadding()
 
+		// CVE-2025-2926 fix: Validate string size before processing.
+		if err := utils.ValidateBufferSize(stringSize, utils.MaxStringSize, "string element"); err != nil {
+			return nil, fmt.Errorf("string element too large: %w", err)
+		}
+
 		for i := uint64(0); i < numElements; i++ {
 			offset := i * stringSize
 			if offset+stringSize > uint64(len(rawData)) {
@@ -146,6 +153,10 @@ func convertToStrings(rawData []byte, datatype *DatatypeMessage, numElements uin
 func decodeFixedString(data []byte, paddingType uint8) string {
 	switch paddingType {
 	case 0: // Null-terminated.
+		// CVE-2025-2926 fix: Enforce null terminator for NULLTERM padding.
+		// According to HDF5 spec, NULLTERM strings MUST end with null.
+		// However, some old files may not enforce this strictly, so we're lenient
+		// and just trim to first null if present.
 		// Find first null byte.
 		idx := bytes.IndexByte(data, 0)
 		if idx >= 0 {

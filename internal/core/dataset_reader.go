@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // ReadDatasetFloat64 reads a dataset and returns values as float64 array.
@@ -239,7 +241,17 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 	// Calculate total data size.
 	totalElements := dataspace.TotalElements()
 	elementSize := uint64(datatype.Size)
-	totalBytes := totalElements * elementSize
+
+	// CVE-2025-7067 fix: Check for overflow in total size calculation.
+	totalBytes, err := utils.SafeMultiply(totalElements, elementSize)
+	if err != nil {
+		return nil, fmt.Errorf("dataset size overflow: %w", err)
+	}
+
+	// Validate total size is within reasonable limits.
+	if err := utils.ValidateBufferSize(totalBytes, utils.MaxChunkSize*1024, "dataset"); err != nil {
+		return nil, fmt.Errorf("dataset too large: %w", err)
+	}
 
 	// Allocate output buffer.
 	rawData := make([]byte, totalBytes)
@@ -254,6 +266,11 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 	for _, chunk := range chunks {
 		chunkKey := chunk.Key
 		chunkAddr := chunk.Address
+
+		// CVE-2025-7067 fix: Validate chunk size before allocation to prevent buffer overflow.
+		if err := utils.ValidateBufferSize(uint64(chunkKey.Nbytes), utils.MaxChunkSize, "chunk data"); err != nil {
+			return nil, fmt.Errorf("invalid chunk size at 0x%x: %w", chunkAddr, err)
+		}
 
 		// Read chunk data.
 		chunkData := make([]byte, chunkKey.Nbytes)
