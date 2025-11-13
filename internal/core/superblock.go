@@ -1,3 +1,6 @@
+// Package core provides low-level HDF5 file format parsing and generation.
+// It handles superblocks, object headers, messages, and other HDF5 structures
+// without CGo dependencies.
 package core
 
 import (
@@ -16,6 +19,7 @@ const (
 	Version0  = 0
 	Version2  = 2
 	Version3  = 3
+	Version4  = 4
 )
 
 // Superblock represents the HDF5 file superblock containing file-level metadata.
@@ -33,10 +37,16 @@ type Superblock struct {
 	// These are only used when Version == 0
 	RootBTreeAddr uint64 // B-tree address for root group (v0 only)
 	RootHeapAddr  uint64 // Local heap address for root group (v0 only)
+
+	// V4-specific: Checksum fields (HDF5 2.0+)
+	ChecksumAlgorithm uint8  // 0=none, 1=CRC32, 2=Fletcher32 (v4 only)
+	Checksum          uint32 // Superblock checksum (v4 only)
 }
 
 // ReadSuperblock reads and parses the HDF5 superblock from the file.
-// It supports versions 0, 2, and 3 of the superblock format.
+// It supports versions 0, 2, 3, and 4 of the superblock format.
+//
+//nolint:maintidx // Complex HDF5 format parsing requires handling multiple versions and field layouts
 func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 	buf := utils.GetBuffer(128)
 	defer utils.ReleaseBuffer(buf)
@@ -54,7 +64,7 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 	}
 
 	version := buf[8]
-	if version != Version0 && version != Version2 && version != Version3 {
+	if version != Version0 && version != Version2 && version != Version3 && version != Version4 {
 		return nil, fmt.Errorf("unsupported superblock version: %d", version)
 	}
 
@@ -68,7 +78,7 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		lengthSize = buf[14]
 		endianness = binary.LittleEndian // v0 files are typically little-endian
 	} else {
-		// For v2 and v3: endianness in byte 9, packed sizes in byte 10
+		// For v2, v3, and v4: endianness in byte 9, packed sizes in byte 10
 		// Byte 9: flags byte - bit 0 is endianness (0=LE, 1=BE)
 		switch buf[9] & 0x01 { // Check only bit 0
 		case 0:
@@ -185,7 +195,7 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 			}
 		}
 	} else {
-		// For v2 and v3, fields start at byte 12
+		// For v2, v3, and v4, fields start at byte 12
 		current := 12
 
 		sb.BaseAddress, err = readValue(current, offsetSize)
@@ -207,9 +217,94 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		if err != nil {
 			return nil, utils.WrapError("root group address read failed", err)
 		}
+		current += int(offsetSize)
+
+		// V4-specific: Read checksum algorithm and checksum
+		if version == Version4 {
+			// Checksum algorithm (byte 44)
+			if current >= len(buf) {
+				return nil, errors.New("insufficient data for v4 checksum fields")
+			}
+			sb.ChecksumAlgorithm = buf[current]
+			current++
+
+			// Reserved bytes (3 bytes, skip)
+			current += 3
+
+			// Checksum (4 bytes, bytes 48-51)
+			checksumValue, err := readValue(current, 4)
+			if err != nil {
+				return nil, utils.WrapError("checksum read failed", err)
+			}
+			// Safe conversion: readValue returns uint64, but checksum is always 4 bytes
+			if checksumValue > 0xFFFFFFFF {
+				return nil, fmt.Errorf("invalid checksum value: %d", checksumValue)
+			}
+			sb.Checksum = uint32(checksumValue)
+
+			// Validate checksum (bytes 8-47 are checksummed)
+			if err := validateSuperblockChecksum(buf[8:current], sb.Checksum, sb.ChecksumAlgorithm); err != nil {
+				return nil, fmt.Errorf("superblock v4 checksum validation failed: %w", err)
+			}
+
+			// V4 requires superblock extension (cannot be UNDEFINED)
+			if sb.SuperExtension == 0xFFFFFFFFFFFFFFFF {
+				return nil, errors.New("superblock v4 requires extension address")
+			}
+		}
 	}
 
 	return sb, nil
+}
+
+// validateSuperblockChecksum validates the superblock checksum using the specified algorithm.
+// Algorithm codes: 0=none, 1=CRC32, 2=Fletcher32.
+func validateSuperblockChecksum(data []byte, checksum uint32, algorithm uint8) error {
+	switch algorithm {
+	case 0: // No checksum
+		return nil
+
+	case 1: // CRC32
+		computed := crc32.ChecksumIEEE(data)
+		if computed != checksum {
+			return fmt.Errorf("CRC32 mismatch: expected 0x%08x, got 0x%08x",
+				checksum, computed)
+		}
+		return nil
+
+	case 2: // Fletcher32
+		computed := computeFletcher32(data)
+		if computed != checksum {
+			return fmt.Errorf("Fletcher32 mismatch: expected 0x%08x, got 0x%08x",
+				checksum, computed)
+		}
+		return nil
+
+	default:
+		return fmt.Errorf("unknown checksum algorithm: %d", algorithm)
+	}
+}
+
+// computeFletcher32 computes the Fletcher-32 checksum as specified in HDF5 format spec.
+// Fletcher-32 is a checksum algorithm that provides error detection with low computational cost.
+func computeFletcher32(data []byte) uint32 {
+	var sum1, sum2 uint16
+
+	// Process 16-bit words
+	for i := 0; i < len(data); i += 2 {
+		var word uint16
+		if i+1 < len(data) {
+			word = binary.LittleEndian.Uint16(data[i : i+2])
+		} else {
+			// Last byte (odd length)
+			word = uint16(data[i])
+		}
+
+		sum1 = (sum1 + word) % 65535
+		sum2 = (sum2 + sum1) % 65535
+	}
+
+	return (uint32(sum2) << 16) | uint32(sum1)
 }
 
 // WriteTo writes the superblock to the writer at offset 0.
