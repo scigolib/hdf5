@@ -46,7 +46,7 @@ func main() {
 ### File Properties
 
 ```go
-// Get superblock version (0, 2, or 3)
+// Get superblock version (0, 2, 3, or 4)
 version := file.SuperblockVersion()
 
 // Get root group
@@ -827,4 +827,3 @@ func main() {
 ---
 
 *Last Updated: 2025-11-13*
-*Version: 0.12.0*

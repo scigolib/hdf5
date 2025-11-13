@@ -12,10 +12,9 @@
 - **Architecture**: amd64, arm64, or any Go-supported architecture
 - **Dependencies**: None (pure Go, no CGo required)
 
-### Optional (for development/testing)
-- **Python 3**: For generating test HDF5 files
-- **h5py**: Python HDF5 library (`pip install h5py`)
+### Optional (for contributors)
 - **golangci-lint**: For code quality checks
+- **Python/h5py**: For generating reference test files (optional - can use pure Go)
 
 ---
 
@@ -43,7 +42,7 @@ Add the library to your project's `go.mod`:
 go mod init myproject
 
 # Add the library
-go get github.com/scigolib/hdf5@v0.12.0
+go get github.com/scigolib/hdf5
 ```
 
 Or manually add to `go.mod`:
@@ -54,7 +53,7 @@ module myproject
 go 1.25
 
 require (
-    github.com/scigolib/hdf5 v0.12.0
+    github.com/scigolib/hdf5
 )
 ```
 
@@ -94,7 +93,7 @@ import (
 
 func main() {
     fmt.Println("HDF5 library imported successfully!")
-    fmt.Printf("Library version: v0.12.0\n")
+    fmt.Printf("Library version: <latest>\n")
 }
 ```
 
@@ -106,7 +105,7 @@ go run test_install.go
 Expected output:
 ```
 HDF5 library imported successfully!
-Library version: v0.12.0
+Library version: <latest>
 ```
 
 ### Functional Verification
@@ -289,7 +288,7 @@ go get -u github.com/scigolib/hdf5
 ### Update to Specific Version
 
 ```bash
-go get github.com/scigolib/hdf5@v0.12.0
+go get github.com/scigolib/hdf5
 ```
 
 ### Check Current Version
@@ -306,16 +305,16 @@ go list -m github.com/scigolib/hdf5
 
 **Problem**:
 ```
-go: github.com/scigolib/hdf5@v0.12.0: reading github.com/scigolib/hdf5/go.mod at revision v0.12.0: unknown revision v0.12.0
+go: github.com/scigolib/hdf5@vX.Y.Z: reading github.com/scigolib/hdf5/go.mod at revision vX.Y.Z: unknown revision vX.Y.Z
 ```
 
 **Solution**:
 ```bash
-# Ensure you're using the correct version tag
-go get github.com/scigolib/hdf5
-
-# Or use @latest for the newest version
+# Use latest version (recommended)
 go get github.com/scigolib/hdf5@latest
+
+# Or without version tag
+go get github.com/scigolib/hdf5
 ```
 
 ### "Go version too old" Error
@@ -389,4 +388,3 @@ After installation, explore:
 ---
 
 *Last Updated: 2025-11-13*
-*Version: 0.12.0*

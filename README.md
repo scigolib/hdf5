@@ -8,11 +8,11 @@
 [![GoDoc](https://img.shields.io/badge/godoc-reference-blue?style=flat-square&logo=go)](https://pkg.go.dev/github.com/scigolib/hdf5)
 [![CI](https://img.shields.io/github/actions/workflow/status/scigolib/hdf5/test.yml?branch=develop&style=flat-square&logo=github&label=tests)](https://github.com/scigolib/hdf5/actions)
 [![codecov](https://codecov.io/gh/scigolib/hdf5/graph/badge.svg)](https://codecov.io/gh/scigolib/hdf5)
-[![License](https://img.shields.io/github/license/scigolib/hdf5?style=flat-square&color=blue)](LICENSE)
+[![License](https://img.shields.io/github/license/scigolib/hdf5?style=flat-square&color=blue)](https://github.com/scigolib/hdf5/blob/main/LICENSE)
 [![Stars](https://img.shields.io/github/stars/scigolib/hdf5?style=flat-square&logo=github)](https://github.com/scigolib/hdf5/stargazers)
 [![Discussions](https://img.shields.io/github/discussions/scigolib/hdf5?style=flat-square&logo=github&label=discussions)](https://github.com/scigolib/hdf5/discussions)
 
-A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. **v0.12.0: Production-ready stable release with feature-complete read/write support and 98.2% official HDF5 test suite pass rate!**
+A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. **v0.13.0: HDF5 2.0.0 compatibility with security hardening, AI/ML datatypes, and 86.1% code coverage!**
 
 ---
 
@@ -20,7 +20,7 @@ A modern, pure Go library for reading and writing HDF5 files without CGo depende
 
 - ✅ **Pure Go** - No CGo, no C dependencies, cross-platform
 - ✅ **Modern Design** - Built with Go 1.25+ best practices
-- ✅ **HDF5 Compatibility** - Read: v0, v2, v3 superblocks | Write: v0, v2 superblocks
+- ✅ **HDF5 2.0.0 Compatibility** - Read/Write: v0, v2, v3, v4 superblocks | Format v4.0 with checksum validation
 - ✅ **Full Dataset Reading** - Compact, contiguous, chunked layouts with GZIP
 - ✅ **Rich Datatypes** - Integers, floats, strings (fixed/variable), compounds
 - ✅ **Memory Efficient** - Buffer pooling and smart memory management
@@ -194,13 +194,13 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 
 ## 🎯 Current Status
 
-**Version**: v0.12.0 (RELEASED 2025-11-13 - Stable Production Release) ✅
+**Version**: v0.13.0 (RELEASED 2025-11-13 - HDF5 2.0.0 Compatibility) ✅
 
-**Production Readiness: Feature-complete read/write support with 98.2% official test suite validation!** 🎉
+**HDF5 2.0.0 Ready: Security-hardened with AI/ML datatypes, format v4.0 support, and 86.1% coverage!** 🎉
 
 ### ✅ Fully Implemented
 - **File Structure**:
-  - Superblock parsing (v0, v2, v3)
+  - Superblock parsing (v0, v2, v3, v4) with checksum validation (CRC32, Fletcher32)
   - Object headers v1 (legacy HDF5 < 1.8) with continuations
   - Object headers v2 (modern HDF5 >= 1.8) with continuations
   - Groups (traditional symbol tables + modern object headers)
@@ -218,6 +218,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 
 - **Datatypes** (Read + Write):
   - **Basic types**: int8-64, uint8-64, float32/64
+  - **AI/ML types**: FP8 (E4M3, E5M2), bfloat16 - IEEE 754 compliant ✨ NEW
   - **Strings**: Fixed-length (null/space/null-padded), variable-length (via Global Heap)
   - **Advanced types**: Arrays, Enums, References (object/region), Opaque
   - **Compound types**: Struct-like with nested members
@@ -235,6 +236,12 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
   - Lint issues: 0 (34+ linters) ✅
   - TODO items: 0 (all resolved) ✅
   - Official HDF5 test suite: 433 files, 98.2% pass rate ✅
+
+- **Security** ✨ NEW:
+  - 4 CVEs fixed (CVE-2025-7067, CVE-2025-6269, CVE-2025-2926, CVE-2025-44905) ✅
+  - Overflow protection throughout (SafeMultiply, buffer validation) ✅
+  - Security limits: 1GB chunks, 64MB attributes, 16MB strings ✅
+  - 39 security test cases, all passing ✅
 
 ### ✍️ Write Support - Feature Complete!
 **Production-ready write support with all features!** ✅
@@ -385,8 +392,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Status**: Stable - Production-ready with feature-complete read/write support
-**Version**: v0.12.0 (98.2% official HDF5 test suite pass rate, 86.1% coverage)
+**Status**: Stable - HDF5 2.0.0 compatible with security hardening
+**Version**: v0.13.0 (4 CVEs fixed, AI/ML datatypes, 86.1% coverage, 0 lint issues)
 **Last Updated**: 2025-11-13
 
 ---

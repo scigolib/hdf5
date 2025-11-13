@@ -289,46 +289,59 @@ go build -o analyze
 
 ## 🧪 Creating Test Files
 
-If you don't have HDF5 files to test with, you can create them using Python:
+You can create test HDF5 files directly in pure Go (no Python needed!):
 
-```python
-# create_test.py
-import h5py
-import numpy as np
+```go
+package main
 
-# Create a new HDF5 file
-with h5py.File('test.h5', 'w') as f:
-    # Create datasets with different types
-    f.create_dataset('integers', data=np.arange(100, dtype=np.int32))
-    f.create_dataset('floats', data=np.random.rand(50).astype(np.float64))
-    f.create_dataset('strings', data=np.array([b'hello', b'world']))
+import (
+    "log"
+    "github.com/scigolib/hdf5"
+)
 
-    # Create a group
-    grp = f.create_group('experiments')
-    grp.create_dataset('trial1', data=np.array([1, 2, 3, 4, 5], dtype=np.int32))
-    grp.create_dataset('trial2', data=np.array([6, 7, 8, 9, 10], dtype=np.int32))
+func main() {
+    // Create a new HDF5 file
+    fw, err := hdf5.CreateForWrite("test.h5", hdf5.CreateTruncate)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer fw.Close()
 
-    # Nested groups
-    subgrp = grp.create_group('subgroup')
-    subgrp.create_dataset('result', data=np.array([42], dtype=np.int32))
+    // Create datasets with different types
+    dsInt, _ := fw.CreateDataset("/integers", hdf5.Int32, []uint64{100})
+    dsFloat, _ := fw.CreateDataset("/floats", hdf5.Float64, []uint64{50})
+    dsStr, _ := fw.CreateDataset("/strings", hdf5.StringFixed(10), []uint64{2})
 
-    # Chunked dataset with compression
-    f.create_dataset('compressed',
-                     data=np.random.rand(1000, 1000),
-                     chunks=(100, 100),
-                     compression='gzip',
-                     compression_opts=6)
+    // Write data
+    integers := make([]int32, 100)
+    for i := range integers {
+        integers[i] = int32(i)
+    }
+    dsInt.WriteInt32(integers)
 
-print("Created test.h5")
+    floats := make([]float64, 50)
+    for i := range floats {
+        floats[i] = float64(i) * 0.5
+    }
+    dsFloat.Write(floats)
+
+    dsStr.WriteStrings([]string{"hello", "world"})
+
+    // Create groups
+    grp, _ := fw.CreateGroup("/experiments")
+    grp.CreateDataset("trial1", hdf5.Int32, []uint64{5})
+    grp.CreateDataset("trial2", hdf5.Int32, []uint64{5})
+
+    // Nested groups
+    subgrp, _ := fw.CreateGroup("/experiments/subgroup")
+    dsResult, _ := subgrp.CreateDataset("result", hdf5.Int32, []uint64{1})
+    dsResult.WriteInt32([]int32{42})
+
+    log.Println("Created test.h5")
+}
 ```
 
-```bash
-# Install h5py
-pip install h5py numpy
-
-# Run script
-python create_test.py
-```
+**Pure Go workflow** - Create files with this library, verify with h5dump or Python h5py!
 
 ---
 
@@ -350,17 +363,20 @@ python create_test.py
 **A**: **No!** This is a pure Go implementation with zero C dependencies. Works on all Go-supported platforms.
 
 ### Q: What HDF5 versions are supported?
-**A**: The library supports HDF5 format with superblock v0, v2, and v3 (covering HDF5 1.0 through 1.14+).
+**A**: The library supports HDF5 format with superblock v0, v2, v3, and v4 (covering HDF5 1.0 through HDF5 2.0.0+).
 
 ### Q: What datatypes are supported?
-**A**: Currently supported:
-- Fixed-point integers (int32, int64)
-- Floating-point (float32, float64)
-- Fixed-length strings
-- Variable-length strings
+**A**: Fully supported:
+- Fixed-point integers (int8-64, uint8-64)
+- Floating-point (float32, float64, FP8, bfloat16)
+- Fixed-length and variable-length strings
 - Compound types (struct-like)
+- Arrays (fixed-size)
+- Enums (named integers)
+- References (object/region)
+- Opaque (binary blobs)
 
-Not yet supported: Arrays, enums, references, opaque, time types
+Not supported: H5T_TIME (deprecated in HDF5 spec)
 
 ### Q: What compression formats work?
 **A**: Currently:
@@ -428,12 +444,12 @@ if err != nil {
 
 ## 🚀 Production Readiness
 
-**Current Status: ~98% ready for reading common HDF5 files**
+**Current Status: Production-ready for reading and writing HDF5 files**
 
 ✅ **Ready for production use** if your files contain:
-- Standard datatypes (int, float, string, compound)
+- Standard datatypes (int, float, string, compound, arrays, enums)
 - GZIP compression
-- Superblock v0, v2, or v3
+- Superblock v0, v2, v3, or v4 (HDF5 2.0.0 compatible)
 - Object header v2
 
 **Production Status**:
@@ -460,4 +476,3 @@ After completing this quick start, explore:
 ---
 
 *Last Updated: 2025-11-13*
-*Version: 0.12.0*

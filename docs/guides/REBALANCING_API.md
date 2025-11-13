@@ -991,7 +991,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 ## API Stability
 
 **Stability Guarantee**:
-- ✅ All APIs documented here are **stable** as of v0.12.0
+- ✅ All APIs documented here are **stable** and production-ready
 - ✅ Option names, signatures, and semantics will not change (backward compatible)
 - ✅ New options may be added (won't break existing code)
 

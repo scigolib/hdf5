@@ -105,7 +105,7 @@ Error: unsupported superblock version: 1
 
 **Cause**: File uses superblock version 1 (rare, used in very old HDF5 files).
 
-**Supported Versions**: 0, 2, 3
+**Supported Versions**: 0, 2, 3, 4 (HDF5 2.0.0)
 
 **Solution**:
 
@@ -700,9 +700,8 @@ Include:
 
 **Good issue report template**:
 
-```markdown
 **Go version**: go1.25.1 linux/amd64
-**Library version**: github.com/scigolib/hdf5 v0.12.0
+**Library version**: github.com/scigolib/hdf5 vX.Y.Z (use `go list -m github.com/scigolib/hdf5`)
 **OS**: Ubuntu 22.04
 
 **Problem**: Cannot read string dataset
@@ -740,7 +739,7 @@ GROUP "/" {
 - ReadStrings() method
 - Read() method
 - Checked file with Python h5py (works fine there)
-```
+
 
 ### Where to Get Help
 
@@ -760,4 +759,3 @@ GROUP "/" {
 ---
 
 *Last Updated: 2025-11-13*
-*Version: 0.12.0*
