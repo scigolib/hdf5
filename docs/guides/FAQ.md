@@ -241,7 +241,7 @@ GZIP compression fully supported (both reading and writing).
 - ✅ Modern groups (object headers)
 - ✅ Both old and new B-tree formats
 
-**Compatibility**: Reads and writes files compatible with HDF5 1.0 (1998) through latest HDF5 1.14+ (2024). Ready for future HDF5 formats (will be added in v1.x.x updates).
+**Compatibility**: Reads and writes files compatible with HDF5 1.0 (1998) through HDF5 2.0.0 (2025). Future HDF5 format updates will be added in subsequent releases.
 
 ### Does it support large files?
 
@@ -591,7 +591,7 @@ See [ROADMAP.md](../../ROADMAP.md) for complete roadmap.
 - Streaming API for large datasets
 - Advanced filters (LZF, SZIP)
 - Parallel I/O
-- Ready for HDF5 2.0.0 (currently in development, will be added in v1.x.x updates)
+- ✅ HDF5 2.0.0 supported (format specification v4.0, superblock v0-v3)
 
 ### Will v1.0.0 break the API?
 
@@ -605,8 +605,8 @@ See [ROADMAP.md](../../ROADMAP.md) for complete roadmap.
 **Version strategy**:
 - v0.x.x (current): Stable API, production-ready
 - v1.0.0 (future): LTS release with long-term support guarantee
-- v1.x.x (future): Backward compatible updates
-- v2.0.0 (future): Next major version (only if necessary)
+- v0.14.0+ (future): Community-driven enhancements (compression filters, parallel I/O, SWMR mode)
+- v1.0.0 (future): Production-ready stable release
 
 See [ROADMAP.md](../../ROADMAP.md) for versioning strategy.
 
