@@ -926,6 +926,6 @@ Copy this for each release:
 
 ---
 
-*Last Updated: 2025-11-01*
-*Your Project vX.Y.Z Release Process*
+*Last Updated: 2025-11-13*
+*HDF5 Go Library Release Process*
 *Git-Flow Standard 2025 - Researched and Updated*
