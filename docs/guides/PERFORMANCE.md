@@ -1,9 +1,8 @@
 # Performance Guide - HDF5 Go Library
 
 > **Best practices for optimal performance with B-tree rebalancing and batch operations**
->
-> **Version**: v0.11.5-beta
-> **Last Updated**: 2025-11-02
+
+**Last Updated**: 2025-11-13
 
 ---
 
@@ -300,7 +299,7 @@ fw.EnableRebalancing()
 
 ## Performance Benchmarks
 
-### MVP (v0.11.0-beta) - Single-Leaf B-trees
+### Single-Leaf B-trees
 
 Current implementation uses single-leaf B-trees (depth=0):
 
@@ -478,4 +477,5 @@ fw.RebalanceAllBTrees()
 
 ---
 
-*Last Updated: 2025-11-02 | Version: v0.11.5-beta*
+*Last Updated: 2025-11-13*
+*Version: 0.12.0*

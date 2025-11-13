@@ -60,12 +60,14 @@ jobs:
 
     - name: Upload coverage to Codecov
       if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
-      uses: codecov/codecov-action@v4
-      continue-on-error: true
+      uses: codecov/codecov-action@v5
       with:
-        file: ./coverage.txt
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: ./coverage.txt
         flags: unittests
         name: codecov-unit
+        fail_ci_if_error: false
+        verbose: true
 
   lint:
     name: Lint

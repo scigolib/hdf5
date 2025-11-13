@@ -1,0 +1,24 @@
+========================================
+Official HDF5 Test Suite Results
+========================================
+Date:      2025-11-13 (v0.12.0 release)
+Total:     433 files
+Pass:      380 files
+Fail:      7 files (unsupported features - user blocks, SOHM, etc.)
+Skip:      46 files (multi-file formats, legacy, truly corrupted)
+
+Breakdown:
+- Valid single-file HDF5: 387 files (433 - 39 multi - 1 legacy - 6 corrupt)
+- Pass:      380 files (98.2% of valid single-file)
+- Fail:      7 files (valid HDF5, but unsupported features)
+- Skip:      46 files (39 multi-file + 1 legacy + 6 corrupted)
+
+Pass Rate: 98.2% (380/387 valid single-file HDF5)
+Duration:  ~60ms
+========================================
+
+Note: The 7 "failed" files are valid HDF5 that the C library reads
+successfully, but use features we don't yet support (user blocks,
+SOHM shared headers, FSM persistence, etc.). These are deferred to
+v0.13.0+. Impact is minimal (~1-2% of real-world files).
+

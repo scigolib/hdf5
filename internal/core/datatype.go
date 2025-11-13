@@ -34,6 +34,66 @@ type DatatypeMessage struct {
 	Properties    []byte
 }
 
+// calculateCompoundPropsLen calculates the exact length of compound datatype properties.
+// This is needed for inline parsing of nested compounds, where we can't just take "all remaining".
+//
+// Algorithm:
+//  1. Read member count (4 bytes for v3, 2 bytes embedded in header for v1)
+//  2. For each member:
+//     - Skip name (null-terminated, padded to 8-byte boundary for v1)
+//     - Skip offset field (4 bytes)
+//     - Skip array info (28 bytes for v1, not present in v3)
+//     - Recursively calculate member datatype size
+//  3. Return total properties length
+func calculateCompoundPropsLen(properties []byte, version uint8) (int, error) {
+	// Version 1 or 2: member count is embedded in ClassBitField (not in properties)
+	// This is complex, so for now return error to use fallback
+	if version != 3 {
+		return 0, errors.New("compound v1/v2 inline size calculation not yet implemented")
+	}
+
+	// Version 3: member count is first 4 bytes
+	if len(properties) < 4 {
+		return 0, errors.New("compound v3 properties too short for member count")
+	}
+	numMembers := binary.LittleEndian.Uint32(properties[0:4])
+	offset := 4
+
+	for i := uint32(0); i < numMembers; i++ {
+		// Skip member name (null-terminated, NOT padded in v3)
+		nameEnd := offset
+		for nameEnd < len(properties) && properties[nameEnd] != 0 {
+			nameEnd++
+		}
+		if nameEnd >= len(properties) {
+			return 0, fmt.Errorf("member %d: name not null-terminated", i)
+		}
+		offset = nameEnd + 1 // Skip past null terminator
+
+		// Skip member offset field (4 bytes)
+		if offset+4 > len(properties) {
+			return 0, fmt.Errorf("member %d: offset field truncated", i)
+		}
+		offset += 4
+
+		// Parse member datatype to calculate its size
+		if offset+8 > len(properties) {
+			return 0, fmt.Errorf("member %d: datatype header truncated", i)
+		}
+
+		// Recursively calculate member datatype size
+		//nolint:gosec // G602: bounds checked above (offset+8 <= len(properties))
+		memberDt, err := ParseDatatypeMessage(properties[offset:])
+		if err != nil {
+			return 0, fmt.Errorf("member %d: failed to parse datatype: %w", i, err)
+		}
+		memberDtSize := 8 + len(memberDt.Properties)
+		offset += memberDtSize
+	}
+
+	return offset, nil
+}
+
 // ParseDatatypeMessage parses a datatype message from header message data.
 func ParseDatatypeMessage(data []byte) (*DatatypeMessage, error) {
 	if len(data) < 8 {
@@ -52,12 +112,54 @@ func ParseDatatypeMessage(data []byte) (*DatatypeMessage, error) {
 	// Bytes 4-7: Size.
 	size := binary.LittleEndian.Uint32(data[4:8])
 
+	// Calculate property size based on class
+	// This is needed for inline parsing (e.g., compound members)
+	var propsLen int
+	switch class {
+	case DatatypeFixed: // Integer
+		propsLen = 4 // bit offset + precision
+	case DatatypeFloat:
+		propsLen = 12 // full IEEE 754 info
+	case DatatypeBitfield:
+		propsLen = 4
+	case DatatypeTime:
+		propsLen = 2
+	case DatatypeString:
+		// String properties are variable, but typically minimal
+		// For now, take all remaining (safe for top-level parsing)
+		propsLen = len(data) - 8
+	case DatatypeCompound:
+		// Compound types: properties are variable length and self-describing
+		// For inline parsing (nested compounds), we must calculate the exact size
+		// by walking through the member definitions
+		calculatedLen, err := calculateCompoundPropsLen(data[8:], version)
+		if err != nil {
+			// Fallback: take all remaining (for backward compatibility)
+			propsLen = len(data) - 8
+		} else {
+			propsLen = calculatedLen
+		}
+	case DatatypeArray, DatatypeEnum, DatatypeReference, DatatypeOpaque, DatatypeVarLen:
+		// Complex types: properties are variable length
+		// For inline parsing, take all remaining
+		propsLen = len(data) - 8
+	default:
+		// Unknown type: take all remaining
+		propsLen = len(data) - 8
+	}
+
+	// Ensure we don't read past end of data
+	if 8+propsLen > len(data) {
+		propsLen = len(data) - 8
+	}
+
+	//nolint:gosec // G602: bounds checked above (8+propsLen <= len(data))
 	return &DatatypeMessage{
 		Class:         class,
 		Version:       version,
 		Size:          size,
 		ClassBitField: classBitField,
-		Properties:    data[8:],
+		Properties:    data[8 : 8+propsLen],
 	}, nil
 }
 

@@ -43,7 +43,7 @@ Add the library to your project's `go.mod`:
 go mod init myproject
 
 # Add the library
-go get github.com/scigolib/hdf5@v0.11.6-beta
+go get github.com/scigolib/hdf5@v0.12.0
 ```
 
 Or manually add to `go.mod`:
@@ -54,7 +54,7 @@ module myproject
 go 1.25
 
 require (
-    github.com/scigolib/hdf5 v0.11.6-beta
+    github.com/scigolib/hdf5 v0.12.0
 )
 ```
 
@@ -94,7 +94,7 @@ import (
 
 func main() {
     fmt.Println("HDF5 library imported successfully!")
-    fmt.Printf("Library version: v0.11.6-beta\n")
+    fmt.Printf("Library version: v0.12.0\n")
 }
 ```
 
@@ -106,7 +106,7 @@ go run test_install.go
 Expected output:
 ```
 HDF5 library imported successfully!
-Library version: v0.11.6-beta
+Library version: v0.12.0
 ```
 
 ### Functional Verification
@@ -289,7 +289,7 @@ go get -u github.com/scigolib/hdf5
 ### Update to Specific Version
 
 ```bash
-go get github.com/scigolib/hdf5@v0.11.6-beta
+go get github.com/scigolib/hdf5@v0.12.0
 ```
 
 ### Check Current Version
@@ -306,7 +306,7 @@ go list -m github.com/scigolib/hdf5
 
 **Problem**:
 ```
-go: github.com/scigolib/hdf5@v0.11.6-beta: reading github.com/scigolib/hdf5/go.mod at revision v0.11.6-beta: unknown revision v0.11.6-beta
+go: github.com/scigolib/hdf5@v0.12.0: reading github.com/scigolib/hdf5/go.mod at revision v0.12.0: unknown revision v0.12.0
 ```
 
 **Solution**:
@@ -388,5 +388,5 @@ After installation, explore:
 
 ---
 
-*Last Updated: 2025-11-06*
-*Version: 0.11.6-beta*
+*Last Updated: 2025-11-13*
+*Version: 0.12.0*

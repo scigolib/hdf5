@@ -310,15 +310,18 @@ func TestEncodeDatatypeMessage_String(t *testing.T) {
 }
 
 func TestEncodeDatatypeMessage_Compound(t *testing.T) {
-	// Compound types not supported in MVP
+	// Compound types now supported (v0.11.7+)
+	// This test verifies error handling for invalid compound (no members)
 	dt := &DatatypeMessage{
-		Class: DatatypeCompound,
-		Size:  32,
+		Class:      DatatypeCompound,
+		Version:    3,
+		Size:       32,
+		Properties: nil, // Invalid: no member definitions
 	}
 
 	_, err := EncodeDatatypeMessage(dt)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not yet implemented")
+	assert.Contains(t, err.Error(), "compound datatype has no member definitions")
 }
 
 func TestEncodeDataspaceMessage(t *testing.T) {

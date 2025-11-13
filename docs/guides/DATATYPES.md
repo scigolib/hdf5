@@ -411,16 +411,20 @@ fmt.Printf("%.6f\n", value)  // 3.141593 (shows only 6 digits)
 
 **Status**:
 - ✅ Reading: Fully supported
-- ❌ Writing: Planned for v0.12.0-rc.1
+- ✅ Writing: Fully supported (v0.12.0)
 
-**Example** (Reading works):
+**Example** (Reading):
 ```go
 // Read compound data
 data, err := ds.ReadCompound()
 // data is map[string]interface{} with field names as keys
 ```
 
-**Workaround for Writing**: Use multiple separate datasets (one per field) until compound write is implemented.
+**Example** (Writing):
+```go
+// Write compound data (v0.12.0+)
+err := ds.WriteCompound(compoundData)
+```
 
 ---
 
@@ -549,5 +553,5 @@ func main() {
 
 ---
 
-*Last Updated: 2025-11-02*
-*Version: 0.11.4-beta*
+*Last Updated: 2025-11-13*
+*Version: 0.12.0*

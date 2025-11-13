@@ -135,10 +135,6 @@ func parseCompoundV3(compound *CompoundType, properties []byte) (*CompoundType, 
 	offset := 4
 
 	for i := uint32(0); i < numMembers; i++ {
-		if offset+8 > len(properties) {
-			return nil, errors.New("compound v3 properties truncated")
-		}
-
 		member := CompoundMember{}
 
 		// Member name (null-terminated, NOT padded in version 3).
@@ -149,7 +145,7 @@ func parseCompoundV3(compound *CompoundType, properties []byte) (*CompoundType, 
 		}
 
 		if nameEnd >= len(properties) {
-			return nil, errors.New("member name not null-terminated")
+			return nil, fmt.Errorf("member %d: name not null-terminated (offset=%d, len=%d)", i, offset, len(properties))
 		}
 
 		member.Name = string(properties[nameStart:nameEnd])
@@ -157,14 +153,14 @@ func parseCompoundV3(compound *CompoundType, properties []byte) (*CompoundType, 
 
 		// Member byte offset (uint32).
 		if offset+4 > len(properties) {
-			return nil, errors.New("compound v3 member offset truncated")
+			return nil, fmt.Errorf("member %d (%s): offset field truncated (offset=%d, len=%d)", i, member.Name, offset, len(properties))
 		}
 		member.Offset = binary.LittleEndian.Uint32(properties[offset : offset+4])
 		offset += 4
 
 		// Member datatype (recursive parse).
 		if offset+8 > len(properties) {
-			return nil, fmt.Errorf("compound v3 properties truncated (member %d datatype)", i)
+			return nil, fmt.Errorf("member %d (%s): datatype header truncated (offset=%d, need 8 more bytes, have %d)", i, member.Name, offset, len(properties)-offset)
 		}
 
 		memberType, err := ParseDatatypeMessage(properties[offset:])

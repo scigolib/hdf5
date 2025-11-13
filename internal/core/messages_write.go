@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 )
 
@@ -313,12 +314,32 @@ func encodeDatatypeString(dt *DatatypeMessage) ([]byte, error) {
 	return buf, nil
 }
 
-// encodeDatatypeCompound encodes compound datatype (basic support for MVP).
-func encodeDatatypeCompound(_ *DatatypeMessage) ([]byte, error) {
-	// For MVP, compound types are simplified
-	// In full implementation, this would encode member definitions
-	// For now, return error as compound writing is not fully supported in MVP
-	return nil, fmt.Errorf("compound datatype encoding not yet implemented in MVP")
+// encodeDatatypeCompound encodes compound datatype.
+// This function expects the compound type to already be fully encoded in dt.Properties.
+// Use EncodeCompoundDatatypeV3() or EncodeCompoundDatatypeV1() to create the full encoding.
+func encodeDatatypeCompound(dt *DatatypeMessage) ([]byte, error) {
+	// The compound datatype should already be fully encoded (header + properties)
+	// This was created by EncodeCompoundDatatypeV3/V1, which includes everything
+	if len(dt.Properties) == 0 {
+		return nil, errors.New("compound datatype has no member definitions")
+	}
+
+	// Build full message: 8-byte header + properties
+	totalSize := 8 + len(dt.Properties)
+	buf := make([]byte, totalSize)
+
+	// Encode header (8 bytes)
+	// Byte 0-3: Class (4 bits) | Version (4 bits) | ClassBitField (24 bits)
+	classAndVersion := uint32(dt.Class) | (uint32(dt.Version) << 4) | (dt.ClassBitField << 8)
+	binary.LittleEndian.PutUint32(buf[0:4], classAndVersion)
+
+	// Byte 4-7: Size
+	binary.LittleEndian.PutUint32(buf[4:8], dt.Size)
+
+	// Byte 8+: Properties (member definitions)
+	copy(buf[8:], dt.Properties)
+
+	return buf, nil
 }
 
 // encodeDatatypeVLen encodes variable-length datatype (strings, ragged arrays).

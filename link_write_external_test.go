@@ -9,7 +9,6 @@ import (
 )
 
 // TestCreateExternalLink_BasicCreation tests basic external link creation API.
-// MVP v0.11.5-beta: Tests that API exists and returns not-implemented error.
 func TestCreateExternalLink_BasicCreation(t *testing.T) {
 	tempDir := t.TempDir()
 	filename := filepath.Join(tempDir, "test_extlink_basic.h5")
@@ -18,24 +17,31 @@ func TestCreateExternalLink_BasicCreation(t *testing.T) {
 	require.NoError(t, err)
 	defer fw.Close()
 
-	// Create /data group
-	_, err = fw.CreateGroup("/data")
+	// Create /links group
+	_, err = fw.CreateGroup("/links")
 	require.NoError(t, err)
 
-	// Create a dataset
-	ds, err := fw.CreateDataset("/data/temperature", Float64, []uint64{5})
-	require.NoError(t, err)
-	require.NotNil(t, ds)
-
-	data := []float64{1.0, 2.0, 3.0, 4.0, 5.0}
-	err = ds.Write(data)
-	require.NoError(t, err)
-
-	// Try to create external link to dataset in another file
-	// MVP v0.11.5-beta: Should return not-implemented error
+	// Create external link to dataset in another file
 	err = fw.CreateExternalLink("/links/external1", "other.h5", "/data/dataset1")
-	assert.Error(t, err, "External link creation should return not-implemented error in MVP")
-	assert.Contains(t, err.Error(), "not yet implemented", "Error should indicate feature not yet implemented")
+	assert.NoError(t, err, "External link creation should succeed")
+
+	// Verify file was written
+	err = fw.Close()
+	require.NoError(t, err)
+
+	// Verify file can be opened (round-trip test)
+	f, err := Open(filename)
+	require.NoError(t, err)
+	defer f.Close()
+
+	// Verify root group exists (external link written successfully)
+	root := f.Root()
+	require.NotNil(t, root)
+
+	// Verify groups exist in structure
+	children := root.Children()
+	require.NotNil(t, children)
+	assert.Greater(t, len(children), 0, "root should have at least one child (links group)")
 }
 
 // TestCreateExternalLink_ValidFileNames tests various valid file name formats.
@@ -77,10 +83,7 @@ func TestCreateExternalLink_ValidFileNames(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := fw.CreateExternalLink(tt.linkPath, tt.fileName, "/dataset")
-
-			// MVP: All should fail with "not yet implemented" (validation should pass)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "not yet implemented", "Should get not-implemented, not validation error")
+			assert.NoError(t, err, "Valid external link should succeed")
 		})
 	}
 }
@@ -219,10 +222,13 @@ func TestCreateExternalLink_AbsoluteFilePath(t *testing.T) {
 	require.NoError(t, err)
 	defer fw.Close()
 
+	// Create /links group
+	_, err = fw.CreateGroup("/links")
+	require.NoError(t, err)
+
 	// Test absolute path (Unix-style)
 	err = fw.CreateExternalLink("/links/ext1", "/absolute/path/file.h5", "/dataset1")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not yet implemented", "Should get not-implemented, not validation error")
+	assert.NoError(t, err, "Absolute file path should be allowed")
 }
 
 // TestCreateExternalLink_RelativeFilePath tests external link with relative file path.
@@ -234,15 +240,17 @@ func TestCreateExternalLink_RelativeFilePath(t *testing.T) {
 	require.NoError(t, err)
 	defer fw.Close()
 
+	// Create /links group
+	_, err = fw.CreateGroup("/links")
+	require.NoError(t, err)
+
 	// Test relative path
 	err = fw.CreateExternalLink("/links/ext1", "./relative/file.h5", "/dataset1")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not yet implemented", "Should get not-implemented, not validation error")
+	assert.NoError(t, err, "Relative file path should be allowed")
 
 	// Test relative path with subdirectory
 	err = fw.CreateExternalLink("/links/ext2", "subdir/file.h5", "/group1/dataset2")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not yet implemented", "Should get not-implemented, not validation error")
+	assert.NoError(t, err, "Relative file path should be allowed")
 }
 
 // TestCreateExternalLink_WindowsPath tests external link with Windows-style paths.
@@ -254,16 +262,15 @@ func TestCreateExternalLink_WindowsPath(t *testing.T) {
 	require.NoError(t, err)
 	defer fw.Close()
 
+	// Create /links group
+	_, err = fw.CreateGroup("/links")
+	require.NoError(t, err)
+
 	// Test Windows absolute path (C:\path\file.h5)
 	// Note: filepath handles OS-specific path separators
 	windowsPath := `C:\Users\Data\file.h5`
 	err = fw.CreateExternalLink("/links/ext1", windowsPath, "/dataset1")
-	assert.Error(t, err)
-	// Should either succeed validation or fail with not-implemented (not path traversal)
-	if !assert.Contains(t, err.Error(), "not yet implemented") {
-		// If it fails, it should not be due to path traversal (no ".." in path)
-		assert.NotContains(t, err.Error(), "path traversal")
-	}
+	assert.NoError(t, err, "Windows path should be allowed (no path traversal)")
 }
 
 // TestValidateExternalFileName tests file name validation function.
