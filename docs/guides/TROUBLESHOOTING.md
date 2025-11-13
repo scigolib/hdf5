@@ -105,7 +105,7 @@ Error: unsupported superblock version: 1
 
 **Cause**: File uses superblock version 1 (rare, used in very old HDF5 files).
 
-**Supported Versions**: 0, 2, 3, 4 (HDF5 2.0.0)
+**Supported Versions**: 0, 2, 3 (HDF5 2.0.0 uses v3)
 
 **Solution**:
 

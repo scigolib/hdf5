@@ -363,7 +363,7 @@ func main() {
 **A**: **No!** This is a pure Go implementation with zero C dependencies. Works on all Go-supported platforms.
 
 ### Q: What HDF5 versions are supported?
-**A**: The library supports HDF5 format with superblock v0, v2, v3, and v4 (covering HDF5 1.0 through HDF5 2.0.0+).
+**A**: The library supports HDF5 format with superblock v0, v2, and v3 (covering HDF5 1.0 through HDF5 2.0.0).
 
 ### Q: What datatypes are supported?
 **A**: Fully supported:
@@ -425,7 +425,7 @@ if err != nil {
 
 ### "unsupported superblock version" error
 
-**Solution**: Your HDF5 file uses a format version we don't support yet (v1 or v4+). Please file an issue at https://github.com/scigolib/hdf5/issues with:
+**Solution**: Your HDF5 file uses a format version we don't support yet (v1). Please file an issue at https://github.com/scigolib/hdf5/issues with:
 - HDF5 file (if shareable)
 - Output of `h5dump -H yourfile.h5`
 - How the file was created (tool/library used)
@@ -449,7 +449,7 @@ if err != nil {
 ✅ **Ready for production use** if your files contain:
 - Standard datatypes (int, float, string, compound, arrays, enums)
 - GZIP compression
-- Superblock v0, v2, v3, or v4 (HDF5 2.0.0 compatible)
+- Superblock v0, v2, or v3 (HDF5 2.0.0 compatible)
 - Object header v2
 
 **Production Status**:

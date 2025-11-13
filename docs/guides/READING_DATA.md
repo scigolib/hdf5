@@ -46,7 +46,7 @@ func main() {
 ### File Properties
 
 ```go
-// Get superblock version (0, 2, 3, or 4)
+// Get superblock version (0, 2, or 3)
 version := file.SuperblockVersion()
 
 // Get root group

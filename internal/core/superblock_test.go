@@ -241,14 +241,14 @@ func TestSuperblockWrite(t *testing.T) {
 		defer tmpFile.Close()
 
 		sb := &Superblock{
-			Version:    1, // v1 not supported (only v0, v2, and v4 are supported).
+			Version:    1, // v1 not supported (only v0, v2, and v3 are supported).
 			OffsetSize: 8,
 			LengthSize: 8,
 		}
 
 		err = sb.WriteTo(tmpFile, 1024)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "only superblock version 0, 2, and 4 are supported")
+		assert.Contains(t, err.Error(), "only superblock version 0, 2, and 3 are supported")
 	})
 
 	t.Run("rejects invalid sizes", func(t *testing.T) {
@@ -327,60 +327,7 @@ func TestSuperblockWrite(t *testing.T) {
 	})
 }
 
-// TestSuperblockV4_Mock tests reading superblock version 4 with mock data.
-func TestSuperblockV4_Mock(t *testing.T) {
-	// Create mock v4 superblock
-	data := createMockSuperblockV4(t, 1) // CRC32 algorithm
-
-	sb, err := ReadSuperblock(bytes.NewReader(data))
-	require.NoError(t, err)
-
-	assert.Equal(t, uint8(4), sb.Version)
-	assert.Equal(t, uint8(8), sb.OffsetSize)
-	assert.Equal(t, uint8(8), sb.LengthSize)
-	assert.NotEqual(t, uint64(0xFFFFFFFFFFFFFFFF), sb.SuperExtension,
-		"v4 requires extension")
-	assert.Equal(t, uint8(1), sb.ChecksumAlgorithm, "expected CRC32 algorithm")
-	assert.Equal(t, binary.LittleEndian, sb.Endianness)
-}
-
-// TestSuperblockV4_ChecksumValidation tests checksum validation for different algorithms.
-func TestSuperblockV4_ChecksumValidation(t *testing.T) {
-	tests := []struct {
-		name            string
-		algorithm       uint8
-		corruptChecksum bool
-		wantErr         bool
-	}{
-		{"No checksum", 0, false, false},
-		{"CRC32 valid", 1, false, false},
-		{"CRC32 corrupted", 1, true, true},
-		{"Fletcher32 valid", 2, false, false},
-		{"Fletcher32 corrupted", 2, true, true},
-		{"Unknown algorithm", 99, false, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data := createMockSuperblockV4(t, tt.algorithm)
-
-			if tt.corruptChecksum {
-				// Corrupt checksum (byte 48-51)
-				data[48] ^= 0xFF
-			}
-
-			_, err := ReadSuperblock(bytes.NewReader(data))
-
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
-// TestSuperblockBackwardCompatibility ensures v0, v2, v3 still work with v4 support added.
+// TestSuperblockBackwardCompatibility ensures v0, v2, v3 still work.
 func TestSuperblockBackwardCompatibility(t *testing.T) {
 	versions := []struct {
 		version uint8
@@ -389,7 +336,6 @@ func TestSuperblockBackwardCompatibility(t *testing.T) {
 		{0, createMockSuperblockV0},
 		{2, createMockSuperblockV2},
 		{3, createMockSuperblockV3},
-		{4, func(t *testing.T) []byte { return createMockSuperblockV4(t, 1) }},
 	}
 
 	for _, tc := range versions {
@@ -403,85 +349,7 @@ func TestSuperblockBackwardCompatibility(t *testing.T) {
 	}
 }
 
-// TestSuperblockV4_MandatoryExtension tests that v4 rejects missing extension.
-func TestSuperblockV4_MandatoryExtension(t *testing.T) {
-	// Test that v4 rejects UNDEFINED extension address
-	data := createMockSuperblockV4(t, 1) // CRC32
-
-	// Set extension address to UNDEFINED (0xFFFFFFFFFFFFFFFF) at bytes 20-27
-	binary.LittleEndian.PutUint64(data[20:28], 0xFFFFFFFFFFFFFFFF)
-
-	// Recompute checksum (bytes 8-47 are checksummed)
-	checksum := crc32.ChecksumIEEE(data[8:48])
-	binary.LittleEndian.PutUint32(data[48:52], checksum)
-
-	_, err := ReadSuperblock(bytes.NewReader(data))
-
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "requires extension")
-}
-
 // Helper functions to create mock superblocks for testing.
-
-// createMockSuperblockV4 creates a mock superblock version 4 for testing.
-func createMockSuperblockV4(t *testing.T, checksumAlgorithm uint8) []byte {
-	t.Helper()
-
-	buf := make([]byte, 52)
-
-	// Signature (bytes 0-7)
-	copy(buf[0:8], []byte{0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n'})
-
-	// Version = 4 (byte 8)
-	buf[8] = 4
-
-	// Endianness = 0 (little-endian) (byte 9)
-	buf[9] = 0x00
-
-	// Size of offsets = 8 (byte 10, code 0x33 = 8 bytes for both)
-	buf[10] = 0x33
-
-	// Reserved (byte 11)
-	buf[11] = 0x00
-
-	// Base address = 0 (bytes 12-19)
-	binary.LittleEndian.PutUint64(buf[12:20], 0)
-
-	// Superblock extension address = 512 (bytes 20-27) - MANDATORY
-	binary.LittleEndian.PutUint64(buf[20:28], 512)
-
-	// End of file address = 1024 (bytes 28-35)
-	binary.LittleEndian.PutUint64(buf[28:36], 1024)
-
-	// Root group object header address = 256 (bytes 36-43)
-	binary.LittleEndian.PutUint64(buf[36:44], 256)
-
-	// Checksum algorithm (byte 44)
-	buf[44] = checksumAlgorithm
-
-	// Reserved (bytes 45-47) = 0
-	buf[45] = 0
-	buf[46] = 0
-	buf[47] = 0
-
-	// Compute and store checksum (bytes 48-51)
-	// Checksum covers bytes 8-47 (40 bytes)
-	var checksum uint32
-	switch checksumAlgorithm {
-	case 0: // No checksum
-		checksum = 0
-	case 1: // CRC32
-		checksum = crc32.ChecksumIEEE(buf[8:48])
-	case 2: // Fletcher32
-		checksum = computeFletcher32ForTest(buf[8:48])
-	default:
-		// For testing unknown algorithm, use dummy checksum
-		checksum = 0xDEADBEEF
-	}
-	binary.LittleEndian.PutUint32(buf[48:52], checksum)
-
-	return buf
-}
 
 // createMockSuperblockV0 creates a mock superblock version 0 for testing.
 func createMockSuperblockV0(t *testing.T) []byte {
@@ -587,26 +455,4 @@ func createMockSuperblockV3(t *testing.T) []byte {
 	}
 
 	return data
-}
-
-// computeFletcher32ForTest computes Fletcher-32 checksum for testing.
-// This duplicates the logic from superblock.go for test isolation.
-func computeFletcher32ForTest(data []byte) uint32 {
-	var sum1, sum2 uint16
-
-	// Process 16-bit words
-	for i := 0; i < len(data); i += 2 {
-		var word uint16
-		if i+1 < len(data) {
-			word = binary.LittleEndian.Uint16(data[i : i+2])
-		} else {
-			// Last byte (odd length)
-			word = uint16(data[i])
-		}
-
-		sum1 = (sum1 + word) % 65535
-		sum2 = (sum2 + sum1) % 65535
-	}
-
-	return (uint32(sum2) << 16) | uint32(sum1)
 }
