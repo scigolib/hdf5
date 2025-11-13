@@ -71,6 +71,13 @@ func determineChunkKeySize(superblockVersion uint8) uint8 {
 	return 4
 }
 
+// parseLayoutV3 parses HDF5 Data Layout Message version 3.
+// Cognitive complexity is high due to handling 3 distinct layout types
+// (Compact, Contiguous, Chunked) with different binary formats and
+// HDF5 version differences (32-bit vs 64-bit chunk dimensions).
+// This complexity is inherent to the HDF5 format specification.
+//
+//nolint:gocognit,cyclop // Binary format parsing requires handling multiple layout types
 func parseLayoutV3(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLayoutMessage, error) {
 	if len(data) < 2 {
 		return nil, errors.New("layout v3 message too short")
