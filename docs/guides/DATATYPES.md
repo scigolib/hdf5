@@ -27,7 +27,7 @@ HDF5 uses its own type system that maps to native types in different programming
 | **Fixed-point** | H5T_INTEGER | int8-64, uint8-64 | ✅ | ✅ |
 | **Floating-point** | H5T_FLOAT | float32, float64 | ✅ | ✅ |
 | **String** | H5T_STRING | string, []string | ✅ | ✅ |
-| **Compound** | H5T_COMPOUND | map[string]interface{} | ✅ | ❌ Planned |
+| **Compound** | H5T_COMPOUND | map[string]interface{} | ✅ | ✅ |
 | **Array** | H5T_ARRAY | [N]T (fixed arrays) | ✅ | ✅ |
 | **Enum** | H5T_ENUM | Named integer constants | ✅ | ✅ |
 | **Reference** | H5T_REFERENCE | uint64, [12]byte | ✅ | ✅ |
@@ -315,16 +315,7 @@ Compound Type:
   - "scores" : array of 5 × float64
 ```
 
-**Status**: Array fields not yet supported (planned for future release).
-
-**Workaround**: Flatten arrays into separate fields:
-```
-- "name" : string
-- "score_0" : float64
-- "score_1" : float64
-- "score_2" : float64
-...
-```
+**Status**: ✅ Fully supported (including array fields within compounds).
 
 ### Creating Compounds in Python
 
@@ -399,31 +390,6 @@ Float32 values are promoted to float64 without precision loss (but representatio
 
 // For display, round appropriately:
 fmt.Printf("%.6f\n", value)  // 3.141593 (shows only 6 digits)
-```
-
----
-
-## ❌ Not Yet Supported
-
-### Compound Datatype (Write Only)
-
-**HDF5 Type**: `H5T_COMPOUND`
-
-**Status**:
-- ✅ Reading: Fully supported
-- ✅ Writing: Fully supported (v0.12.0)
-
-**Example** (Reading):
-```go
-// Read compound data
-data, err := ds.ReadCompound()
-// data is map[string]interface{} with field names as keys
-```
-
-**Example** (Writing):
-```go
-// Write compound data (v0.12.0+)
-err := ds.WriteCompound(compoundData)
 ```
 
 ---
@@ -554,4 +520,3 @@ func main() {
 ---
 
 *Last Updated: 2025-11-13*
-*Version: 0.12.0*

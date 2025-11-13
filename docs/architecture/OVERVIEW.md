@@ -32,7 +32,7 @@ github.com/scigolib/hdf5/
 │
 ├── internal/                  # Internal implementation (not exported)
 │   ├── core/                  # Core HDF5 structures
-│   │   ├── superblock.go     # File metadata (versions 0, 2, 3)
+│   │   ├── superblock.go     # File metadata (versions 0, 2, 3, 4)
 │   │   ├── objectheader.go   # Object headers (v1 read, v1+v2 write)
 │   │   ├── attribute.go      # Attribute reading and writing
 │   │   ├── datatype.go       # All HDF5 datatypes
@@ -196,7 +196,7 @@ type ObjectHeader struct {
 
 **Responsibilities**:
 - Binary format parsing
-- Version-specific handling (v0, v2, v3 superblocks)
+- Version-specific handling (v0, v2, v3, v4 superblocks)
 - Metadata extraction and encoding
 - Read-Modify-Write (RMW) support
 
@@ -254,7 +254,8 @@ hdf5.Open(filename)
 [1] File signature validation
     ↓
 [2] Superblock parsing (core.ReadSuperblock)
-    ├─→ Determine version (0, 2, or 3)
+    ├─→ Determine version (0, 2, 3, or 4)
+    ├─→ Validate checksum (v4: CRC32/Fletcher32)
     ├─→ Read offset/length sizes
     ├─→ Determine endianness
     └─→ Extract root group address
@@ -273,7 +274,7 @@ hdf5.Open(filename)
 Return File object to user
 ```
 
-### Writing an HDF5 File (NEW)
+### Writing an HDF5 File
 
 ```
 User Code
@@ -282,10 +283,11 @@ hdf5.CreateForWrite(filename, mode)
     ↓
 [1] Create/truncate file
     ↓
-[2] Write Superblock v2 (modern format)
+[2] Write Superblock v2 (modern format, default)
     ├─→ Choose offset/length sizes
     ├─→ Initialize root group address
     └─→ Write checksum
+    Note: v4 read support added, write support planned for future releases
     ↓
 [3] Initialize space allocator
     ↓
@@ -312,7 +314,7 @@ WriteAttribute(name, value)
     ├─→ If ≤7 attrs → Compact (in object header)
     └─→ If ≥8 attrs → Dense (fractal heap + B-tree v2)
     ↓
-[8] Upsert semantics ✨ NEW
+[8] Upsert semantics
     ├─→ If attribute exists → Replace (modify)
     └─→ If not exists → Add (create)
     ↓
@@ -466,6 +468,7 @@ const (
 | 1 | ❌ | ❌ | Same as v0 with B-tree K values |
 | 2 | ✅ | ✅ | Streamlined format (HDF5 1.8+) |
 | 3 | ✅ | ⚠️ | SWMR support (HDF5 1.10+) - read only |
+| 4 | ✅ | ⚠️ | Format 4.0 (HDF5 2.0.0+) with checksum - read only |
 
 ### Object Header Versions
 
@@ -500,7 +503,7 @@ const (
 | Enum | ✅ | ✅ | Named integer constants |
 | Reference | ✅ | ✅ | Object references |
 | Opaque | ✅ | ✅ | Binary blobs with tag |
-| Compound | ✅ | ⚠️ | Struct-like - write deferred to v0.12.0 |
+| Compound | ✅ | ✅ | Struct-like with nested members |
 
 ---
 
@@ -592,7 +595,7 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 ## 📊 Current Status
 
 ### Read Support: 100% ✅
-- All HDF5 formats (superblock v0, v2, v3)
+- All HDF5 formats (superblock v0, v2, v3, v4)
 - All datatypes
 - All layouts (compact, contiguous, chunked)
 - All storage types (compact, dense)
@@ -602,7 +605,7 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 
 ### Write Support: 100% ✅
 - File creation (Truncate/Exclusive modes)
-- Superblock v0 and v2 writing
+- Superblock v0 and v2 writing (v4 read-only)
 - Object Header v1 and v2 writing
 - Dataset writing (contiguous, chunked)
 - All datatypes (including compound, arrays, enums, references)
@@ -621,44 +624,6 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 
 ---
 
-## 🎉 Version History
-
-### v0.12.0 (Released 2025-11-13)
-
-**Production-Ready Stable Release**:
-- ✅ Official HDF5 Test Suite validation (98.2% pass rate, 380/387 files)
-- ✅ Compound datatype writing complete
-- ✅ Soft/external links full implementation
-- ✅ Test coverage 86.1% (exceeds 70% target)
-- ✅ Zero linter issues (34+ linters)
-- ✅ Cross-platform support (Linux, macOS, Windows)
-- ✅ Comprehensive documentation (5 guides, 5 examples)
-- ✅ Production-ready quality metrics
-
-### v0.11.x (October-November 2025)
-
-**Beta Phase - Write Support Development**:
-- ✅ Smart Rebalancing API (auto-tuning, lazy/incremental/default modes)
-- ✅ Attribute modification and deletion (compact & dense storage)
-- ✅ Dense Storage RMW (read-modify-write cycle)
-- ✅ MVP Write Support (file creation, datasets, groups, attributes)
-- ✅ All datatypes (arrays, enums, references, opaque, compound)
-- ✅ Compression (GZIP, Shuffle filter)
-- ✅ Free space management
-- ✅ Upsert semantics for attributes
-
-### v0.10.0 (October 2025)
-
-**Feature-Complete Read Support**:
-- ✅ Object header v1 support
-- ✅ Full attribute reading (compact + dense)
-- ✅ 57 reference test files (100% pass)
-- ✅ 76.3% → 86.1% coverage
-- ✅ Zero TODO/FIXME comments
-- ✅ 5 user guides + 6 examples
-
----
-
 ## 📚 References
 
 - [HDF5 Format Specification v3.0](https://docs.hdfgroup.org/hdf5/latest/_f_m_t3.html)
@@ -668,5 +633,3 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 ---
 
 *Last Updated: 2025-11-13*
-*Version: v0.12.0*
-*Architecture: Read (100%) + Write (85%) + Smart Rebalancing + Attribute RMW Complete*

@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2025-11-13 | **Current Version**: v0.12.0 | **Strategy**: Feature-complete stable release → community adoption → v1.0.0 LTS | **Milestone**: v0.12.0 RELEASED! (2025-11-13) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2025-11-13 | **Current Version**: v0.13.0 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.0 RELEASED! (2025-11-13) → v1.0.0 LTS (Q3 2026)
 
 ---
 
@@ -44,8 +44,10 @@ v0.10.0-beta (READ complete) ✅ RELEASED 2025-10-29
 v0.11.x-beta (WRITE features) ✅ COMPLETE 2025-11-13
          ↓ (~75% → ~100%)
 v0.12.0 (FEATURE COMPLETE + STABLE) ✅ RELEASED 2025-11-13
+         ↓ (1 day - HDF5 2.0.0 compatibility)
+v0.13.0 (HDF5 2.0.0 + SECURITY) ✅ RELEASED 2025-11-13
          ↓ (community adoption + feedback)
-v0.12.x (patch releases) → Bug fixes and minor enhancements
+v0.13.x (patch releases) → Bug fixes and minor enhancements
          ↓ (6-9 months production validation)
 v1.0.0 LTS → Long-term support release (Q3 2026)
 ```
@@ -58,7 +60,14 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - 100% write support achieved
 - API stable, production-ready
 
-**v0.12.x** = Maintenance and community feedback
+**v0.13.0** = HDF5 2.0.0 compatibility + Security hardening ✅ RELEASED
+- Format v4.0 superblock support (CRC32, Fletcher32 validation)
+- 64-bit chunk dimensions (>4GB chunks)
+- AI/ML datatypes (FP8 E4M3/E5M2, bfloat16)
+- 4 CVEs fixed (overflow protection throughout)
+- 86.1% coverage, 0 linter issues
+
+**v0.13.x** = Maintenance and community feedback
 - Bug fixes from production use
 - Performance optimizations
 - Minor feature enhancements
@@ -76,15 +85,21 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-## 📊 Current Status (v0.12.0)
+## 📊 Current Status (v0.13.0)
 
-**Write Support**: 100% Complete! 🎉
+**HDF5 2.0.0 Compatibility**: Complete! 🎉
+**Security**: Hardened with 4 CVEs fixed! 🔒
+**AI/ML Support**: FP8 & bfloat16 ready! 🤖
 
 **What Works**:
 - ✅ File creation (Truncate/Exclusive modes)
+- ✅ **HDF5 2.0.0 Format v4.0** support with checksum validation (CRC32, Fletcher32) ✨ NEW v0.13.0
+- ✅ **64-bit Chunk Dimensions** (>4GB chunks for scientific datasets) ✨ NEW v0.13.0
+- ✅ **AI/ML Datatypes** (FP8 E4M3, FP8 E5M2, bfloat16 - IEEE 754 compliant) ✨ NEW v0.13.0
+- ✅ **Security Hardening** (4 CVEs fixed, overflow protection throughout) ✨ NEW v0.13.0
 - ✅ Datasets (all layouts: contiguous, chunked, compact)
-- ✅ **Dataset resizing** with unlimited dimensions (NEW!)
-- ✅ **Variable-length datatypes**: strings, ragged arrays (NEW!)
+- ✅ Dataset resizing with unlimited dimensions
+- ✅ Variable-length datatypes: strings, ragged arrays
 - ✅ Groups (symbol table format)
 - ✅ Attributes (dense & compact storage)
 - ✅ Attribute modification/deletion (RMW complete)
@@ -93,7 +108,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - ✅ Links (hard links, soft links, external links - all complete)
 - ✅ Fractal heap with indirect blocks
 - ✅ Smart B-tree rebalancing (4 modes)
-- ✅ **Compound datatypes** (write support complete)
+- ✅ Compound datatypes (write support complete)
 
 **Read Enhancements**:
 - ✅ **Hyperslab selection** (efficient data slicing) - 10-250x faster!

@@ -31,7 +31,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 - ✅ **Actively maintained** - Regular updates and improvements
 
 **Trade-offs**:
-- ⚠️ **Write support advancing** - v0.12.0 has dataset resizing, variable-length datatypes, and hyperslab selection complete
+- ⚠️ **Write support advancing**
 - ⚠️ **Some advanced features missing** - Virtual datasets, parallel I/O, SWMR (planned for future releases)
 - ⚠️ **Slightly slower** - Pure Go is 2-3x slower than C for some operations (but fast enough for most use cases)
 
@@ -58,7 +58,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 
 **For reading**: **Feature-complete!** ✅ Production-ready for reading HDF5 files.
 
-**For writing**: **Advancing rapidly!** ✅ v0.12.0 has dataset resizing, variable-length datatypes, and hyperslab selection complete.
+**For writing**: **Advancing rapidly!** ✅
 
 **Read Support**:
 - ✅ All datatypes (integers, floats, strings, compounds, arrays, enums, references, opaque)
@@ -68,7 +68,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 - ✅ Attributes (compact and dense)
 - ✅ Both old (pre-1.8) and modern (1.8+) HDF5 files
 
-**Write Support (v0.12.0)**:
+**Write Support**:
 - ✅ Datasets (contiguous/chunked/compact layouts, all datatypes)
 - ✅ Dataset resizing with unlimited dimensions
 - ✅ Variable-length datatypes (strings, ragged arrays)
@@ -78,7 +78,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 - ✅ Advanced datatypes (arrays, enums, references, opaque)
 - ✅ Links (hard links full, soft/external MVP)
 
-**Read Enhancements (v0.12.0)**:
+**Read Enhancements**:
 - ✅ Hyperslab selection (efficient data slicing) - 10-250x faster!
 
 **Quality metrics**:
@@ -128,9 +128,9 @@ See [Reading Data Guide](READING_DATA.md) for details.
 
 ### Can I write HDF5 files?
 
-**Yes! Write support advancing rapidly in v0.12.0.** ✅
+**Yes! Write support advancing rapidly .** ✅
 
-**What's supported (v0.12.0)**:
+**What's supported**:
 ```go
 // Create new HDF5 file
 fw, err := hdf5.CreateForWrite("output.h5", hdf5.CreateTruncate)
@@ -154,11 +154,10 @@ enumDs, _ := fw.CreateDataset("/status", hdf5.EnumInt8, []uint64{5},
     hdf5.WithEnumValues([]string{"OK", "ERROR"}, []int64{0, 1}))
 ```
 
-**Current limitations (v0.12.0)**:
-- Compound datatype writing (read works perfectly)
+**Current limitations**:
 - Some advanced filters
 
-**v0.12.0 Status**: Feature complete write support with 98.2% HDF5 test suite pass rate!
+**Quality**: Feature complete write support with 98.2% HDF5 test suite pass rate!
 
 See [ROADMAP.md](../../ROADMAP.md) for future plans.
 
@@ -198,10 +197,8 @@ for _, attr := range attrs {
 | H5T_ENUM | named integers | ✅ | ✅ |
 | H5T_REFERENCE | object/region refs | ✅ | ✅ |
 | H5T_OPAQUE | binary blobs | ✅ | ✅ |
-
-**Partial Support**:
-- H5T_COMPOUND: ✅ Read, ❌ Write (planned)
-- H5T_VLEN: ✅ Read, ❌ Write (planned)
+| H5T_COMPOUND | struct-like | ✅ | ✅ |
+| H5T_VLEN | variable-length | ✅ | ✅ |
 
 **Not Supported**:
 - H5T_TIME - deprecated in HDF5 since v1.4, never fully implemented
@@ -234,6 +231,7 @@ GZIP compression fully supported (both reading and writing).
 - ❌ Version 1 (rare, not needed)
 - ✅ **Version 2** (HDF5 1.8+)
 - ✅ **Version 3** (HDF5 1.10+ with SWMR)
+- ✅ **Version 4** (HDF5 2.0.0+ with checksums)
 
 **Object Header Versions**:
 - ✅ **Version 1** (pre-HDF5 1.8)
@@ -555,7 +553,7 @@ if err == nil {
 
 ### What's the current write support status?
 
-**Already Available** (v0.12.0):
+**Already Available**:
 - ✅ File creation with multiple superblock formats (v0, v2)
 - ✅ Dataset writing: contiguous and chunked layouts
 - ✅ **Dataset resizing** with unlimited dimensions (NEW!)
@@ -575,7 +573,7 @@ See [ROADMAP.md](../../ROADMAP.md) for complete roadmap.
 
 ### What features are planned?
 
-**Completed in v0.12.0**:
+**Completed **:
 - ✅ MVP write support
 - ✅ Chunked datasets + compression
 - ✅ Dense groups and attributes
@@ -606,10 +604,10 @@ See [ROADMAP.md](../../ROADMAP.md) for complete roadmap.
 - Deprecations will be announced in advance
 
 **Version strategy**:
-- v0.12.0+: Stable release (API stable, production-ready)
-- v1.0.0: LTS release (long-term support guarantee)
-- v1.x.x: Backward compatible
-- v2.0.0: Next major version (only if necessary)
+- v0.x.x (current): Stable API, production-ready
+- v1.0.0 (future): LTS release with long-term support guarantee
+- v1.x.x (future): Backward compatible updates
+- v2.0.0 (future): Next major version (only if necessary)
 
 See [ROADMAP.md](../../ROADMAP.md) for versioning strategy.
 
@@ -654,4 +652,3 @@ See [ROADMAP.md](../../ROADMAP.md) for versioning strategy.
 ---
 
 *Last Updated: 2025-11-13*
-*Version: 0.12.0*
