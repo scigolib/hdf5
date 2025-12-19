@@ -16,7 +16,7 @@ Repository: https://github.com/HDFGroup/hdf5
 Branch:     develop
 Commit:     [`bc8f6bb02a`](https://github.com/HDFGroup/hdf5/commit/bc8f6bb02aaa8b162bf04b42f2b59bcbbbfcf9f8)
 Date:       2025-12-19 (local sync)
-Local Copy: D:\projects\scigolibs\hdf5c (for development reference)
+Local Copy: Clone repository for development reference
 
 ## Upstream Sync History
 
@@ -101,7 +101,7 @@ When syncing with upstream changes:
 
 1. **Check HDF5 releases**: https://github.com/HDFGroup/hdf5/releases
 2. **Review security advisories**: Check for CVEs affecting our supported formats
-3. **Pull latest**: `cd D:\projects\scigolibs\hdf5c && git pull origin develop`
+3. **Pull latest**: `git pull origin develop` (in your local HDF5 clone)
 4. **Analyze relevant commits**: Focus on format changes, not C-specific code
 5. **Update this file**: Document what was synced and when
 6. **Create tasks**: Add implementation tasks to docs/dev/backlog/
