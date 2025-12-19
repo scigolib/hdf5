@@ -14,23 +14,53 @@ Status:     Fully supported (superblock v0, v2, v3)
 ### HDF5 C Library (Reference Implementation)
 Repository: https://github.com/HDFGroup/hdf5
 Branch:     develop
-Commit:     (see last sync below)
-Local Copy: D:\projects\scigolibs\hdf5c\src (for development reference)
+Commit:     [`bc8f6bb02a`](https://github.com/HDFGroup/hdf5/commit/bc8f6bb02aaa8b162bf04b42f2b59bcbbbfcf9f8)
+Date:       2025-12-19 (local sync)
+Local Copy: D:\projects\scigolibs\hdf5c (for development reference)
 
-## Last Upstream Sync
+## Upstream Sync History
 
-Date:       2025-11-13
-Version:    HDF5 2.0.0 (Format Spec v4.0)
-Commit:     54 commits analyzed for v0.13.0 release
-Focus:      Security fixes, 64-bit dimensions, AI/ML datatypes
+### Latest Sync: 2025-12-19
 
-### Changes Incorporated (v0.13.0)
-- CVE-2025-7067: Buffer overflow in chunk reading (HIGH)
-- CVE-2025-6269: Heap overflow in fractal heap (MEDIUM)
-- CVE-2025-2926: Stack overflow in B-tree recursion (MEDIUM)
-- CVE-2025-44905: Integer overflow in dataspace (MEDIUM)
+**Commit**: [`bc8f6bb02a`](https://github.com/HDFGroup/hdf5/commit/bc8f6bb02aaa8b162bf04b42f2b59bcbbbfcf9f8)
+**Commits Analyzed**: 34 new commits since last sync
+
+#### New CVEs Identified
+
+| CVE | Severity | File | Status |
+|-----|----------|------|--------|
+| [CVE-2025-2308](https://github.com/HDFGroup/hdf5/pull/5960) | HIGH | H5Zscaleoffset.c | ✅ Not affected (filter not implemented) |
+| [CVE-2025-2309](https://github.com/HDFGroup/hdf5/pull/5963) | HIGH | H5Odtype.c | ⚠️ Review needed (TASK-034) |
+
+#### Other Notable Changes
+- R-tree optimizations ([#6039](https://github.com/HDFGroup/hdf5/pull/6039))
+- Zero-element reads on virtual datasets fix ([#6083](https://github.com/HDFGroup/hdf5/pull/6083))
+- HDF5 2.0.0 HISTORY files updated
+
+#### Tasks Created
+- **TASK-034**: CVE-2025-2309 bitfield datatype security review (MEDIUM)
+- **TASK-035**: CVE-2025-2308 documentation (N/A - not affected)
+- **TASK-036**: R-tree optimizations review (LOW)
+
+---
+
+### Previous Sync: 2025-11-13 (v0.13.0 Release)
+
+**Commit**: `e99a49585760aeb34f2bb2144d8e80e207a68ec4`
+**Version**: HDF5 2.0.0 (Format Spec v4.0)
+**Commits Analyzed**: 54 commits
+
+#### CVEs Incorporated (v0.13.0)
+- CVE-2025-7067: Buffer overflow in chunk reading (HIGH) ✅
+- CVE-2025-6269: Heap overflow in fractal heap (MEDIUM) ✅
+- CVE-2025-2926: Stack overflow in B-tree recursion (MEDIUM) ✅
+- CVE-2025-44905: Integer overflow in dataspace (MEDIUM) ✅
+
+#### Features Added
 - 64-bit chunk dimensions (breaking change, internal API)
 - FP8 (E4M3, E5M2) and bfloat16 datatypes
+
+---
 
 ## Implementation Notes
 
@@ -55,7 +85,9 @@ This is a **Pure Go implementation**, not a CGo wrapper or line-by-line port.
 | Superblock v0,v2,v3 | ✅        | ✅         | Full support |
 | Object Header v1,v2 | ✅        | ✅         | With continuations |
 | All Datatypes       | ✅        | ✅         | Including FP8, bfloat16 |
+| Bitfield Datatype   | ✅        | ❌         | Not supported (explicit rejection) |
 | Chunked + Filters   | ✅        | ✅         | GZIP, Shuffle, Fletcher32 |
+| Scale-Offset Filter | ✅        | ❌         | Not implemented |
 | Dense Attributes    | ✅        | ✅         | Fractal heap + B-tree v2 |
 | Soft/External Links | ✅        | ✅         | Full support |
 | SWMR Mode           | ✅        | ❌         | Planned v0.14.0+ |
@@ -69,9 +101,10 @@ When syncing with upstream changes:
 
 1. **Check HDF5 releases**: https://github.com/HDFGroup/hdf5/releases
 2. **Review security advisories**: Check for CVEs affecting our supported formats
-3. **Analyze relevant commits**: Focus on format changes, not C-specific code
-4. **Update this file**: Document what was synced and when
-5. **Create tasks**: Add implementation tasks to docs/dev/backlog/
+3. **Pull latest**: `cd D:\projects\scigolibs\hdf5c && git pull origin develop`
+4. **Analyze relevant commits**: Focus on format changes, not C-specific code
+5. **Update this file**: Document what was synced and when
+6. **Create tasks**: Add implementation tasks to docs/dev/backlog/
 
 ### Files to Monitor in C Library
 ```
@@ -81,6 +114,8 @@ src/H5Dchunk.c          # Chunked dataset I/O
 src/H5HFdblock.c        # Fractal heap direct blocks
 src/H5B2*.c             # B-tree v2 implementation
 src/H5Tconv.c           # Datatype conversions
+src/H5Odtype.c          # Datatype object header messages
+src/H5Zscaleoffset.c    # Scale-offset filter (not implemented)
 ```
 
 ## Quality Validation
@@ -97,5 +132,5 @@ src/H5Tconv.c           # Datatype conversions
 - ✅ MATLAB HDF5 functions
 
 ---
-Last Updated: 2025-11-13
+Last Updated: 2025-12-19
 Maintainer: Claude (Autonomous Developer)
