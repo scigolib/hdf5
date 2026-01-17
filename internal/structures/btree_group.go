@@ -12,6 +12,12 @@ import (
 
 // ReadGroupBTreeEntries reads entries from a "TREE" format B-tree (type 0 - group symbol table).
 // This is the v1 B-tree format used in v0 and some v1 HDF5 files for indexing group entries.
+//
+// For group B-trees, the leaf nodes contain:
+// - Keys: heap offsets (for sorting/searching)
+// - Children: addresses of Symbol Table Nodes (SNODs)
+//
+// The function follows child pointers to SNODs and collects all entries from them.
 func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) ([]BTreeEntry, error) {
 	// Read B-tree node header.
 	// Format:
@@ -49,72 +55,80 @@ func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) (
 		return nil, errors.New("non-leaf B-tree nodes not supported yet")
 	}
 
-	// Read number of entries.
+	// Read number of entries (this is the number of keys used).
 	entriesUsed := sb.Endianness.Uint16(header[6:8])
 	if entriesUsed == 0 {
 		return nil, nil
 	}
 
-	// Skip left/right sibling addresses (we don't need them for simple traversal).
-	// Now read the symbol table entries.
-	// Each entry has:
-	// - offsetSize bytes: Link name offset in local heap.
-	// - offsetSize bytes: Object header address.
-	// - 4 bytes: Cache type.
-	// - 4 bytes: Reserved.
-	// Plus there are 2*K keys separating the entries (for non-leaf nodes).
-	// For leaf nodes (level 0), entries follow directly after header.
+	// For group B-trees (type 0), the data after header is:
+	// - Keys and children interleaved: Key[0], Child[0], Key[1], Child[1], ..., Key[N]
+	// - Keys are heap offsets (offsetSize bytes each)
+	// - Children are SNOD addresses (offsetSize bytes each)
+	// - There are (entriesUsed) children and (entriesUsed+1) keys (but last key might be empty)
+	//
+	// For leaf nodes, children point to Symbol Table Nodes (SNODs).
+	// We need to parse each SNOD to get the actual entries.
 
-	entrySize := int(sb.OffsetSize)*2 + 4 + 4 // link offset + obj addr + cache + reserved.
-	dataSize := int(entriesUsed) * entrySize
-
-	data := utils.GetBuffer(dataSize)
+	// Calculate data size: interleaved keys and children
+	// Pattern: Key[0], Child[0], Key[1], Child[1], ..., Key[entriesUsed], (last child if internal node)
+	// For leaf nodes with N children: N+1 keys and N children
+	// But we read as pairs: (key, child) repeated
+	dataSize := int(entriesUsed) * 2 * int(sb.OffsetSize)  // entriesUsed children + keys interleaved
+	data := utils.GetBuffer(dataSize + int(sb.OffsetSize)) // +1 key at end
 	defer utils.ReleaseBuffer(data)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	dataOffset := int64(address) + int64(headerSize)
-	if _, err := r.ReadAt(data, dataOffset); err != nil {
-		return nil, utils.WrapError("B-tree entries read failed", err)
+	if _, err := r.ReadAt(data[:dataSize+int(sb.OffsetSize)], dataOffset); err != nil {
+		return nil, utils.WrapError("B-tree data read failed", err)
 	}
 
-	// Parse entries.
-	var entries []BTreeEntry
-	offset := 0
-
+	// Collect all SNOD addresses (children)
+	var snodAddresses []uint64
+	pos := 0
 	for i := uint16(0); i < entriesUsed; i++ {
-		if offset+entrySize > len(data) {
-			return nil, fmt.Errorf("b-tree data truncated at entry %d", i)
+		// Skip key (heap offset) - we don't need it for enumeration
+		pos += int(sb.OffsetSize)
+
+		// Read child address (SNOD) using file's endianness
+		childAddr := readAddress(data[pos:], int(sb.OffsetSize), sb.Endianness)
+		pos += int(sb.OffsetSize)
+
+		if childAddr != 0 && childAddr != 0xFFFFFFFFFFFFFFFF {
+			snodAddresses = append(snodAddresses, childAddr)
+		}
+	}
+
+	// Parse each SNOD to collect entries
+	var allEntries []BTreeEntry
+	for _, snodAddr := range snodAddresses {
+		snodNode, err := ParseSymbolTableNode(r, snodAddr, sb)
+		if err != nil {
+			// Skip invalid SNODs
+			continue
 		}
 
-		// Read link name offset.
-		linkOffset := readAddress(data[offset:], int(sb.OffsetSize))
-		offset += int(sb.OffsetSize)
-
-		// Read object header address.
-		objAddr := readAddress(data[offset:], int(sb.OffsetSize))
-		offset += int(sb.OffsetSize)
-
-		// Read cache type.
-		cacheType := sb.Endianness.Uint32(data[offset : offset+4])
-		offset += 4
-
-		// Read reserved.
-		reserved := sb.Endianness.Uint32(data[offset : offset+4])
-		offset += 4
-
-		entries = append(entries, BTreeEntry{
-			LinkNameOffset: linkOffset,
-			ObjectAddress:  objAddr,
-			CacheType:      cacheType,
-			Reserved:       reserved,
-		})
+		// Convert SNOD entries to BTreeEntry format
+		for _, entry := range snodNode.Entries {
+			allEntries = append(allEntries, BTreeEntry{
+				LinkNameOffset:  entry.LinkNameOffset,
+				ObjectAddress:   entry.ObjectAddress,
+				CacheType:       entry.CacheType,
+				Reserved:        0,
+				CachedBTreeAddr: entry.CachedBTreeAddr,
+				CachedHeapAddr:  entry.CachedHeapAddr,
+			})
+		}
 	}
 
-	return entries, nil
+	return allEntries, nil
 }
 
-// readAddress reads a variable-sized address from byte slice.
-func readAddress(data []byte, size int) uint64 {
+// readAddress reads a variable-sized address from byte slice using the specified endianness.
+//
+//nolint:gosec // G602: bounds are checked by clamping size to len(data) before switch
+func readAddress(data []byte, size int, endianness binary.ByteOrder) uint64 {
 	if size > len(data) {
 		size = len(data)
 	}
@@ -123,16 +137,16 @@ func readAddress(data []byte, size int) uint64 {
 	case 1:
 		return uint64(data[0])
 	case 2:
-		return uint64(binary.LittleEndian.Uint16(data[:2]))
+		return uint64(endianness.Uint16(data[:2]))
 	case 4:
-		return uint64(binary.LittleEndian.Uint32(data[:4]))
+		return uint64(endianness.Uint32(data[:4]))
 	case 8:
-		return binary.LittleEndian.Uint64(data[:8])
+		return endianness.Uint64(data[:8])
 	default:
 		// Pad to 8 bytes.
 		var buf [8]byte
 		copy(buf[:], data[:size])
-		return binary.LittleEndian.Uint64(buf[:])
+		return endianness.Uint64(buf[:])
 	}
 }
 

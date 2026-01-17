@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.2] - 2025-01-17
+
+### 🐛 Bug Fixes
+
+#### Fixed: V0 Superblock Files Show 0 Children (Issue #9)
+
+HDF5 files with v0 (legacy) superblocks were incorrectly showing 0 children in groups.
+This affected files created with older HDF5 versions (pre-1.8).
+
+**Root Cause**: Multiple parsing issues in v0 format handling:
+- B-tree child addresses were read with wrong endianness
+- Local heap data was read from wrong offset (assumed header+32 instead of actual address from header)
+- Symbol table entries had incorrect size calculations
+- Root group's cached B-tree/Heap addresses weren't being used
+
+**Fixed**:
+- `internal/structures/btree_group.go`: Use file's endianness for address parsing
+- `internal/structures/localheap.go`: Read data segment from actual address in header
+- `internal/structures/symboltable.go`: Correct 40-byte entry size with scratch-pad
+- `internal/core/superblock.go`: Always read cached B-tree/Heap addresses for v0
+- `group.go`: Use superblock cached addresses for root group, cycle detection
+
+**Result**:
+- `group_old.h5` now correctly shows 2 objects (was showing 0)
+- Big-endian files parse correctly
+- No infinite recursion on shared symbol tables
+
+**Known Limitation**: Files with data layout message versions 1-2 (HDF5 1.6 era) are now
+detected but not fully supported. These require older layout format parsing which is
+not yet implemented.
+
+---
+
 ## [v0.13.1] - 2025-11-13
 
 ### 🔧 Hotfix
@@ -50,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Status**: Stable Release
 **Focus**: HDF5 2.0.0 format compatibility, security hardening, AI/ML datatype support
 **Quality**: 86.1% coverage, 0 linter issues, production-ready
+**Announcement**: [HDF Group Forum](https://forum.hdfgroup.org/t/pure-go-hdf5-library-production-release-with-hdf5-2-0-0-compatibility/13584)
 
 ### 🔒 Security
 

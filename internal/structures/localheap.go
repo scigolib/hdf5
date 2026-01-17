@@ -39,8 +39,12 @@ type LocalHeap struct {
 
 // LoadLocalHeap loads a local heap from the specified file address.
 func LoadLocalHeap(r io.ReaderAt, address uint64, sb *core.Superblock) (*LocalHeap, error) {
-	// Read heap header (32 bytes for 8-byte addressing)
-	headerBuf := utils.GetBuffer(32)
+	// Calculate header size based on offset/length sizes
+	// Format: Signature(4) + Version(1) + Reserved(3) + DataSegmentSize(lengthSize) +
+	//         FreeListOffset(lengthSize) + DataSegmentAddress(offsetSize)
+	headerSize := 8 + int(sb.LengthSize)*2 + int(sb.OffsetSize)
+
+	headerBuf := utils.GetBuffer(headerSize)
 	defer utils.ReleaseBuffer(headerBuf)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
@@ -52,18 +56,44 @@ func LoadLocalHeap(r io.ReaderAt, address uint64, sb *core.Superblock) (*LocalHe
 		return nil, errors.New("invalid local heap signature")
 	}
 
-	// Parse header fields
-	// Bytes 8-15: Data segment size
-	dataSegmentSize := sb.Endianness.Uint64(headerBuf[8:16])
+	// Parse header fields using file's endianness
+	pos := 8 // After signature, version, reserved
 
-	heap := &LocalHeap{
-		HeaderSize: 32, // Fixed header size for 8-byte addressing
+	// Data segment size (lengthSize bytes)
+	var dataSegmentSize uint64
+	switch sb.LengthSize {
+	case 2:
+		dataSegmentSize = uint64(sb.Endianness.Uint16(headerBuf[pos : pos+2]))
+	case 4:
+		dataSegmentSize = uint64(sb.Endianness.Uint32(headerBuf[pos : pos+4]))
+	case 8:
+		dataSegmentSize = sb.Endianness.Uint64(headerBuf[pos : pos+8])
+	}
+	pos += int(sb.LengthSize)
+
+	// Free list offset (lengthSize bytes) - skip for now
+	pos += int(sb.LengthSize)
+
+	// Data segment address (offsetSize bytes)
+	var dataSegmentAddr uint64
+	switch sb.OffsetSize {
+	case 2:
+		dataSegmentAddr = uint64(sb.Endianness.Uint16(headerBuf[pos : pos+2]))
+	case 4:
+		dataSegmentAddr = uint64(sb.Endianness.Uint32(headerBuf[pos : pos+4]))
+	case 8:
+		dataSegmentAddr = sb.Endianness.Uint64(headerBuf[pos : pos+8])
 	}
 
-	// Allocate and read data segment
+	heap := &LocalHeap{
+		//nolint:gosec // G115: headerSize is calculated from small values (LengthSize, OffsetSize <= 8)
+		HeaderSize: uint64(headerSize),
+	}
+
+	// Allocate and read data segment from the ACTUAL address in the header
 	heap.Data = make([]byte, dataSegmentSize)
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	if _, err := r.ReadAt(heap.Data, int64(address+32)); err != nil {
+	if _, err := r.ReadAt(heap.Data, int64(dataSegmentAddr)); err != nil {
 		return nil, utils.WrapError("local heap data read failed", err)
 	}
 

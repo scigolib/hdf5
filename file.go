@@ -15,9 +15,10 @@ import (
 
 // File represents an open HDF5 file with its metadata and root group.
 type File struct {
-	osFile *os.File
-	sb     *core.Superblock
-	root   *Group
+	osFile        *os.File
+	sb            *core.Superblock
+	root          *Group
+	visitedBTrees map[uint64]bool // Track visited B-tree addresses to prevent cycles
 }
 
 // Open opens an HDF5 file for reading and returns a File handle.
@@ -50,8 +51,9 @@ func Open(filename string) (*File, error) {
 	}
 
 	file := &File{
-		osFile: f,
-		sb:     sb,
+		osFile:        f,
+		sb:            sb,
+		visitedBTrees: make(map[uint64]bool),
 	}
 
 	// Validate root group address.

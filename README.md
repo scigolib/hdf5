@@ -6,7 +6,7 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/scigolib/hdf5?style=flat-square&logo=go)](https://go.dev)
 [![Go Report Card](https://goreportcard.com/badge/github.com/scigolib/hdf5?style=flat-square)](https://goreportcard.com/report/github.com/scigolib/hdf5)
 [![GoDoc](https://img.shields.io/badge/godoc-reference-blue?style=flat-square&logo=go)](https://pkg.go.dev/github.com/scigolib/hdf5)
-[![CI](https://img.shields.io/github/actions/workflow/status/scigolib/hdf5/test.yml?branch=develop&style=flat-square&logo=github&label=tests)](https://github.com/scigolib/hdf5/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/scigolib/hdf5/test.yml?branch=main&style=flat-square&logo=github&label=tests)](https://github.com/scigolib/hdf5/actions)
 [![codecov](https://codecov.io/gh/scigolib/hdf5/graph/badge.svg)](https://codecov.io/gh/scigolib/hdf5)
 [![License](https://img.shields.io/github/license/scigolib/hdf5?style=flat-square&color=blue)](https://github.com/scigolib/hdf5/blob/main/LICENSE)
 [![Stars](https://img.shields.io/github/stars/scigolib/hdf5?style=flat-square&logo=github)](https://github.com/scigolib/hdf5/stargazers)
@@ -388,7 +388,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - 📖 [Documentation](docs/) - Architecture and guides
 - 🐛 [Issue Tracker](https://github.com/scigolib/hdf5/issues)
 - 💬 [Discussions](https://github.com/scigolib/hdf5/discussions) - Community Q&A and announcements
-- 🌐 [HDF Group Forum](https://forum.hdfgroup.org/t/pure-go-hdf5-library-production-ready-write-support-v0-11-4-beta/13572) - Official HDF5 community discussion
+- 🌐 [HDF Group Forum](https://forum.hdfgroup.org/t/pure-go-hdf5-library-production-release-with-hdf5-2-0-0-compatibility/13584) - Official HDF5 community discussion
 
 ---
 
@@ -399,4 +399,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 *Built with ❤️ by the HDF5 Go community*
-*Recognized by [HDF Group Forum](https://forum.hdfgroup.org/t/pure-go-hdf5-library-production-ready-write-support-v0-11-4-beta/13572)* ⭐
+*Recognized by [HDF Group Forum](https://forum.hdfgroup.org/t/pure-go-hdf5-library-production-release-with-hdf5-2-0-0-compatibility/13584)* ⭐

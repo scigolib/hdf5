@@ -2,126 +2,103 @@
 
 Thank you for considering contributing to the HDF5 Go Library! This document outlines the development workflow and guidelines.
 
-## Git Workflow (Git-Flow)
+## Git Workflow (GitHub Flow)
 
-This project uses Git-Flow branching model for development.
+This project uses GitHub Flow - a simplified branching model.
 
 ### Branch Structure
 
 ```
 main                 # Production-ready code (tagged releases)
-  └─ develop         # Integration branch for next release
-       ├─ feature/*  # New features
-       ├─ bugfix/*   # Bug fixes
-       └─ hotfix/*   # Critical fixes from main
+  ├─ feature/*       # New features
+  ├─ fix/*           # Bug fixes
+  └─ release/*       # Release preparation (for version updates)
 
-legacy               # Historical development (all commits from original development)
+legacy               # Historical development (read-only archive)
 ```
 
 ### Branch Purposes
 
-- **main**: Production-ready code. Only releases are merged here.
-- **develop**: Active development branch. All features merge here first.
-- **feature/\***: New features. Branch from `develop`, merge back to `develop`.
-- **bugfix/\***: Bug fixes. Branch from `develop`, merge back to `develop`.
-- **hotfix/\***: Critical production fixes. Branch from `main`, merge to both `main` and `develop`.
-- **legacy**: Historical branch preserving full development history (read-only).
+- **main**: Production-ready code. Protected branch - all changes via PRs only.
+- **feature/\***: New features. Branch from `main`, merge via PR with squash.
+- **fix/\***: Bug fixes. Branch from `main`, merge via PR with squash.
+- **release/\***: Release preparation. Used for version bumps and changelog updates.
 
 ### Workflow Commands
 
 #### Starting a New Feature
 
 ```bash
-# Create feature branch from develop
-git checkout develop
-git pull origin develop
+# Create feature branch from main
+git checkout main
+git pull origin main
 git checkout -b feature/my-new-feature
 
-# Work on your feature...
+# Work on your feature (multiple commits OK)...
 git add .
 git commit -m "feat: add my new feature"
 
-# When done, merge back to develop
-git checkout develop
-git merge --no-ff feature/my-new-feature
-git branch -d feature/my-new-feature
-git push origin develop
+# Push and create PR
+git push origin feature/my-new-feature
+gh pr create --title "feat: add my new feature" --body "Description..."
+
+# Wait for CI green, then merge with squash
+gh pr checks --watch
+gh pr merge --squash --delete-branch
 ```
 
 #### Fixing a Bug
 
 ```bash
-# Create bugfix branch from develop
-git checkout develop
-git pull origin develop
-git checkout -b bugfix/fix-issue-123
+# Create fix branch from main
+git checkout main
+git pull origin main
+git checkout -b fix/issue-123
 
 # Fix the bug...
 git add .
 git commit -m "fix: resolve issue #123"
 
-# Merge back to develop
-git checkout develop
-git merge --no-ff bugfix/fix-issue-123
-git branch -d bugfix/fix-issue-123
-git push origin develop
+# Push and create PR
+git push origin fix/issue-123
+gh pr create --title "fix: resolve issue #123" --body "Fixes #123"
+
+# Wait for CI green, then merge with squash
+gh pr checks --watch
+gh pr merge --squash --delete-branch
 ```
 
 #### Creating a Release
 
 ```bash
-# Create release branch from develop
-git checkout develop
-git pull origin develop
+# Create release branch from main
+git checkout main
+git pull origin main
 git checkout -b release/v1.0.0
 
 # Update version numbers, CHANGELOG, etc.
 git add .
 git commit -m "chore: prepare release v1.0.0"
 
-# Merge to main and tag
+# Push and create PR
+git push origin release/v1.0.0
+gh pr create --title "Release v1.0.0" --body "Release notes..."
+
+# Wait for CI green, then merge with squash
+gh pr checks --watch
+gh pr merge --squash --delete-branch
+
+# After PR merged, create tag on main
 git checkout main
-git merge --no-ff release/v1.0.0
+git pull origin main
 git tag -a v1.0.0 -m "Release v1.0.0"
-
-# Merge back to develop
-git checkout develop
-git merge --no-ff release/v1.0.0
-
-# Delete release branch
-git branch -d release/v1.0.0
-
-# Push everything
-git push origin main develop --tags
+git push origin --tags
 ```
 
 #### Hotfix (Critical Production Bug)
 
-```bash
-# Create hotfix branch from main
-git checkout main
-git pull origin main
-git checkout -b hotfix/critical-bug
-
-# Fix the bug...
-git add .
-git commit -m "fix: critical production bug"
-
-# Merge to main and tag
-git checkout main
-git merge --no-ff hotfix/critical-bug
-git tag -a v1.0.1 -m "Hotfix v1.0.1"
-
-# Merge to develop
-git checkout develop
-git merge --no-ff hotfix/critical-bug
-
-# Delete hotfix branch
-git branch -d hotfix/critical-bug
-
-# Push everything
-git push origin main develop --tags
-```
+Same as regular bug fix - use `fix/` branch and PR workflow.
+Hotfixes follow the same process since we work directly with main.
 
 ## Commit Message Guidelines
 
@@ -259,14 +236,14 @@ hdf5/
 
 1. Check if issue exists, if not create one
 2. Discuss approach in the issue
-3. Create feature branch from `develop`
+3. Create feature branch from `main`
 4. Implement feature with tests
 5. Update documentation
 6. Run quality checks (`make pre-commit`)
-7. Create pull request to `develop`
-8. Wait for code review
+7. Create pull request to `main`
+8. Wait for CI green and code review
 9. Address feedback
-10. Merge when approved
+10. Merge with squash when approved
 
 ## Code Style Guidelines
 
