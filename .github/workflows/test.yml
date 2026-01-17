@@ -5,25 +5,23 @@ name: Tests
 # - HDF5 is a cross-platform file format - must work everywhere
 # - Go 1.25+ required (matches go.mod requirement)
 #
-# Branch Strategy (Git Flow):
+# Branch Strategy (GitHub Flow):
 # - feature/** branches: Development work
-# - release/** branches: Pre-release testing (test here BEFORE merging to main)
-# - develop branch: Integration branch
+# - fix/** branches: Bug fixes
+# - release/** branches: Pre-release testing
 # - main branch: Production-ready code only (protected)
-# - Pull requests: Must pass all tests before merge
+# - Pull requests: Must pass all tests before merge (--squash)
 
 on:
   push:
     branches:
       - main
-      - develop
       - 'feature/**'
+      - 'fix/**'
       - 'release/**'
-      - 'hotfix/**'
   pull_request:
     branches:
       - main
-      - develop
 
 jobs:
   # Unit tests - Cross-platform
