@@ -313,6 +313,14 @@ func TestParseSymbolTableEntry_ReadError(t *testing.T) {
 }
 
 func TestReadSymbolTableEntries_Success(t *testing.T) {
+	// Entry format: 2*offsetSize + 4 + 4 + 16 = 40 bytes for offsetSize=8
+	// - Link Name Offset (8 bytes)
+	// - Object Header Address (8 bytes)
+	// - Cache Type (4 bytes)
+	// - Reserved (4 bytes)
+	// - Scratch-pad (16 bytes)
+	const entrySize = 40
+
 	tests := []struct {
 		name          string
 		setupTable    func() *SymbolTable
@@ -333,12 +341,13 @@ func TestReadSymbolTableEntries_Success(t *testing.T) {
 			},
 			setupData: func() []byte {
 				buf := make([]byte, 2048)
-				// Entries start at offset 24 (after symbol table header)
-				offset := 24
-				binary.LittleEndian.PutUint64(buf[offset:offset+8], 0x100)
-				binary.LittleEndian.PutUint64(buf[offset+8:offset+16], 0x200)
-				binary.LittleEndian.PutUint32(buf[offset+16:offset+20], 1)
-				binary.LittleEndian.PutUint32(buf[offset+20:offset+24], 0)
+				// Entries start at offset 8 (tableAddress + 8, after SNOD header)
+				offset := 8
+				binary.LittleEndian.PutUint64(buf[offset:offset+8], 0x100)    // LinkNameOffset
+				binary.LittleEndian.PutUint64(buf[offset+8:offset+16], 0x200) // ObjectAddress
+				binary.LittleEndian.PutUint32(buf[offset+16:offset+20], 1)    // CacheType
+				binary.LittleEndian.PutUint32(buf[offset+20:offset+24], 0)    // Reserved
+				// Scratch-pad (16 bytes) - zeros
 				return buf
 			},
 			tableAddress:  0,
@@ -360,13 +369,14 @@ func TestReadSymbolTableEntries_Success(t *testing.T) {
 			},
 			setupData: func() []byte {
 				buf := make([]byte, 2048)
-				offset := 24
+				offset := 8 // Start after SNOD header
 				for i := 0; i < 3; i++ {
-					binary.LittleEndian.PutUint64(buf[offset:offset+8], uint64(i)*0x100)
-					binary.LittleEndian.PutUint64(buf[offset+8:offset+16], uint64(i)*0x200)
-					binary.LittleEndian.PutUint32(buf[offset+16:offset+20], uint32(i))
-					binary.LittleEndian.PutUint32(buf[offset+20:offset+24], 0)
-					offset += 24
+					binary.LittleEndian.PutUint64(buf[offset:offset+8], uint64(i)*0x100)    // LinkNameOffset
+					binary.LittleEndian.PutUint64(buf[offset+8:offset+16], uint64(i)*0x200) // ObjectAddress
+					binary.LittleEndian.PutUint32(buf[offset+16:offset+20], uint32(i))      // CacheType
+					binary.LittleEndian.PutUint32(buf[offset+20:offset+24], 0)              // Reserved
+					// Scratch-pad (16 bytes) already zeros
+					offset += entrySize // 40 bytes per entry
 				}
 				return buf
 			},

@@ -29,6 +29,10 @@ func TestLoadLocalHeap_Success(t *testing.T) {
 				buf[5], buf[6], buf[7] = 0, 0, 0
 				// Data segment size (8 bytes) - size of data segment ONLY (not including 32-byte header)
 				binary.LittleEndian.PutUint64(buf[8:16], 16) // Data segment is 16 bytes
+				// Free list offset (8 bytes)
+				binary.LittleEndian.PutUint64(buf[16:24], 1) // H5HL_FREE_NULL
+				// Data segment address (8 bytes) - where data actually is in the file
+				binary.LittleEndian.PutUint64(buf[24:32], 32) // Data at offset 32
 				// Data follows at offset 32 (after 32-byte header)
 				copy(buf[32:48], "Hello, World!")
 				return buf
@@ -49,6 +53,10 @@ func TestLoadLocalHeap_Success(t *testing.T) {
 				buf[5], buf[6], buf[7] = 0, 0, 0
 				// Data segment size: 100 bytes (header is always 32 bytes, not included)
 				binary.LittleEndian.PutUint64(buf[8:16], 100)
+				// Free list offset (8 bytes)
+				binary.LittleEndian.PutUint64(buf[16:24], 1) // H5HL_FREE_NULL
+				// Data segment address (8 bytes) - where data actually is in the file
+				binary.LittleEndian.PutUint64(buf[24:32], 32) // Data at offset 32
 				// Fill data section with test data (starts at offset 32 after header)
 				for i := 0; i < 100; i++ {
 					buf[32+i] = byte(i % 256)
@@ -76,6 +84,10 @@ func TestLoadLocalHeap_Success(t *testing.T) {
 				buf[offset+5], buf[offset+6], buf[offset+7] = 0, 0, 0
 				// Data segment size: 34 bytes (string length)
 				binary.LittleEndian.PutUint64(buf[offset+8:offset+16], 34)
+				// Free list offset (8 bytes)
+				binary.LittleEndian.PutUint64(buf[offset+16:offset+24], 1) // H5HL_FREE_NULL
+				// Data segment address (8 bytes) - address 500 + header 32 = 532
+				binary.LittleEndian.PutUint64(buf[offset+24:offset+32], 532)
 				// Data starts at offset 32 after header start
 				copy(buf[offset+32:offset+32+34], "test data at offset")
 				return buf
@@ -96,6 +108,10 @@ func TestLoadLocalHeap_Success(t *testing.T) {
 				buf[5], buf[6], buf[7] = 0, 0, 0
 				// Data segment size: 64 bytes
 				binary.LittleEndian.PutUint64(buf[8:16], 64)
+				// Free list offset (8 bytes)
+				binary.LittleEndian.PutUint64(buf[16:24], 1) // H5HL_FREE_NULL
+				// Data segment address (8 bytes) - data at offset 32
+				binary.LittleEndian.PutUint64(buf[24:32], 32)
 				// Add some null-terminated strings (data starts at offset 32)
 				offset := 32
 				copy(buf[offset:], "string1\x00string2\x00string3\x00")
@@ -216,6 +232,10 @@ func TestLoadLocalHeap_BigEndian(t *testing.T) {
 	buf[5], buf[6], buf[7] = 0, 0, 0
 	// Data segment size: 100 bytes (header is 32 bytes, not included in this size)
 	binary.BigEndian.PutUint64(buf[8:16], 100)
+	// Free list offset (8 bytes)
+	binary.BigEndian.PutUint64(buf[16:24], 1) // H5HL_FREE_NULL
+	// Data segment address (8 bytes) - data at offset 32
+	binary.BigEndian.PutUint64(buf[24:32], 32)
 	// Data starts at offset 32 (after 32-byte header)
 	copy(buf[32:132], "big endian test data")
 
@@ -419,7 +439,11 @@ func BenchmarkLoadLocalHeap(b *testing.B) {
 	copy(buf[0:4], "HEAP")
 	buf[4] = 0
 	binary.LittleEndian.PutUint64(buf[8:16], 1024)
-	for i := 16; i < 1024; i++ {
+	// Free list offset (8 bytes)
+	binary.LittleEndian.PutUint64(buf[16:24], 1) // H5HL_FREE_NULL
+	// Data segment address (8 bytes) - data at offset 32
+	binary.LittleEndian.PutUint64(buf[24:32], 32)
+	for i := 32; i < 1056; i++ {
 		buf[i] = byte(i % 256)
 	}
 

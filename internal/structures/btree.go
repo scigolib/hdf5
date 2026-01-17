@@ -15,6 +15,9 @@ type BTreeEntry struct {
 	ObjectAddress  uint64
 	CacheType      uint32
 	Reserved       uint32
+	// Cached symbol table addresses (only valid when CacheType == 1)
+	CachedBTreeAddr uint64
+	CachedHeapAddr  uint64
 }
 
 // ReadBTreeEntries reads B-tree entries from a leaf node at the specified address.

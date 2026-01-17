@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2025-11-13 | **Current Version**: v0.13.1 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.1 RELEASED! (2025-11-13 hotfix) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2025-01-17 | **Current Version**: v0.13.2 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.2 RELEASED! (2025-01-17 v0 fix) → v1.0.0 LTS (Q3 2026)
 
 ---
 
@@ -48,6 +48,8 @@ v0.12.0 (FEATURE COMPLETE + STABLE) ✅ RELEASED 2025-11-13
 v0.13.0 (HDF5 2.0.0 + SECURITY) ✅ RELEASED 2025-11-13
          ↓ (same day - documentation correction)
 v0.13.1 (HOTFIX - Documentation) ✅ RELEASED 2025-11-13
+         ↓ (v0 superblock bug fix)
+v0.13.2 (BUGFIX - V0 superblock) ✅ RELEASED 2025-01-17
          ↓ (community adoption + feedback + monitoring)
 v0.13.x (maintenance phase) → Stable maintenance, bug fixes, minor enhancements
          ↓ (6-9 months production validation)
@@ -75,6 +77,12 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - Added .codecov.yml to prevent false failures on documentation changes
 - No functional changes, documentation only
 
+**v0.13.2** = V0 Superblock Bug Fix ✅ RELEASED (2025-01-17)
+- Fixed Issue #9: V0 superblock files showing 0 children
+- Corrected B-tree address endianness parsing
+- Fixed local heap data segment address reading
+- Added cycle detection for shared symbol tables
+
 **v0.13.x** = Stable Maintenance Phase (current)
 - Monitoring for bug reports from production use
 - Performance optimizations when identified
@@ -94,7 +102,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-## 📊 Current Status (v0.13.1)
+## 📊 Current Status (v0.13.2)
 
 **Phase**: 🛡️ Stable Maintenance (monitoring, community support)
 **HDF5 2.0.0 Format Spec v4.0**: Complete! 🎉

@@ -107,14 +107,22 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 		reserved := sb.Endianness.Uint32(data[offset : offset+4])
 		offset += 4
 
-		// Skip scratch-pad (16 bytes).
+		// Read scratch-pad (16 bytes).
+		// For CacheType == 1 (H5G_CACHED_STAB), this contains cached B-tree and heap addresses.
+		var cachedBTree, cachedHeap uint64
+		if cacheType == 1 {
+			cachedBTree = readAddressFromBytes(data[offset:], int(sb.OffsetSize), sb.Endianness)
+			cachedHeap = readAddressFromBytes(data[offset+int(sb.OffsetSize):], int(sb.OffsetSize), sb.Endianness)
+		}
 		offset += 16
 
 		node.Entries = append(node.Entries, SymbolTableEntry{
-			LinkNameOffset: linkOffset,
-			ObjectAddress:  objAddr,
-			CacheType:      cacheType,
-			Reserved:       reserved,
+			LinkNameOffset:  linkOffset,
+			ObjectAddress:   objAddr,
+			CacheType:       cacheType,
+			Reserved:        reserved,
+			CachedBTreeAddr: cachedBTree,
+			CachedHeapAddr:  cachedHeap,
 		})
 	}
 

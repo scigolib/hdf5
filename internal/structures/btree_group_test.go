@@ -9,6 +9,112 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// createTestBTreeWithSNOD creates test data with a B-tree that points to an SNOD.
+// This properly tests the ReadGroupBTreeEntries function which follows SNOD pointers.
+//
+// Memory layout:
+//   - Offset 0: B-tree header (TREE signature).
+//   - After header: Keys and child pointers (interleaved).
+//   - snodAddress: SNOD structure with entries.
+func createTestBTreeWithSNOD(offsetSize uint8, endianness binary.ByteOrder, snodAddress uint64, entries []struct {
+	linkNameOffset uint64
+	objectAddress  uint64
+	cacheType      uint32
+}) []byte {
+	buf := make([]byte, 4096)
+
+	// B-tree header at offset 0
+	copy(buf[0:4], "TREE")
+	buf[4] = 0                          // Node type 0 (group)
+	buf[5] = 0                          // Level 0 (leaf)
+	endianness.PutUint16(buf[6:8], 1)   // 1 child pointer
+	headerSize := 8 + int(offsetSize)*2 // sig(4) + type(1) + level(1) + entries(2) + 2*offsetSize (siblings)
+
+	// Write sibling addresses (undefined)
+	switch offsetSize {
+	case 2:
+		endianness.PutUint16(buf[8:10], 0xFFFF)
+		endianness.PutUint16(buf[10:12], 0xFFFF)
+	case 4:
+		endianness.PutUint32(buf[8:12], 0xFFFFFFFF)
+		endianness.PutUint32(buf[12:16], 0xFFFFFFFF)
+	case 8:
+		endianness.PutUint64(buf[8:16], 0xFFFFFFFFFFFFFFFF)
+		endianness.PutUint64(buf[16:24], 0xFFFFFFFFFFFFFFFF)
+	}
+
+	// Write keys and child pointers (interleaved)
+	// Format: Key[0], Child[0], Key[1] (trailing key)
+	pos := headerSize
+	// Key[0] - heap offset (we don't use it in enumeration)
+	switch offsetSize {
+	case 2:
+		endianness.PutUint16(buf[pos:], 0)
+	case 4:
+		endianness.PutUint32(buf[pos:], 0)
+	case 8:
+		endianness.PutUint64(buf[pos:], 0)
+	}
+	pos += int(offsetSize)
+
+	// Child[0] - SNOD address
+	switch offsetSize {
+	case 2:
+		endianness.PutUint16(buf[pos:], uint16(snodAddress))
+	case 4:
+		endianness.PutUint32(buf[pos:], uint32(snodAddress))
+	case 8:
+		endianness.PutUint64(buf[pos:], snodAddress)
+	}
+
+	// SNOD structure at snodAddress
+	snodPos := int(snodAddress)
+	copy(buf[snodPos:snodPos+4], "SNOD")
+	buf[snodPos+4] = 1                                                   // Version
+	buf[snodPos+5] = 0                                                   // Reserved
+	endianness.PutUint16(buf[snodPos+6:snodPos+8], uint16(len(entries))) // NumSymbols
+
+	// SNOD entries (each is 2*offsetSize + 4 + 4 + 16 = 40 bytes for offsetSize=8)
+	entryPos := snodPos + 8
+
+	for _, entry := range entries {
+		// Link name offset
+		switch offsetSize {
+		case 2:
+			endianness.PutUint16(buf[entryPos:], uint16(entry.linkNameOffset))
+		case 4:
+			endianness.PutUint32(buf[entryPos:], uint32(entry.linkNameOffset))
+		case 8:
+			endianness.PutUint64(buf[entryPos:], entry.linkNameOffset)
+		}
+		entryPos += int(offsetSize)
+
+		// Object header address
+		switch offsetSize {
+		case 2:
+			endianness.PutUint16(buf[entryPos:], uint16(entry.objectAddress))
+		case 4:
+			endianness.PutUint32(buf[entryPos:], uint32(entry.objectAddress))
+		case 8:
+			endianness.PutUint64(buf[entryPos:], entry.objectAddress)
+		}
+		entryPos += int(offsetSize)
+
+		// Cache type
+		endianness.PutUint32(buf[entryPos:entryPos+4], entry.cacheType)
+		entryPos += 4
+
+		// Reserved
+		endianness.PutUint32(buf[entryPos:entryPos+4], 0)
+		entryPos += 4
+
+		// Scratch-pad (16 bytes, zeros)
+		entryPos += 16
+	}
+
+	return buf
+}
+
 func TestReadGroupBTreeEntries_Success(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -20,33 +126,13 @@ func TestReadGroupBTreeEntries_Success(t *testing.T) {
 	}{
 		{
 			name: "single entry - offset size 8",
-			data: func() []byte {
-				buf := make([]byte, 2048)
-				// Signature "TREE"
-				copy(buf[0:4], "TREE")
-				// Node type (1 byte) - 0 for groups
-				buf[4] = 0
-				// Node level (1 byte) - 0 for leaf
-				buf[5] = 0
-				// Entries used (2 bytes)
-				binary.LittleEndian.PutUint16(buf[6:8], 1)
-				// Left sibling address (8 bytes)
-				binary.LittleEndian.PutUint64(buf[8:16], 0xFFFFFFFFFFFFFFFF)
-				// Right sibling address (8 bytes)
-				binary.LittleEndian.PutUint64(buf[16:24], 0xFFFFFFFFFFFFFFFF)
-
-				// Entry starts at offset 24
-				// Link name offset (8 bytes)
-				binary.LittleEndian.PutUint64(buf[24:32], 0x100)
-				// Object header address (8 bytes)
-				binary.LittleEndian.PutUint64(buf[32:40], 0x200)
-				// Cache type (4 bytes)
-				binary.LittleEndian.PutUint32(buf[40:44], 1)
-				// Reserved (4 bytes)
-				binary.LittleEndian.PutUint32(buf[44:48], 0)
-
-				return buf
-			}(),
+			data: createTestBTreeWithSNOD(8, binary.LittleEndian, 512, []struct {
+				linkNameOffset uint64
+				objectAddress  uint64
+				cacheType      uint32
+			}{
+				{0x100, 0x200, 1},
+			}),
 			address:       0,
 			offsetSize:    8,
 			expectedCount: 1,
@@ -58,26 +144,15 @@ func TestReadGroupBTreeEntries_Success(t *testing.T) {
 		},
 		{
 			name: "multiple entries - offset size 8",
-			data: func() []byte {
-				buf := make([]byte, 2048)
-				copy(buf[0:4], "TREE")
-				buf[4] = 0
-				buf[5] = 0
-				binary.LittleEndian.PutUint16(buf[6:8], 3)
-				binary.LittleEndian.PutUint64(buf[8:16], 0xFFFFFFFFFFFFFFFF)
-				binary.LittleEndian.PutUint64(buf[16:24], 0xFFFFFFFFFFFFFFFF)
-
-				offset := 24
-				for i := 0; i < 3; i++ {
-					binary.LittleEndian.PutUint64(buf[offset:offset+8], uint64(i)*0x100)
-					binary.LittleEndian.PutUint64(buf[offset+8:offset+16], uint64(i)*0x200)
-					binary.LittleEndian.PutUint32(buf[offset+16:offset+20], uint32(i))
-					binary.LittleEndian.PutUint32(buf[offset+20:offset+24], 0)
-					offset += 24
-				}
-
-				return buf
-			}(),
+			data: createTestBTreeWithSNOD(8, binary.LittleEndian, 512, []struct {
+				linkNameOffset uint64
+				objectAddress  uint64
+				cacheType      uint32
+			}{
+				{0x000, 0x000, 0},
+				{0x100, 0x200, 1},
+				{0x200, 0x400, 2},
+			}),
 			address:       0,
 			offsetSize:    8,
 			expectedCount: 3,
@@ -89,29 +164,13 @@ func TestReadGroupBTreeEntries_Success(t *testing.T) {
 		},
 		{
 			name: "offset size 4",
-			data: func() []byte {
-				buf := make([]byte, 2048)
-				copy(buf[0:4], "TREE")
-				buf[4] = 0
-				buf[5] = 0
-				binary.LittleEndian.PutUint16(buf[6:8], 1)
-				// Left sibling (4 bytes for offset size 4)
-				binary.LittleEndian.PutUint32(buf[8:12], 0xFFFFFFFF)
-				// Right sibling (4 bytes)
-				binary.LittleEndian.PutUint32(buf[12:16], 0xFFFFFFFF)
-
-				// Entry starts at offset 16 (header is 4+1+1+2+4+4=16)
-				// Link name offset (4 bytes)
-				binary.LittleEndian.PutUint32(buf[16:20], 0xAAA)
-				// Object header address (4 bytes)
-				binary.LittleEndian.PutUint32(buf[20:24], 0xBBB)
-				// Cache type (4 bytes)
-				binary.LittleEndian.PutUint32(buf[24:28], 5)
-				// Reserved (4 bytes)
-				binary.LittleEndian.PutUint32(buf[28:32], 0)
-
-				return buf
-			}(),
+			data: createTestBTreeWithSNOD(4, binary.LittleEndian, 256, []struct {
+				linkNameOffset uint64
+				objectAddress  uint64
+				cacheType      uint32
+			}{
+				{0xAAA, 0xBBB, 5},
+			}),
 			address:       0,
 			offsetSize:    4,
 			expectedCount: 1,
@@ -123,25 +182,13 @@ func TestReadGroupBTreeEntries_Success(t *testing.T) {
 		},
 		{
 			name: "offset size 2",
-			data: func() []byte {
-				buf := make([]byte, 2048)
-				copy(buf[0:4], "TREE")
-				buf[4] = 0
-				buf[5] = 0
-				binary.LittleEndian.PutUint16(buf[6:8], 1)
-				// Left sibling (2 bytes)
-				binary.LittleEndian.PutUint16(buf[8:10], 0xFFFF)
-				// Right sibling (2 bytes)
-				binary.LittleEndian.PutUint16(buf[10:12], 0xFFFF)
-
-				// Entry starts at offset 12
-				binary.LittleEndian.PutUint16(buf[12:14], 0x111)
-				binary.LittleEndian.PutUint16(buf[14:16], 0x222)
-				binary.LittleEndian.PutUint32(buf[16:20], 3)
-				binary.LittleEndian.PutUint32(buf[20:24], 0)
-
-				return buf
-			}(),
+			data: createTestBTreeWithSNOD(2, binary.LittleEndian, 128, []struct {
+				linkNameOffset uint64
+				objectAddress  uint64
+				cacheType      uint32
+			}{
+				{0x111, 0x222, 3},
+			}),
 			address:       0,
 			offsetSize:    2,
 			expectedCount: 1,
@@ -289,7 +336,7 @@ func TestReadGroupBTreeEntries_ReadErrors(t *testing.T) {
 		{
 			name: "entries data read error",
 			setup: func() (*mockReaderAt, *core.Superblock) {
-				buf := make([]byte, 24) // Just header, no entry data
+				buf := make([]byte, 24) // Just header, no key/child data
 				copy(buf[0:4], "TREE")
 				buf[4] = 0
 				buf[5] = 0
@@ -298,7 +345,7 @@ func TestReadGroupBTreeEntries_ReadErrors(t *testing.T) {
 				binary.LittleEndian.PutUint64(buf[16:24], 0xFFFFFFFFFFFFFFFF)
 				return &mockReaderAt{data: buf}, createMockSuperblock()
 			},
-			wantErr: "B-tree entries read failed",
+			wantErr: "B-tree data read failed",
 		},
 	}
 
@@ -316,23 +363,17 @@ func TestReadGroupBTreeEntries_ReadErrors(t *testing.T) {
 }
 
 func TestReadGroupBTreeEntries_BigEndian(t *testing.T) {
-	// Note: readAddress function in btree_group.go always uses LittleEndian
-	// This is consistent with HDF5 B-tree format which uses little-endian regardless of file endianness
-	buf := make([]byte, 2048)
-	copy(buf[0:4], "TREE")
-	buf[4] = 0
-	buf[5] = 0
-	binary.BigEndian.PutUint16(buf[6:8], 1)
-	binary.BigEndian.PutUint64(buf[8:16], 0xFFFFFFFFFFFFFFFF)
-	binary.BigEndian.PutUint64(buf[16:24], 0xFFFFFFFFFFFFFFFF)
+	// Big-endian test: B-tree addresses use little-endian in HDF5 format,
+	// but SNOD entries use file's endianness.
+	data := createTestBTreeWithSNOD(8, binary.BigEndian, 512, []struct {
+		linkNameOffset uint64
+		objectAddress  uint64
+		cacheType      uint32
+	}{
+		{0x123456789ABCDEF0, 0xFEDCBA0987654321, 0x12345678},
+	})
 
-	// Entry - addresses use little-endian in B-tree format
-	binary.LittleEndian.PutUint64(buf[24:32], 0x123456789ABCDEF0)
-	binary.LittleEndian.PutUint64(buf[32:40], 0xFEDCBA0987654321)
-	binary.BigEndian.PutUint32(buf[40:44], 0x12345678)
-	binary.BigEndian.PutUint32(buf[44:48], 0x87654321)
-
-	reader := &mockReaderAt{data: buf}
+	reader := &mockReaderAt{data: data}
 	sb := createMockSuperblock()
 	sb.Endianness = binary.BigEndian
 
@@ -342,7 +383,6 @@ func TestReadGroupBTreeEntries_BigEndian(t *testing.T) {
 	require.Equal(t, uint64(0x123456789ABCDEF0), entries[0].LinkNameOffset)
 	require.Equal(t, uint64(0xFEDCBA0987654321), entries[0].ObjectAddress)
 	require.Equal(t, uint32(0x12345678), entries[0].CacheType)
-	require.Equal(t, uint32(0x87654321), entries[0].Reserved)
 }
 
 func TestReadAddress(t *testing.T) {
@@ -392,10 +432,25 @@ func TestReadAddress(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := readAddress(tt.data, tt.size)
+			result := readAddress(tt.data, tt.size, binary.LittleEndian)
 			require.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestReadAddress_BigEndian(t *testing.T) {
+	// Test big-endian reading
+	data := []byte{0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0}
+	result := readAddress(data, 8, binary.BigEndian)
+	require.Equal(t, uint64(0x123456789ABCDEF0), result)
+
+	// 4 bytes big-endian
+	result4 := readAddress(data[:4], 4, binary.BigEndian)
+	require.Equal(t, uint64(0x12345678), result4)
+
+	// 2 bytes big-endian
+	result2 := readAddress(data[:2], 2, binary.BigEndian)
+	require.Equal(t, uint64(0x1234), result2)
 }
 
 func BenchmarkReadGroupBTreeEntries(b *testing.B) {
@@ -435,6 +490,6 @@ func BenchmarkReadAddress(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		_ = readAddress(data, 8)
+		_ = readAddress(data, 8, binary.LittleEndian)
 	}
 }

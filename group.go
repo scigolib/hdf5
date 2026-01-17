@@ -210,7 +210,11 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 	}
 
 	// Load children only for groups.
-	if header.Type == core.ObjectTypeGroup {
+	// Note: For v0 files, the root group may have ObjectTypeUnknown because
+	// it has no messages (symbol table info is cached in superblock).
+	isGroup := header.Type == core.ObjectTypeGroup ||
+		(header.Type == core.ObjectTypeUnknown && sb.Version == core.Version0)
+	if isGroup {
 		// First, try to parse Link messages (modern format).
 		hasLinkMessages := false
 		for _, msg := range header.Messages {
@@ -245,6 +249,7 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 
 		// Fallback to symbol table if no link messages found (older format).
 		if !hasLinkMessages {
+			// First check for Symbol Table message in object header
 			for _, msg := range header.Messages {
 				if msg.Type == core.MsgSymbolTable {
 					// Symbol table message data format:
@@ -259,6 +264,21 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 							BTreeAddress: btreeAddr,
 							HeapAddress:  heapAddr,
 						}
+					}
+				}
+			}
+
+			// For v0 superblocks: if no symbol table message found in object header,
+			// use cached B-tree and Heap addresses from superblock.
+			// This is ONLY valid for the ROOT GROUP - superblock cached addresses point to root's symbol table.
+			// For nested groups, symbol table addresses come from parent SNOD entry (CacheType=1).
+			if group.symbolTable == nil && sb.Version == core.Version0 && address == sb.RootGroup {
+				// Check if superblock has cached addresses
+				if sb.RootBTreeAddr != 0 && sb.RootHeapAddr != 0 {
+					group.symbolTable = &structures.SymbolTable{
+						Version:      1,
+						BTreeAddress: sb.RootBTreeAddr,
+						HeapAddress:  sb.RootHeapAddr,
 					}
 				}
 			}
@@ -343,24 +363,33 @@ func (g *Group) loadChildren() error {
 		return errors.New("symbol table is nil")
 	}
 
+	// Check for cycles: if we've already visited this B-tree address, skip loading children.
+	// This prevents infinite loops when v0 files have groups sharing symbol table structures.
+	btreeAddr := g.symbolTable.BTreeAddress
+	if g.file.visitedBTrees[btreeAddr] {
+		// Already visited this B-tree, no children to add (prevents cycle).
+		return nil
+	}
+	g.file.visitedBTrees[btreeAddr] = true
+
 	heap, err := structures.LoadLocalHeap(g.file.osFile, g.symbolTable.HeapAddress, g.file.sb)
 	if err != nil {
 		return utils.WrapError("local heap load failed", err)
 	}
 
 	// Detect B-tree format by reading signature.
-	btreeSig := readSignature(g.file.osFile, g.symbolTable.BTreeAddress)
+	btreeSig := readSignature(g.file.osFile, btreeAddr)
 
 	var entries []structures.BTreeEntry
 	switch btreeSig {
 	case "TREE":
 		// v1 B-tree format (used in v0 files and some v1 files).
-		entries, err = structures.ReadGroupBTreeEntries(g.file.osFile, g.symbolTable.BTreeAddress, g.file.sb)
+		entries, err = structures.ReadGroupBTreeEntries(g.file.osFile, btreeAddr, g.file.sb)
 	case "BTRE":
 		// Modern B-tree format.
-		entries, err = structures.ReadBTreeEntries(g.file.osFile, g.symbolTable.BTreeAddress, g.file.sb)
+		entries, err = structures.ReadBTreeEntries(g.file.osFile, btreeAddr, g.file.sb)
 	default:
-		return fmt.Errorf("unknown B-tree signature: %q at address 0x%X", btreeSig, g.symbolTable.BTreeAddress)
+		return fmt.Errorf("unknown B-tree signature: %q at address 0x%X", btreeSig, btreeAddr)
 	}
 
 	if err != nil {
@@ -386,7 +415,14 @@ func (g *Group) loadChildren() error {
 					return utils.WrapError("SNOD child name read failed", err)
 				}
 
-				child, err := loadObject(g.file, snodEntry.ObjectAddress, childName)
+				// For nested groups with CacheType=1, pass cached symbol table addresses.
+				var child Object
+				if snodEntry.CacheType == 1 && snodEntry.CachedBTreeAddr != 0 {
+					child, err = loadGroupWithCachedSymbolTable(g.file, snodEntry.ObjectAddress, childName,
+						snodEntry.CachedBTreeAddr, snodEntry.CachedHeapAddr)
+				} else {
+					child, err = loadObject(g.file, snodEntry.ObjectAddress, childName)
+				}
 				if err != nil {
 					return utils.WrapError("SNOD child load failed", err)
 				}
@@ -401,7 +437,15 @@ func (g *Group) loadChildren() error {
 			return utils.WrapError("link name read failed", err)
 		}
 
-		child, err := loadObject(g.file, entry.ObjectAddress, linkName)
+		// For nested groups with CacheType=1 (H5G_CACHED_STAB), use cached symbol table addresses.
+		// This is critical for v0 files where nested groups store their symbol table info in the parent SNOD entry.
+		var child Object
+		if entry.CacheType == 1 && entry.CachedBTreeAddr != 0 {
+			child, err = loadGroupWithCachedSymbolTable(g.file, entry.ObjectAddress, linkName,
+				entry.CachedBTreeAddr, entry.CachedHeapAddr)
+		} else {
+			child, err = loadObject(g.file, entry.ObjectAddress, linkName)
+		}
 		if err != nil {
 			return utils.WrapError("child load failed", err)
 		}
@@ -490,7 +534,44 @@ func loadObject(file *File, address uint64, name string) (Object, error) {
 			name:    name,
 			address: address, // Store address for later reading.
 		}, nil
+	case core.ObjectTypeUnknown:
+		// For v0 files, groups may have no messages and thus ObjectTypeUnknown.
+		// Try loading as a group first.
+		if file.sb.Version == core.Version0 {
+			group, err := loadGroup(file, address)
+			if err == nil {
+				if name != "" {
+					group.name = name
+				}
+				return group, nil
+			}
+			// If loading as group fails, fall through to error
+		}
+		return nil, fmt.Errorf("unsupported object type: %d", header.Type)
 	default:
 		return nil, fmt.Errorf("unsupported object type: %d", header.Type)
 	}
+}
+
+// loadGroupWithCachedSymbolTable loads a group using cached symbol table addresses.
+// This is used for v0 files where nested groups have their symbol table info cached
+// in the parent SNOD entry (CacheType=1, H5G_CACHED_STAB).
+func loadGroupWithCachedSymbolTable(file *File, address uint64, name string, btreeAddr, heapAddr uint64) (*Group, error) {
+	group := &Group{
+		file:    file,
+		name:    name,
+		address: address,
+		symbolTable: &structures.SymbolTable{
+			Version:      1,
+			BTreeAddress: btreeAddr,
+			HeapAddress:  heapAddr,
+		},
+	}
+
+	// Load children using the cached symbol table addresses.
+	if err := group.loadChildren(); err != nil {
+		return nil, utils.WrapError("load children with cached symbol table failed", err)
+	}
+
+	return group, nil
 }

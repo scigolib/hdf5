@@ -163,29 +163,31 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		// Offset 32-39: Free space index
 		// Offset 40-47: End-of-File address (NOT root group!)
 		// Offset 48-55: Driver info block
-		// Offset 56-95: Root group symbol table entry (32 bytes total):
+		// Offset 56-95: Root group symbol table entry (40 bytes total):
 		//   56-63: Link name offset (8 bytes)
-		//   64-71: Object header address (8 bytes) <-- Modern format uses this
-		//   72-75: Cache type (4 bytes)
+		//   64-71: Object header address (8 bytes)
+		//   72-75: Cache type (4 bytes) - 1 = H5G_CACHED_STAB
 		//   76-79: Reserved (4 bytes)
-		//   80-87: B-tree address (8 bytes) <-- Symbol table format uses this
-		//   88-95: Local heap address (8 bytes)
+		//   80-87: B-tree address (8 bytes) - for cached symbol table
+		//   88-95: Local heap address (8 bytes) - for cached symbol table
 
-		// First, try reading the object header address at offset 64
-		rootGroupOffset := 64
-		sb.RootGroup, err = readValue(rootGroupOffset, offsetSize)
+		// Read object header address at offset 64
+		sb.RootGroup, err = readValue(64, offsetSize)
 		if err != nil {
 			return nil, utils.WrapError("root group address read failed", err)
 		}
 
-		// If object header address is 0, this file uses symbol table format
-		// In this case, read the B-tree address from the scratch-pad at offset 80
-		if sb.RootGroup == 0 {
-			btreeOffset := 80
-			sb.RootGroup, err = readValue(btreeOffset, offsetSize)
-			if err != nil {
-				return nil, utils.WrapError("b-tree address read failed", err)
-			}
+		// ALWAYS read cached B-tree and Heap addresses for v0 files
+		// These are stored in the scratch-pad area when cache type = 1 (H5G_CACHED_STAB)
+		// Even if object header address is non-zero, the symbol table may use these
+		sb.RootBTreeAddr, err = readValue(80, offsetSize)
+		if err != nil {
+			return nil, utils.WrapError("b-tree address read failed", err)
+		}
+
+		sb.RootHeapAddr, err = readValue(88, offsetSize)
+		if err != nil {
+			return nil, utils.WrapError("heap address read failed", err)
 		}
 	} else {
 		// For v2 and v3, fields start at byte 12
