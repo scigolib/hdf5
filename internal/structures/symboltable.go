@@ -47,14 +47,27 @@ func ParseSymbolTable(r io.ReaderAt, offset uint64, sb *core.Superblock) (*Symbo
 	}, nil
 }
 
+// Cache type constants for symbol table entries.
+const (
+	// CacheTypeNone indicates no cached information.
+	CacheTypeNone uint32 = 0
+	// CacheTypeSymbolTable indicates cached symbol table addresses (H5G_CACHED_STAB).
+	CacheTypeSymbolTable uint32 = 1
+	// CacheTypeSoftLink indicates a soft link (H5G_CACHED_SLINK).
+	// For soft links, ObjectAddress is HADDR_UNDEF and the target path offset
+	// is stored in CachedSoftLinkOffset.
+	CacheTypeSoftLink uint32 = 2
+)
+
 // SymbolTableEntry represents a single entry in a symbol table linking to an object.
 // Entry format (40 bytes for 8-byte offsets):
 //   - Link Name Offset (8 bytes): Offset into local heap for link name
-//   - Object Header Address (8 bytes): Address of object header
-//   - Cache Type (4 bytes): 0=none, 1=H5G_CACHED_STAB (symbol table)
+//   - Object Header Address (8 bytes): Address of object header (HADDR_UNDEF for soft links)
+//   - Cache Type (4 bytes): 0=none, 1=H5G_CACHED_STAB (symbol table), 2=H5G_CACHED_SLINK (soft link)
 //   - Reserved (4 bytes)
 //   - Scratch-pad Space (16 bytes):
 //   - For CacheType=1: B-tree address (8 bytes) + Heap address (8 bytes)
+//   - For CacheType=2: Soft link value offset (4 bytes) into local heap
 type SymbolTableEntry struct {
 	LinkNameOffset uint64
 	ObjectAddress  uint64
@@ -63,6 +76,13 @@ type SymbolTableEntry struct {
 	// Cached symbol table addresses (only valid when CacheType == 1)
 	CachedBTreeAddr uint64
 	CachedHeapAddr  uint64
+	// Soft link target offset in local heap (only valid when CacheType == 2)
+	CachedSoftLinkOffset uint32
+}
+
+// IsSoftLink returns true if this entry represents a soft link.
+func (e *SymbolTableEntry) IsSoftLink() bool {
+	return e.CacheType == CacheTypeSoftLink
 }
 
 // ParseSymbolTableEntry parses a symbol table entry from the specified file offset.
@@ -83,10 +103,16 @@ func ParseSymbolTableEntry(r io.ReaderAt, offset uint64, sb *core.Superblock) (*
 		Reserved:       sb.Endianness.Uint32(buf[20:24]),
 	}
 
-	// If CacheType == 1 (H5G_CACHED_STAB), read cached addresses from scratch-pad
-	if entry.CacheType == 1 {
+	// Parse scratch-pad based on cache type
+	switch entry.CacheType {
+	case CacheTypeSymbolTable:
+		// CacheType == 1 (H5G_CACHED_STAB): cached symbol table addresses
 		entry.CachedBTreeAddr = sb.Endianness.Uint64(buf[24:32])
 		entry.CachedHeapAddr = sb.Endianness.Uint64(buf[32:40])
+	case CacheTypeSoftLink:
+		// CacheType == 2 (H5G_CACHED_SLINK): soft link value offset
+		// The soft link target path is stored in local heap at this offset
+		entry.CachedSoftLinkOffset = sb.Endianness.Uint32(buf[24:28])
 	}
 
 	return entry, nil

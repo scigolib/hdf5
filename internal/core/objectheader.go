@@ -242,37 +242,51 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, _ *Superblock,
 
 	//nolint:gosec // G115: Safe conversion for HDF5 structure sizes
 	current += uint64(chunkSizeBytes)
-	end := current + chunkSize
+	// V2 headers have a 4-byte CRC32 checksum at the end of each chunk.
+	// The chunkSize includes the checksum, so we subtract 4 to get the
+	// end-of-messages boundary (H5O_SIZEOF_CHKSUM = 4).
+	end := current + chunkSize - 4
+
+	// Determine message header size based on flags.
+	// V2 message format: Type (1) + Size (2) + Flags (1) = 4 bytes
+	// If H5O_HDR_ATTR_CRT_ORDER_TRACKED (bit 2 = 0x04) is set,
+	// there's an additional 2-byte creation index, making it 6 bytes.
+	msgHeaderSize := uint64(4)
+	if flags&0x04 != 0 {
+		msgHeaderSize = 6
+	}
 
 	for current < end {
-		// V2 message format: Type (1 byte) + Size (2 bytes) + Flags (1 byte) = 4 bytes header
-		typeSizeBuf := utils.GetBuffer(4)
+		// Always read 6 bytes - enough for either 4-byte or 6-byte header
+		headerBuf := utils.GetBuffer(6)
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		if _, err := r.ReadAt(typeSizeBuf, int64(current)); err != nil {
-			utils.ReleaseBuffer(typeSizeBuf)
+		if _, err := r.ReadAt(headerBuf, int64(current)); err != nil {
+			utils.ReleaseBuffer(headerBuf)
 			return nil, "", utils.WrapError("message header read failed", err)
 		}
 
 		// Type is 1 byte, size is 2 bytes, flags is 1 byte
-		msgType := MessageType(typeSizeBuf[0])
+		// (optional: creation index is 2 bytes if tracked)
+		msgType := MessageType(headerBuf[0])
 		var msgSize uint16
 		if isBE {
-			msgSize = binary.BigEndian.Uint16(typeSizeBuf[1:3])
+			msgSize = binary.BigEndian.Uint16(headerBuf[1:3])
 		} else {
-			msgSize = binary.LittleEndian.Uint16(typeSizeBuf[1:3])
+			msgSize = binary.LittleEndian.Uint16(headerBuf[1:3])
 		}
-		msgFlags := typeSizeBuf[3]
+		msgFlags := headerBuf[3]
 		_ = msgFlags // Unused for now
-		utils.ReleaseBuffer(typeSizeBuf)
+		// Creation index at headerBuf[4:6] if tracked - not currently used
+		utils.ReleaseBuffer(headerBuf)
 
 		if msgSize == 0 {
-			current += 4
+			current += msgHeaderSize
 			continue
 		}
 
 		data := utils.GetBuffer(int(msgSize))
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		if _, err := r.ReadAt(data, int64(current+4)); err != nil {
+		if _, err := r.ReadAt(data, int64(current+msgHeaderSize)); err != nil {
 			utils.ReleaseBuffer(data)
 			return nil, "", utils.WrapError("message data read failed", err)
 		}
@@ -287,7 +301,7 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, _ *Superblock,
 			Data:   data,
 		})
 
-		current += 4 + uint64(msgSize)
+		current += msgHeaderSize + uint64(msgSize)
 	}
 
 	return messages, name, nil

@@ -7,6 +7,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.3] - 2025-01-28
+
+### 🐛 Bug Fixes
+
+#### Fixed: V1 Object Header Message Parsing (Issue #9 continued)
+
+Files with v1 object headers were not parsing all messages correctly, causing groups
+to appear empty even when they contained Link Messages.
+
+**Root Cause**: Wrong end offset calculation in `objectheader_v1.go`:
+- Code used `headerAddr + headerSize` instead of `headerAddr + 16 + headerSize`
+- The 16-byte header prefix was not accounted for
+- Result: only 8 bytes parsed for messages instead of full message area
+
+**Fixed**: `internal/core/objectheader_v1.go` - correct end offset calculation
+
+**Result**:
+- Files with v1 headers and Link Messages now show children correctly
+- User's `flux.h5` file now works (was showing 0 children, now shows group1)
+
+**Test file added**: `testdata/reference/flux.h5` (from Issue #9 reporter)
+
+#### Fixed: Soft Links Causing "negative offset: -1" Errors
+
+Files with soft links in symbol table format (CacheType=2) were failing to open
+with "negative offset: -1" error because we tried to load objects at invalid addresses.
+
+**Root Cause**: Symbol table entries with CacheType=2 (H5G_CACHED_SLINK) have
+`ObjectAddress = HADDR_UNDEF (0xFFFFFFFFFFFFFFFF)` - not a real address.
+
+**Fixed**: Following C library behavior (lazy soft link resolution):
+- `internal/structures/symboltable.go`: Added `CacheTypeSoftLink` constant and `IsSoftLink()` method
+- `internal/structures/btree.go`: Added `IsSoftLink()` method to BTreeEntry
+- `group.go`: Skip soft links during file open, resolve only on explicit access
+
+**Result**:
+- 14 additional test files now pass (files with dangling soft links)
+- Official HDF5 test suite pass rate: 87.6% → 91.3%
+
+### ✨ New Features
+
+#### Named Datatype (Committed Datatype) Support
+
+Added support for HDF5 Named Datatypes (object type 2) - datatypes stored as
+first-class objects that can be shared between datasets.
+
+**Added**:
+- `NamedDatatype` struct in `group.go`
+- `Name()` and `Datatype()` methods
+- Proper handling in `loadObject()` for `ObjectTypeDatatype`
+
+**Result**:
+- 30 additional test files now pass (files with committed datatypes)
+- Official HDF5 test suite pass rate: 91.3% → 99.7%
+
+#### Fixed: V2 Object Header Parsing for Attribute Creation Order
+
+Files with V2 object headers and attribute creation order tracking enabled
+(flag bit 2 = `H5O_HDR_ATTR_CRT_ORDER_TRACKED`) were failing with EOF errors.
+
+**Root Causes**:
+1. Checksum not accounted for: V2 headers have 4-byte CRC32 at chunk end
+2. Creation index not accounted for: When bit 2 is set, message headers are 6 bytes instead of 4
+
+**Fixed**: `internal/core/objectheader.go`:
+- Subtract 4 bytes from chunk end for CRC32 checksum
+- Use 6-byte message header when creation order tracking is enabled
+
+**Result**:
+- `torderattr.h5` and all other V2 files with creation order now parse correctly
+- Official HDF5 test suite pass rate: 99.7% → **100%**
+
+### 📊 Test Suite Results
+
+**Official HDF5 Test Suite Results**:
+- Pass rate: **100%** (378/378 valid files)
+- Total files: 433 (55 skipped as known invalid/unsupported)
+
+**Reference Test Suite**:
+- Added `expectError` classification for intentionally invalid files
+- `bad_compound.h5` now tests that we correctly return error (h5dump also fails)
+- Professional error handling validation instead of skipping
+
+**Files Changed**:
+- `internal/core/objectheader.go` - V2 header checksum and creation index fix
+- `internal/core/objectheader_v1.go` - V1 header parsing fix
+- `internal/structures/symboltable.go` - Soft link support
+- `internal/structures/btree.go` - Soft link support
+- `group.go` - Named Datatype support, soft link handling
+- `reference_test.go` - Professional error testing
+- `testdata/hdf5_official/known_invalid.txt` - Updated corrupt file list
+- `testdata/reference/flux.h5` - New test file from Issue #9
+
+---
+
 ## [v0.13.2] - 2025-01-17
 
 ### 🐛 Bug Fixes

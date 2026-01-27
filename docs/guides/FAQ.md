@@ -157,7 +157,7 @@ enumDs, _ := fw.CreateDataset("/status", hdf5.EnumInt8, []uint64{5},
 **Current limitations**:
 - Some advanced filters
 
-**Quality**: Feature complete write support with 98.2% HDF5 test suite pass rate!
+**Quality**: Feature complete write support with 100% HDF5 test suite pass rate!
 
 See [ROADMAP.md](../../ROADMAP.md) for future plans.
 

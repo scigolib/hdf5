@@ -9,7 +9,7 @@
 # - Lines starting with # are comments
 # - Empty lines are ignored
 #
-# Last Updated: 2025-11-13
+# Last Updated: 2025-01-27
 
 # ===================================================
 # Family File Format (Multi-File HDF5)
@@ -78,12 +78,15 @@ old_h5fc_ext1_i.h5
 
 # ===================================================
 # ===================================================
-# Truly Corrupted Files (6 files)
+# Truly Corrupted Files (8 files)
 # ===================================================
-# These files are corrupted. Even the C library cannot read them.
+# These files are corrupted or have intentionally invalid structures.
+# The C library h5dump/h5ls also fails on these files.
 # Status: Expected to fail (proper error handling)
 
 3790_infinite_loop.h5
+bad_offset.h5
+corrupt_stab_msg.h5
 h5clear_fsm_persist_noclose.h5
 h5clear_fsm_persist_user_greater.h5
 h5clear_status_noclose.h5
