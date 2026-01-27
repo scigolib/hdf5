@@ -50,9 +50,10 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 	refCount := sb.Endianness.Uint32(headerBuf[4:8]) // Reference count (hard link count)
 	headerSize := sb.Endianness.Uint32(headerBuf[8:12])
 
-	// Messages start after the 16-byte header.
+	// Messages start after the 16-byte header prefix.
+	// headerSize is the size of message data, NOT including the prefix.
 	current := headerAddr + 16
-	end := headerAddr + uint64(headerSize)
+	end := headerAddr + 16 + uint64(headerSize)
 
 	var messages []*HeaderMessage
 	var name string

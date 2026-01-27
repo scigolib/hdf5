@@ -18,6 +18,13 @@ type BTreeEntry struct {
 	// Cached symbol table addresses (only valid when CacheType == 1)
 	CachedBTreeAddr uint64
 	CachedHeapAddr  uint64
+	// Soft link target offset in local heap (only valid when CacheType == 2)
+	CachedSoftLinkOffset uint32
+}
+
+// IsSoftLink returns true if this entry represents a soft link.
+func (e *BTreeEntry) IsSoftLink() bool {
+	return e.CacheType == CacheTypeSoftLink
 }
 
 // ReadBTreeEntries reads B-tree entries from a leaf node at the specified address.

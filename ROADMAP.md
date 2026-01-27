@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2025-01-17 | **Current Version**: v0.13.2 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.2 RELEASED! (2025-01-17 v0 fix) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2025-01-28 | **Current Version**: v0.13.3 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.3 RELEASED! (2025-01-28 compatibility improvements) → v1.0.0 LTS (Q3 2026)
 
 ---
 
@@ -50,6 +50,8 @@ v0.13.0 (HDF5 2.0.0 + SECURITY) ✅ RELEASED 2025-11-13
 v0.13.1 (HOTFIX - Documentation) ✅ RELEASED 2025-11-13
          ↓ (v0 superblock bug fix)
 v0.13.2 (BUGFIX - V0 superblock) ✅ RELEASED 2025-01-17
+         ↓ (compatibility improvements)
+v0.13.3 (FEATURE - Named Datatypes, Soft Links) ✅ RELEASED 2025-01-28
          ↓ (community adoption + feedback + monitoring)
 v0.13.x (maintenance phase) → Stable maintenance, bug fixes, minor enhancements
          ↓ (6-9 months production validation)
@@ -60,7 +62,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 **v0.12.0** = Stable release with feature-complete write support ✅ RELEASED
 - Compound datatypes, soft/external links complete
-- **433 official HDF5 test files** validated (98.2% pass rate)
+- **433 official HDF5 test files** validated (now 100% with v0.13.3)
 - 100% write support achieved
 - API stable, production-ready
 
@@ -83,6 +85,14 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - Fixed local heap data segment address reading
 - Added cycle detection for shared symbol tables
 
+**v0.13.3** = Major Compatibility Improvements ✅ RELEASED (2025-01-28)
+- Fixed Issue #9 (continued): V1 object header message parsing
+- Fixed V2 header parsing: CRC32 checksum + creation index handling
+- Fixed soft link handling (CacheType=2) - lazy resolution like C library
+- Added Named Datatype (committed datatype) support
+- Official HDF5 test suite: **100% pass rate** (378/378 valid files)
+- Added flux.h5 to test suite, professional error testing for corrupt files
+
 **v0.13.x** = Stable Maintenance Phase (current)
 - Monitoring for bug reports from production use
 - Performance optimizations when identified
@@ -102,7 +112,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-## 📊 Current Status (v0.13.2)
+## 📊 Current Status (v0.13.3)
 
 **Phase**: 🛡️ Stable Maintenance (monitoring, community support)
 **HDF5 2.0.0 Format Spec v4.0**: Complete! 🎉
@@ -386,6 +396,6 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-*Version 5.1 (Updated 2025-11-13)*
-*Current: v0.13.1 (STABLE + HOTFIX) | Phase: Maintenance | Next: v0.14.0+ (community-driven) | Target: v1.0.0 LTS (Q3 2026)*
+*Version 5.2 (Updated 2025-01-27)*
+*Current: v0.13.3 (STABLE) | Phase: Maintenance | Next: v0.14.0+ (community-driven) | Target: v1.0.0 LTS (Q3 2026)*
 

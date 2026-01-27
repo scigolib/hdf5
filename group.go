@@ -26,6 +26,26 @@ type Dataset struct {
 	address uint64 // Address of object header.
 }
 
+// NamedDatatype represents an HDF5 committed (named) datatype.
+// A named datatype is a datatype stored as a first-class object in the file,
+// allowing it to be shared by multiple datasets.
+type NamedDatatype struct {
+	file     *File
+	name     string
+	address  uint64                // Address of object header.
+	datatype *core.DatatypeMessage // The stored datatype definition.
+}
+
+// Name returns the named datatype's name.
+func (n *NamedDatatype) Name() string {
+	return n.name
+}
+
+// Datatype returns the underlying datatype definition.
+func (n *NamedDatatype) Datatype() *core.DatatypeMessage {
+	return n.datatype
+}
+
 // Name returns the dataset's name.
 func (d *Dataset) Name() string {
 	return d.name
@@ -342,6 +362,12 @@ func loadTraditionalGroup(file *File, address uint64) (*Group, error) {
 
 	// Load children from SNOD entries.
 	for _, entry := range node.Entries {
+		// Skip soft links - they have CacheType=2 and ObjectAddress=HADDR_UNDEF.
+		// Following C library behavior: soft links are not resolved during file open.
+		if entry.IsSoftLink() {
+			continue
+		}
+
 		linkName, err := heap.GetString(entry.LinkNameOffset)
 		if err != nil {
 			return nil, utils.WrapError("link name read failed", err)
@@ -397,6 +423,14 @@ func (g *Group) loadChildren() error {
 	}
 
 	for _, entry := range entries {
+		// Skip soft links - they are symbolic links stored in old symbol table format.
+		// Soft links have CacheType=2 and ObjectAddress=HADDR_UNDEF (0xFFFFFFFFFFFFFFFF).
+		// The target path is stored in local heap at CachedSoftLinkOffset.
+		// Like the C library, we don't resolve soft links during file open - only on explicit access.
+		if entry.IsSoftLink() {
+			continue
+		}
+
 		// Check if this is an unnamed SNOD (offset 0 AND object is SNOD) - means we should inline its children.
 		// Note: offset 0 alone is NOT sufficient - it's a valid offset for the first string in the heap!
 		// We must verify the object at the address is actually a SNOD, not a regular object with name at offset 0.
@@ -410,6 +444,11 @@ func (g *Group) loadChildren() error {
 
 			// Add each entry from the SNOD to this group.
 			for _, snodEntry := range node.Entries {
+				// Skip soft links in SNOD entries (same as above).
+				if snodEntry.IsSoftLink() {
+					continue
+				}
+
 				childName, err := heap.GetString(snodEntry.LinkNameOffset)
 				if err != nil {
 					return utils.WrapError("SNOD child name read failed", err)
@@ -417,7 +456,7 @@ func (g *Group) loadChildren() error {
 
 				// For nested groups with CacheType=1, pass cached symbol table addresses.
 				var child Object
-				if snodEntry.CacheType == 1 && snodEntry.CachedBTreeAddr != 0 {
+				if snodEntry.CacheType == structures.CacheTypeSymbolTable && snodEntry.CachedBTreeAddr != 0 {
 					child, err = loadGroupWithCachedSymbolTable(g.file, snodEntry.ObjectAddress, childName,
 						snodEntry.CachedBTreeAddr, snodEntry.CachedHeapAddr)
 				} else {
@@ -440,7 +479,7 @@ func (g *Group) loadChildren() error {
 		// For nested groups with CacheType=1 (H5G_CACHED_STAB), use cached symbol table addresses.
 		// This is critical for v0 files where nested groups store their symbol table info in the parent SNOD entry.
 		var child Object
-		if entry.CacheType == 1 && entry.CachedBTreeAddr != 0 {
+		if entry.CacheType == structures.CacheTypeSymbolTable && entry.CachedBTreeAddr != 0 {
 			child, err = loadGroupWithCachedSymbolTable(g.file, entry.ObjectAddress, linkName,
 				entry.CachedBTreeAddr, entry.CachedHeapAddr)
 		} else {
@@ -533,6 +572,26 @@ func loadObject(file *File, address uint64, name string) (Object, error) {
 			file:    file,
 			name:    name,
 			address: address, // Store address for later reading.
+		}, nil
+	case core.ObjectTypeDatatype:
+		// Named (committed) datatype - a datatype stored as a first-class object.
+		// Extract the datatype from the object header's Datatype message.
+		var datatype *core.DatatypeMessage
+		for _, msg := range header.Messages {
+			if msg.Type == core.MsgDatatype {
+				dt, err := core.ParseDatatypeMessage(msg.Data)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse named datatype: %w", err)
+				}
+				datatype = dt
+				break
+			}
+		}
+		return &NamedDatatype{
+			file:     file,
+			name:     name,
+			address:  address,
+			datatype: datatype,
 		}, nil
 	case core.ObjectTypeUnknown:
 		// For v0 files, groups may have no messages and thus ObjectTypeUnknown.

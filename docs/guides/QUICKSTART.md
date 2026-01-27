@@ -456,7 +456,8 @@ if err != nil {
 - ✅ Full read/write support
 - ✅ All datatypes including compound
 - ✅ Soft/external links supported
-- ✅ 98.2% HDF5 test suite pass rate
+- ✅ Named datatypes (committed datatypes) supported
+- ✅ 100% HDF5 test suite pass rate
 
 See [README.md](../../README.md) for full feature list.
 
