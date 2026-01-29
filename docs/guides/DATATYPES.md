@@ -421,7 +421,12 @@ if err == nil {
 
 ```go
 for _, attr := range attrs {
-    switch v := attr.Value.(type) {
+    value, err := attr.ReadValue()
+    if err != nil {
+        fmt.Printf("error reading %s: %v\n", attr.Name, err)
+        continue
+    }
+    switch v := value.(type) {
     case int32:
         fmt.Printf("int32: %d\n", v)
     case int64:

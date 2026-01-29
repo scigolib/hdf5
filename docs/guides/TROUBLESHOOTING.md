@@ -179,15 +179,21 @@ for i, child := range root.Children() {
 
 **Error Message**:
 ```
-Error: unsupported datatype: H5T_ARRAY
 Error: unsupported datatype class: 10
+Error: unsupported datatype class 9 or size 16
 ```
 
-**Cause**: Dataset uses a datatype not yet implemented.
+**Cause**: Dataset or attribute uses a datatype not yet implemented.
 
-**Supported Types**: int32, int64, float32, float64, strings, compounds
+**Supported Types (v0.13.4+)**:
+- Integer types (int8-64, uint8-64)
+- Floating point (float32, float64, bfloat16, FP8)
+- Strings (fixed-length and variable-length)
+- Compounds (nested structures)
+- Arrays, Enums, References, Opaque
 
-**Unsupported**: arrays, enums, references, opaque, time
+**Note**: If you see "unsupported datatype class 9", upgrade to v0.13.4+ which adds
+variable-length string support for attributes.
 
 **Solution**:
 
@@ -375,21 +381,28 @@ panic: interface conversion: interface {} is float64, not int32
 
 **Solution**:
 
-Always use safe type assertion:
+Always read the value first, then use safe type assertion:
 
 ```go
+// Read the attribute value
+value, err := attr.ReadValue()
+if err != nil {
+    log.Printf("Error reading attribute: %v", err)
+    return
+}
+
 // Bad: Direct assertion (can panic)
-value := attr.Value.(int32)
+intValue := value.(int32)
 
 // Good: Safe assertion with check
-if value, ok := attr.Value.(int32); ok {
-    fmt.Printf("int32: %d\n", value)
+if intValue, ok := value.(int32); ok {
+    fmt.Printf("int32: %d\n", intValue)
 } else {
-    fmt.Printf("Not int32, actual type: %T\n", attr.Value)
+    fmt.Printf("Not int32, actual type: %T\n", value)
 }
 
 // Best: Use type switch
-switch v := attr.Value.(type) {
+switch v := value.(type) {
 case int32:
     fmt.Printf("int32: %d\n", v)
 case int64:

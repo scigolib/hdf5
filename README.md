@@ -12,7 +12,7 @@
 [![Stars](https://img.shields.io/github/stars/scigolib/hdf5?style=flat-square&logo=github)](https://github.com/scigolib/hdf5/stargazers)
 [![Discussions](https://img.shields.io/github/discussions/scigolib/hdf5?style=flat-square&logo=github&label=discussions)](https://github.com/scigolib/hdf5/discussions)
 
-A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. **v0.13.0: HDF5 2.0.0 compatibility with security hardening, AI/ML datatypes, and 86.1% code coverage!**
+A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. **v0.13.4: 100% HDF5 test suite pass rate, full attribute support including variable-length strings!**
 
 ---
 
@@ -393,8 +393,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Status**: Stable - HDF5 2.0.0 compatible with security hardening
-**Version**: v0.13.0 (4 CVEs fixed, AI/ML datatypes, 86.1% coverage, 0 lint issues)
-**Last Updated**: 2025-11-13
+**Version**: v0.13.4 (100% HDF5 test suite pass rate, attribute reading fix, 86.1% coverage)
+**Last Updated**: 2025-01-29
 
 ---
 

@@ -285,7 +285,9 @@ Dataset: temperature
 
 ## 🏷️ Reading Attributes
 
-Attributes are metadata attached to groups and datasets.
+Attributes are metadata attached to groups and datasets. Attributes can contain
+any HDF5 datatype including integers, floats, fixed-length strings, and
+variable-length strings.
 
 ### Reading Group Attributes
 
@@ -301,8 +303,13 @@ if err != nil {
 
 fmt.Printf("Group '/' has %d attributes:\n", len(attrs))
 for _, attr := range attrs {
+    value, err := attr.ReadValue()
+    if err != nil {
+        fmt.Printf("  - %s: ERROR: %v\n", attr.Name, err)
+        continue
+    }
     fmt.Printf("  - %s: %v (type: %s)\n",
-        attr.Name, attr.Value, attr.Datatype)
+        attr.Name, value, attr.Datatype)
 }
 ```
 
@@ -320,7 +327,12 @@ file.Walk(func(path string, obj hdf5.Object) {
         if len(attrs) > 0 {
             fmt.Printf("\nDataset: %s\n", path)
             for _, attr := range attrs {
-                fmt.Printf("  @%s = %v\n", attr.Name, attr.Value)
+                value, err := attr.ReadValue()
+                if err != nil {
+                    fmt.Printf("  @%s = ERROR: %v\n", attr.Name, err)
+                    continue
+                }
+                fmt.Printf("  @%s = %v\n", attr.Name, value)
             }
         }
     }
@@ -329,14 +341,21 @@ file.Walk(func(path string, obj hdf5.Object) {
 
 ### Attribute Types
 
-Attributes support the same datatypes as datasets:
+Attributes support the same datatypes as datasets, including variable-length strings (v0.13.4+):
 
 ```go
 for _, attr := range attrs {
     fmt.Printf("Attribute: %s\n", attr.Name)
 
+    // Read the value first
+    value, err := attr.ReadValue()
+    if err != nil {
+        fmt.Printf("  Error: %v\n", err)
+        continue
+    }
+
     // Value is interface{}, type depends on HDF5 datatype
-    switch v := attr.Value.(type) {
+    switch v := value.(type) {
     case int32:
         fmt.Printf("  Type: int32, Value: %d\n", v)
 
@@ -788,7 +807,8 @@ func main() {
 
     fmt.Println("=== File Metadata ===")
     for _, attr := range attrs {
-        fmt.Printf("%s: %v\n", attr.Name, attr.Value)
+        value, _ := attr.ReadValue()
+        fmt.Printf("%s: %v\n", attr.Name, value)
     }
 
     // Extract dataset metadata
@@ -801,7 +821,8 @@ func main() {
             attrs, err := ds.Attributes()
             if err == nil {
                 for _, attr := range attrs {
-                    fmt.Printf("  @%s = %v\n", attr.Name, attr.Value)
+                    value, _ := attr.ReadValue()
+                    fmt.Printf("  @%s = %v\n", attr.Name, value)
                 }
             }
 
