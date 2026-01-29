@@ -1,6 +1,7 @@
 package core
 
 import (
+	"compress/bzip2"
 	"compress/zlib"
 	"encoding/binary"
 	"errors"
@@ -13,12 +14,14 @@ type FilterID uint16
 
 // Filter identifier constants define compression and processing filters for datasets.
 const (
-	FilterDeflate     FilterID = 1 // GZIP compression.
-	FilterShuffle     FilterID = 2 // Shuffle filter.
-	FilterFletcher    FilterID = 3 // Fletcher32 checksum.
-	FilterSZIP        FilterID = 4 // SZIP compression.
-	FilterNBit        FilterID = 5 // N-bit compression.
-	FilterScaleOffset FilterID = 6 // Scale-offset filter.
+	FilterDeflate     FilterID = 1     // GZIP compression.
+	FilterShuffle     FilterID = 2     // Shuffle filter.
+	FilterFletcher    FilterID = 3     // Fletcher32 checksum.
+	FilterSZIP        FilterID = 4     // SZIP compression.
+	FilterNBit        FilterID = 5     // N-bit compression.
+	FilterScaleOffset FilterID = 6     // Scale-offset filter.
+	FilterBZIP2       FilterID = 307   // BZIP2 compression.
+	FilterLZF         FilterID = 32000 // LZF compression (PyTables/h5py).
 )
 
 // FilterPipelineMessage represents the filter pipeline for a dataset.
@@ -190,8 +193,14 @@ func applyFilter(filter Filter, data []byte) ([]byte, error) {
 		// Fletcher32 is a checksum - just verify and strip it.
 		return applyFletcher32(data)
 
+	case FilterBZIP2:
+		return applyBZIP2(data)
+
+	case FilterLZF:
+		return applyLZF(data)
+
 	case FilterSZIP:
-		return nil, errors.New("SZIP compression not supported yet")
+		return applySZIP(data)
 
 	default:
 		return nil, fmt.Errorf("unsupported filter ID: %d", filter.ID)
@@ -265,6 +274,123 @@ func applyFletcher32(data []byte) ([]byte, error) {
 	return data[:len(data)-4], nil
 }
 
+// applyBZIP2 decompresses BZIP2-compressed data.
+// BZIP2 is a high-compression algorithm providing better compression than GZIP.
+// Uses stdlib compress/bzip2 for decompression.
+func applyBZIP2(data []byte) ([]byte, error) {
+	reader := bzip2.NewReader(io.NopCloser(io.NewSectionReader(
+		&bytesReaderAt{data}, 0, int64(len(data)))))
+
+	// Read all decompressed data.
+	decompressed, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("bzip2 decompression failed: %w", err)
+	}
+
+	return decompressed, nil
+}
+
+// applyLZF decompresses LZF-compressed data.
+// LZF is a very fast compression algorithm used by PyTables and h5py.
+func applyLZF(data []byte) ([]byte, error) {
+	decompressed, err := lzfDecompress(data)
+	if err != nil {
+		return nil, fmt.Errorf("lzf decompression failed: %w", err)
+	}
+	return decompressed, nil
+}
+
+// applySZIP decompresses SZIP-compressed data.
+// SZIP uses extended Golomb-Rice coding (CCSDS 121.0-B-3 standard).
+// This algorithm is commonly used for satellite imagery and scientific data.
+//
+// SZIP requires libaec (Adaptive Entropy Coding) library for decompression.
+// Since no pure Go implementation exists, we return an informative error.
+//
+// Reference: https://github.com/MathisRosenhauer/libaec
+func applySZIP(_ []byte) ([]byte, error) {
+	return nil, errors.New("SZIP decompression requires libaec library (not available in pure Go); " +
+		"SZIP uses extended Golomb-Rice coding (CCSDS 121.0-B-3 standard); " +
+		"to read SZIP-compressed datasets, use the HDF5 C library or h5py; " +
+		"alternatively, re-save the file with GZIP compression (filter ID 1)")
+}
+
+// lzfDecompress decompresses LZF-compressed data.
+// LZF format consists of segments:
+//   - Literal run (000LLLLL): L+1 bytes of uncompressed data
+//   - Short backref (RRROXXXX XXXXXXXX): 3-8 bytes from offset 1-8192
+//   - Long backref (111OXXXX XXXXXXXX RRRRRRRR): 9-264 bytes from offset 1-8192
+func lzfDecompress(input []byte) ([]byte, error) {
+	inLen := len(input)
+	if inLen == 0 {
+		return input, nil
+	}
+
+	// Pre-allocate output buffer (LZF typically achieves 40-50% compression).
+	output := make([]byte, 0, inLen*2)
+	inPos := 0
+
+	for inPos < inLen {
+		// Read control byte.
+		ctrl := input[inPos]
+		inPos++
+
+		// Check segment type based on top 3 bits.
+		if (ctrl & 0xE0) == 0 {
+			// Literal run: 000LLLLL
+			runLen := int(ctrl) + 1
+
+			if inPos+runLen > inLen {
+				return nil, errors.New("lzf: truncated literal run")
+			}
+
+			output = append(output, input[inPos:inPos+runLen]...)
+			inPos += runLen
+		} else {
+			// Backreference (short or long).
+			if inPos >= inLen {
+				return nil, errors.New("lzf: truncated backreference")
+			}
+
+			// Read offset (13 bits across 2 bytes).
+			offsetHigh := int(ctrl & 0x1F)
+			offsetLow := int(input[inPos])
+			inPos++
+
+			offset := (offsetHigh << 8) | offsetLow
+			offset++ // Offset is 1-based in encoding
+
+			// Determine run length.
+			var runLen int
+			if (ctrl & 0xE0) == 0xE0 {
+				// Long backreference: 111OXXXX XXXXXXXX RRRRRRRR
+				if inPos >= inLen {
+					return nil, errors.New("lzf: truncated long backreference")
+				}
+				runLen = int(input[inPos]) + 9
+				inPos++
+			} else {
+				// Short backreference: RRROXXXX XXXXXXXX
+				runBits := (ctrl >> 5) & 0x07
+				runLen = int(runBits) + 2
+			}
+
+			// Validate offset.
+			if offset > len(output) {
+				return nil, fmt.Errorf("lzf: invalid offset %d (output size: %d)", offset, len(output))
+			}
+
+			// Copy from earlier position in output.
+			srcPos := len(output) - offset
+			for i := 0; i < runLen; i++ {
+				output = append(output, output[srcPos+i])
+			}
+		}
+	}
+
+	return output, nil
+}
+
 // filterName returns human-readable filter name.
 func filterName(id FilterID) string {
 	switch id {
@@ -274,6 +400,10 @@ func filterName(id FilterID) string {
 		return "Shuffle"
 	case FilterFletcher:
 		return "Fletcher32"
+	case FilterBZIP2:
+		return "BZIP2"
+	case FilterLZF:
+		return "LZF"
 	case FilterSZIP:
 		return "SZIP"
 	case FilterNBit:

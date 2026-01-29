@@ -329,6 +329,47 @@ func TestFilterPipelineApplyFilters(t *testing.T) {
 	}
 }
 
+// TestApplySZIP tests SZIP decompression error handling.
+func TestApplySZIP(t *testing.T) {
+	tests := []struct {
+		name           string
+		data           []byte
+		wantErrContain []string
+	}{
+		{
+			name: "SZIP compressed data",
+			data: []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
+			wantErrContain: []string{
+				"libaec",
+				"SZIP",
+				"Golomb-Rice",
+				"CCSDS",
+				"GZIP",
+			},
+		},
+		{
+			name: "empty SZIP data",
+			data: []byte{},
+			wantErrContain: []string{
+				"libaec",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := applySZIP(tt.data)
+			require.Error(t, err)
+
+			errMsg := err.Error()
+			for _, substr := range tt.wantErrContain {
+				require.Contains(t, errMsg, substr,
+					"error message should contain %q", substr)
+			}
+		})
+	}
+}
+
 // zlibCompress compresses data using zlib (for tests).
 func zlibCompress(t *testing.T, data []byte) []byte {
 	t.Helper()

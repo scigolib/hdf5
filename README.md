@@ -214,7 +214,8 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
   - Contiguous layout (sequential storage)
   - Chunked layout with B-tree indexing
   - GZIP/Deflate compression
-  - Filter pipeline for compressed data ✨ NEW
+  - LZF compression (h5py/PyTables compatible) ✨ NEW
+  - Filter pipeline for compressed data
 
 - **Datatypes** (Read + Write):
   - **Basic types**: int8-64, uint8-64, float32/64
@@ -274,7 +275,9 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 - ✅ Production quality confirmed
 
 **Future Enhancements**:
-- ⚠️ Advanced filters (LZF, SZIP)
+- ✅ LZF filter (read + write, Pure Go) ✨ NEW
+- ✅ BZIP2 filter (read only, stdlib)
+- ⚠️ SZIP filter (stub - requires libaec)
 - ⚠️ Thread-safety with mutexes + SWMR mode
 - ⚠️ Parallel I/O
 

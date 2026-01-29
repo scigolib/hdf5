@@ -76,6 +76,37 @@ for iter.Next() {
 - `dataset_write_chunked.go` - B-tree address update in layout message
 - `internal/structures/btree_chunk.go` - B-tree key format fix
 
+#### Advanced Compression Filters (TASK-027)
+
+Added support for additional compression filters used by h5py and scientific applications.
+
+**LZF Filter (ID 32000)** - Full Support:
+- Pure Go implementation (~330 lines), no external dependencies
+- Read + Write support (h5py/PyTables compatible)
+- Hash table based compression with 8KB window
+
+**BZIP2 Filter (ID 307)** - Read Support:
+- Uses Go stdlib `compress/bzip2` for decompression
+- Write returns "not implemented" (stdlib limitation)
+- Block size parameter support (1-9)
+
+**SZIP Filter (ID 4)** - Stub:
+- Returns descriptive error explaining libaec requirement
+- No pure Go implementation exists for Rice/AEC coding
+- Suggests alternatives (GZIP, h5py, HDF5 C library)
+
+**Files Added**:
+- `internal/writer/filter_lzf.go` (~330 lines)
+- `internal/writer/filter_lzf_test.go` (~220 lines)
+- `internal/writer/filter_bzip2.go` (~100 lines)
+- `internal/writer/filter_bzip2_test.go` (~150 lines)
+- `internal/writer/filter_szip.go` (~150 lines)
+- `internal/writer/filter_szip_test.go` (~200 lines)
+
+**Files Modified**:
+- `internal/core/filterpipeline.go` - Added LZF, BZIP2, SZIP read support
+- `internal/writer/filter_pipeline.go` - Added filter constants
+
 ---
 
 ## [v0.13.4] - 2025-01-29

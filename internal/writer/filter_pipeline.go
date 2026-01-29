@@ -12,13 +12,15 @@ type FilterID uint16
 
 // HDF5 standard filter constants.
 const (
-	FilterNone        FilterID = 0 // No filter
-	FilterGZIP        FilterID = 1 // GZIP compression (deflate)
-	FilterShuffle     FilterID = 2 // Byte shuffle
-	FilterFletcher32  FilterID = 3 // Fletcher32 checksum
-	FilterSZIP        FilterID = 4 // SZIP (not implemented)
-	FilterNBIT        FilterID = 5 // NBIT (not implemented)
-	FilterScaleOffset FilterID = 6 // Scale+offset (not implemented)
+	FilterNone        FilterID = 0     // No filter
+	FilterGZIP        FilterID = 1     // GZIP compression (deflate)
+	FilterShuffle     FilterID = 2     // Byte shuffle
+	FilterFletcher32  FilterID = 3     // Fletcher32 checksum
+	FilterSZIP        FilterID = 4     // SZIP (not implemented)
+	FilterNBIT        FilterID = 5     // NBIT (not implemented)
+	FilterScaleOffset FilterID = 6     // Scale+offset (not implemented)
+	FilterBZIP2       FilterID = 307   // BZIP2 compression
+	FilterLZF         FilterID = 32000 // LZF compression (PyTables/h5py)
 )
 
 // Filter interface for data transformation.
