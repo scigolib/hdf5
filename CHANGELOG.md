@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### ✨ New Features
+
+#### ChunkIterator API for Memory-Efficient Reading (TASK-031)
+
+Added a convenient iterator API for reading chunked datasets chunk-by-chunk without loading
+the entire dataset into memory. This is essential for processing TB-scale scientific data
+on memory-constrained systems.
+
+**New Methods**:
+- `Dataset.ChunkIterator()` - Create iterator for chunk-by-chunk reading
+- `Dataset.ChunkIteratorWithContext(ctx)` - Iterator with context cancellation support
+- `ChunkIterator.Next()` - Advance to next chunk (returns false when done)
+- `ChunkIterator.Chunk()` - Read current chunk data
+- `ChunkIterator.ChunkCoords()` - Get current chunk coordinates
+- `ChunkIterator.Progress()` - Get current/total progress
+- `ChunkIterator.Total()` - Get total number of chunks
+- `ChunkIterator.Err()` - Get any error that occurred
+- `ChunkIterator.OnProgress(fn)` - Register progress callback
+- `ChunkIterator.Reset()` - Reset iterator to beginning
+- `ChunkIterator.ChunkDims()` - Get chunk dimensions
+- `ChunkIterator.DatasetDims()` - Get dataset dimensions
+
+**Usage Example**:
+```go
+// Stream large dataset chunk-by-chunk (memory efficient!)
+file, _ := hdf5.Open("large.h5")
+ds, _ := file.Dataset("/big_data")
+
+iter, _ := ds.ChunkIterator()
+for iter.Next() {
+    chunk, _ := iter.Chunk()
+    processChunk(chunk)  // Process and discard
+}
+if err := iter.Err(); err != nil {
+    log.Fatal(err)
+}
+
+// With cancellation support
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+
+iter, _ := ds.ChunkIteratorWithContext(ctx)
+for iter.Next() {
+    data, _ := iter.Chunk()
+    // Context cancellation stops iteration early
+}
+```
+
+**Benefits**:
+- Handle datasets larger than RAM without OOM
+- Process TB-scale scientific data on edge devices
+- Progress callbacks for UI/logging
+- Context-based cancellation for long-running operations
+- Follows Go iterator pattern (like `bufio.Scanner`)
+
+**Bug Fixes During Implementation**:
+- Fixed B-tree key format to include `nbytes` field (HDF5 spec compliance)
+- Fixed chunked dataset writer to update B-tree address in layout message
+
+**Files Added**:
+- `dataset_chunk_iterator.go` (~260 lines)
+- `dataset_chunk_iterator_test.go` (~400 lines)
+
+**Files Modified**:
+- `dataset_write_chunked.go` - B-tree address update in layout message
+- `internal/structures/btree_chunk.go` - B-tree key format fix
+
+---
+
 ## [v0.13.4] - 2025-01-29
 
 ### 🐛 Bug Fixes

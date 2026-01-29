@@ -40,17 +40,17 @@ type ChunkBTreeNode struct {
 // ChunkKey represents N-dimensional chunk coordinate.
 //
 // Format (per HDF5 spec):
-// - Chunk size (bytes): uint32 or uint64 (depends on dataset size)
+// - Nbytes: uint32 (chunk size in bytes after filtering)
 // - Filter mask: uint32 (0 for no filters)
-// - Chunk scaled coordinates: uint64[dimensionality] (row-major)
+// - Chunk scaled coordinates: uint64[dimensionality] (row-major, stored as byte offsets)
 //
 // For MVP (Phase 1):
 // - No filters (FilterMask = 0)
-// - Chunk size not stored in key (stored in layout message)
-// - Only coordinates are used for indexing.
+// - Nbytes is set to chunk data size.
 type ChunkKey struct {
 	Coords     []uint64 // [dim0, dim1, ..., dimN] (scaled chunk indices)
 	FilterMask uint32   // Always 0 for Phase 1 (no compression)
+	Nbytes     uint32   // Chunk size in bytes (after filtering)
 }
 
 // ChunkBTreeWriter builds B-tree for chunk indexing.
@@ -75,6 +75,7 @@ type ChunkBTreeWriter struct {
 type ChunkBTreeEntry struct {
 	Coordinate []uint64 // Scaled chunk coordinate
 	Address    uint64   // File address of raw chunk data
+	Nbytes     uint32   // Chunk size in bytes (after filtering)
 }
 
 // NewChunkBTreeWriter creates new chunk B-tree writer.
@@ -109,6 +110,16 @@ func NewChunkBTreeWriter(dimensionality int) *ChunkBTreeWriter {
 //	writer.AddChunk([]uint64{0, 0}, 1000) // First chunk at address 1000
 //	writer.AddChunk([]uint64{1, 1}, 2000) // Second chunk at address 2000
 func (w *ChunkBTreeWriter) AddChunk(coord []uint64, address uint64) error {
+	return w.AddChunkWithSize(coord, address, 0)
+}
+
+// AddChunkWithSize adds chunk to index with explicit size.
+//
+// Parameters:
+//   - coord: Scaled chunk coordinate [dim0, dim1, ..., dimN]
+//   - address: File address where chunk data is written
+//   - nbytes: Size of chunk data in bytes (after filtering)
+func (w *ChunkBTreeWriter) AddChunkWithSize(coord []uint64, address uint64, nbytes uint32) error {
 	if len(coord) != w.dimensionality {
 		return fmt.Errorf("coordinate dimensionality mismatch: expected %d, got %d",
 			w.dimensionality, len(coord))
@@ -121,6 +132,7 @@ func (w *ChunkBTreeWriter) AddChunk(coord []uint64, address uint64) error {
 	w.entries = append(w.entries, ChunkBTreeEntry{
 		Coordinate: coordCopy,
 		Address:    address,
+		Nbytes:     nbytes,
 	})
 
 	return nil
@@ -170,6 +182,7 @@ func (w *ChunkBTreeWriter) WriteToFile(writer Writer, allocator Allocator) (uint
 		node.Keys = append(node.Keys, ChunkKey{
 			Coords:     entry.Coordinate,
 			FilterMask: 0, // No filters in Phase 1
+			Nbytes:     entry.Nbytes,
 		})
 		node.ChildAddrs = append(node.ChildAddrs, entry.Address)
 	}
@@ -207,18 +220,20 @@ func (w *ChunkBTreeWriter) WriteToFile(writer Writer, allocator Allocator) (uint
 //
 // Format:
 // - Header: 4 (sig) + 1 (type) + 1 (level) + 2 (entries) + 8 (left) + 8 (right) = 24 bytes
-// - Keys: (entries+1) * (dim*8 + 4) bytes
-//   - Each key: dim * uint64 (coordinates) + uint32 (filter mask)
+// - For each entry (interleaved keys and children):
+//   - Key: nbytes (4) + filter_mask (4) + coords (dim*8)
+//   - Child: address (8 bytes)
 //
-// - Children: entries * 8 bytes
-//   - Each child: uint64 (chunk address)
+// - Final key (sentinel): nbytes (4) + filter_mask (4) + coords (dim*8)
 //
 // Note: We use fixed 8-byte addresses (offsetSize=8) for simplicity in MVP.
 // Future versions may support variable offsetSize from superblock.
 func serializeChunkBTreeNode(node *ChunkBTreeNode, dimensionality int) []byte {
-	// Size calculation
-	keySize := dimensionality*8 + 4          // N coords (8 bytes each) + filter mask (4 bytes)
-	keysSize := len(node.Keys) * keySize     // All keys
+	// Size calculation per HDF5 spec:
+	// - keySize = 4 (nbytes) + 4 (filter_mask) + dim*8 (coords)
+	// - Format: key0, child0, key1, child1, ..., keyN (final sentinel key)
+	keySize := 4 + 4 + dimensionality*8      // nbytes + filter_mask + coords
+	keysSize := len(node.Keys) * keySize     // All keys (including sentinel)
 	childrenSize := len(node.ChildAddrs) * 8 // All children (8 bytes each)
 	totalSize := 24 + keysSize + childrenSize
 
@@ -239,20 +254,25 @@ func serializeChunkBTreeNode(node *ChunkBTreeNode, dimensionality int) []byte {
 	binary.LittleEndian.PutUint64(buf[pos:], node.RightSibling)
 	pos += 8
 
-	// Keys (each key is N coords + filter mask)
-	for _, key := range node.Keys {
+	// Write keys and children interleaved: key0, child0, key1, child1, ..., keyN
+	for i, key := range node.Keys {
+		// Write key: nbytes + filter_mask + coords
+		// For MVP, nbytes is not tracked per-chunk, use 0 as placeholder.
+		// This is OK because chunk size is known from layout message.
+		binary.LittleEndian.PutUint32(buf[pos:], key.Nbytes)
+		pos += 4
+		binary.LittleEndian.PutUint32(buf[pos:], key.FilterMask)
+		pos += 4
 		for _, coord := range key.Coords {
 			binary.LittleEndian.PutUint64(buf[pos:], coord)
 			pos += 8
 		}
-		binary.LittleEndian.PutUint32(buf[pos:], key.FilterMask)
-		pos += 4
-	}
 
-	// Children (chunk addresses)
-	for _, addr := range node.ChildAddrs {
-		binary.LittleEndian.PutUint64(buf[pos:], addr)
-		pos += 8
+		// Write child address (except for the last sentinel key)
+		if i < len(node.ChildAddrs) {
+			binary.LittleEndian.PutUint64(buf[pos:], node.ChildAddrs[i])
+			pos += 8
+		}
 	}
 
 	return buf

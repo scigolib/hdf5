@@ -1199,6 +1199,10 @@ type DatasetWriter struct {
 	chunkDims        []uint64                 // Chunk dimensions
 	pipeline         *writer.FilterPipeline   // Filter pipeline for chunked datasets
 
+	// layoutBTreeOffset is the file offset where the B-tree address is stored
+	// in the layout message. Used to update the address after writing chunks.
+	layoutBTreeOffset uint64
+
 	// For RMW scenarios (files opened with OpenForWrite)
 	objectHeader  *core.ObjectHeader         // Full object header (for attribute operations)
 	denseAttrInfo *core.AttributeInfoMessage // Dense attribute storage info (nil if no dense storage)

@@ -267,6 +267,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 - ✅ Efficient partial dataset reading
 - ✅ Stride and block support
 - ✅ Chunk-aware reading (reads ONLY needed chunks)
+- ✅ **ChunkIterator API** - Memory-efficient iteration over large datasets
 
 **Validation**:
 - ✅ Official HDF5 Test Suite: 100% pass rate (378/378 files)
