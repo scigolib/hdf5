@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2025-01-28 | **Current Version**: v0.13.3 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.3 RELEASED! (2025-01-28 compatibility improvements) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2025-01-29 | **Current Version**: v0.13.4 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.4 RELEASED! (2025-01-29 attribute reading fix) → v1.0.0 LTS (Q3 2026)
 
 ---
 
@@ -93,6 +93,13 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - Official HDF5 test suite: **100% pass rate** (378/378 valid files)
 - Added flux.h5 to test suite, professional error testing for corrupt files
 
+**v0.13.4** = Attribute Reading Fix ✅ RELEASED (2025-01-29)
+- Fixed Issue #14: Variable-length string attributes not readable
+- Fixed V1/V2 attribute message 8-byte alignment (H5O_ALIGN_OLD macro)
+- Fixed IsVariableString() detection (ClassBitField, not Properties)
+- Fixed vlen string data format (4-byte length prefix + Global Heap reference)
+- Files created by h5py now work correctly
+
 **v0.13.x** = Stable Maintenance Phase (current)
 - Monitoring for bug reports from production use
 - Performance optimizations when identified
@@ -112,7 +119,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-## 📊 Current Status (v0.13.3)
+## 📊 Current Status (v0.13.4)
 
 **Phase**: 🛡️ Stable Maintenance (monitoring, community support)
 **HDF5 2.0.0 Format Spec v4.0**: Complete! 🎉
@@ -397,5 +404,5 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 ---
 
 *Version 5.2 (Updated 2025-01-27)*
-*Current: v0.13.3 (STABLE) | Phase: Maintenance | Next: v0.14.0+ (community-driven) | Target: v1.0.0 LTS (Q3 2026)*
+*Current: v0.13.4 (STABLE) | Phase: Maintenance | Next: v0.14.0+ (community-driven) | Target: v1.0.0 LTS (Q3 2026)*
 

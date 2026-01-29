@@ -163,7 +163,7 @@ See [ROADMAP.md](../../ROADMAP.md) for future plans.
 
 ### Can I read attributes?
 
-**Yes!** Full attribute reading support:
+**Yes!** Full attribute reading support including variable-length strings:
 
 ```go
 // Group attributes
@@ -174,13 +174,19 @@ attrs, err := dataset.Attributes()
 
 // Access attribute values
 for _, attr := range attrs {
-    fmt.Printf("%s = %v (type: %T)\n", attr.Name, attr.Value, attr.Value)
+    value, err := attr.ReadValue()
+    if err != nil {
+        log.Printf("Error reading %s: %v", attr.Name, err)
+        continue
+    }
+    fmt.Printf("%s = %v (type: %T)\n", attr.Name, value, value)
 }
 ```
 
 **Supported**:
 - ✅ Compact attributes (in object header)
 - ✅ Dense attributes (fractal heap direct blocks)
+- ✅ All datatypes including variable-length strings (v0.13.4+)
 
 **Note**: Dense attributes (8+ attributes) fully supported via B-tree v2 and fractal heap.
 

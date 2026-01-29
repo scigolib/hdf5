@@ -17,6 +17,11 @@ type Attribute struct {
 	Datatype  *DatatypeMessage
 	Dataspace *DataspaceMessage
 	Data      []byte
+
+	// For variable-length types, we need access to the file reader
+	// to resolve Global Heap references.
+	reader     io.ReaderAt
+	offsetSize int
 }
 
 // AttributeInfoMessage represents the Attribute Info Message (0x000F).
@@ -86,6 +91,20 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 	// Name is null-terminated, so subtract 1 for the null byte.
 	if nameSize > 0 {
 		attr.Name = string(data[offset : offset+int(nameSize)-1])
+	}
+
+	// For version 1 and 2, name/datatype/dataspace are padded to 8-byte boundaries.
+	// For version 3+, no padding (sizes are exact).
+	// Reference: H5Oattr.c - H5O_ALIGN_OLD macro: (8 * (((X) + 7) / 8))
+	alignTo8 := func(size uint16) int {
+		return int((size + 7) & ^uint16(7))
+	}
+
+	if version < 3 {
+		// V1/V2: Pad to 8-byte boundaries
+		offset += alignTo8(nameSize)
+	} else {
+		// V3+: Exact sizes
 		offset += int(nameSize)
 	}
 
@@ -100,7 +119,12 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 	if err != nil {
 		return nil, utils.WrapError("datatype parse failed", err)
 	}
-	offset += int(datatypeSize)
+
+	if version < 3 {
+		offset += alignTo8(datatypeSize)
+	} else {
+		offset += int(datatypeSize)
+	}
 
 	// Parse dataspace.
 	if offset+int(dataspaceSize) > len(data) {
@@ -112,7 +136,12 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 	if err != nil {
 		return nil, utils.WrapError("dataspace parse failed", err)
 	}
-	offset += int(dataspaceSize)
+
+	if version < 3 {
+		offset += alignTo8(dataspaceSize)
+	} else {
+		offset += int(dataspaceSize)
+	}
 
 	// Remaining data is the attribute value.
 	if offset < len(data) {
@@ -132,6 +161,8 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 }
 
 // ReadValue reads the attribute value as the appropriate Go type.
+//
+//nolint:maintidx // Complexity inherent in handling multiple HDF5 datatype classes
 func (a *Attribute) ReadValue() (interface{}, error) {
 	if a.Datatype == nil || a.Dataspace == nil {
 		return nil, fmt.Errorf("attribute missing datatype or dataspace")
@@ -245,7 +276,7 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 		}
 
 	case DatatypeString:
-		// Fixed-length strings (variable-length not supported yet)
+		// Fixed-length strings.
 		if !a.Datatype.IsFixedString() {
 			return nil, fmt.Errorf("variable-length strings not yet supported in attributes")
 		}
@@ -267,9 +298,107 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 			return values[0], nil
 		}
 		return values, nil
+
+	case DatatypeVarLen:
+		// Variable-length types (most commonly variable-length strings).
+		// Data is stored as Global Heap references.
+		if a.reader == nil {
+			return nil, fmt.Errorf("variable-length attribute requires file reader (not available)")
+		}
+
+		// Check if this is a variable-length string.
+		if !a.Datatype.IsVariableString() {
+			return nil, fmt.Errorf("variable-length non-string types not yet supported in attributes")
+		}
+
+		// Each vlen element is: length (4 bytes) + heap_address (offsetSize bytes) + object_index (4 bytes).
+		//nolint:gosec // G115: offsetSize is bounded to 4 or 8 by HDF5 format specification
+		refSize := uint64(a.offsetSize + 8)
+
+		// CVE-2025-6269 fix: Check for multiplication overflow before processing.
+		totalBytes, err := utils.SafeMultiply(totalElements, refSize)
+		if err != nil {
+			return nil, fmt.Errorf("attribute size overflow (vlen string): %w", err)
+		}
+
+		if totalBytes > uint64(len(a.Data)) {
+			return nil, fmt.Errorf("attribute data size mismatch for vlen strings: need %d bytes, have %d",
+				totalBytes, len(a.Data))
+		}
+
+		values := make([]string, totalElements)
+		for i := uint64(0); i < totalElements; i++ {
+			offset := i * refSize
+			elementData := a.Data[offset : offset+refSize]
+
+			str, err := a.readVariableLengthString(elementData)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read variable-length string element %d: %w", i, err)
+			}
+			values[i] = str
+		}
+
+		if isScalar {
+			return values[0], nil
+		}
+		return values, nil
 	}
 
 	return nil, fmt.Errorf("unsupported datatype class %d or size %d", a.Datatype.Class, a.Datatype.Size)
+}
+
+// readVariableLengthString reads a variable-length string from the Global Heap.
+//
+// For variable-length strings in attributes, the format is:
+//   - Length (4 bytes): Number of bytes in the string
+//   - Heap Address (offsetSize bytes): Address of the Global Heap collection
+//   - Object Index (4 bytes): Index of the object within the collection
+//
+// Reference: HDF5 Format Specification III.E (Global Heap), H5Tvlen.c.
+func (a *Attribute) readVariableLengthString(data []byte) (string, error) {
+	// Expected size: 4 (length) + offsetSize (heap address) + 4 (object index)
+	expectedSize := 4 + a.offsetSize + 4
+	if len(data) < expectedSize {
+		return "", fmt.Errorf("vlen string data too short: got %d bytes, need %d", len(data), expectedSize)
+	}
+
+	// Parse the length field (4 bytes, little-endian).
+	// This is the length of the string in bytes.
+	_ = binary.LittleEndian.Uint32(data[0:4]) // length, not used directly but verified via heap object
+
+	// Parse the global heap reference (after the length field).
+	ref, err := ParseGlobalHeapReference(data[4:], a.offsetSize)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse global heap reference: %w", err)
+	}
+
+	// Check for null reference (address 0 typically means empty/null string).
+	if ref.HeapAddress == 0 {
+		return "", nil
+	}
+
+	// Read the global heap collection.
+	collection, err := ReadGlobalHeapCollection(a.reader, ref.HeapAddress, a.offsetSize)
+	if err != nil {
+		return "", fmt.Errorf("failed to read global heap collection at 0x%X: %w", ref.HeapAddress, err)
+	}
+
+	// Get the object from the collection.
+	obj, err := collection.GetObject(ref.ObjectIndex)
+	if err != nil {
+		return "", fmt.Errorf("failed to get object %d from heap collection: %w", ref.ObjectIndex, err)
+	}
+
+	// Convert object data to string.
+	// Variable-length strings are typically null-terminated.
+	str := string(obj.Data)
+
+	// Remove trailing null bytes if present.
+	for str != "" && str[len(str)-1] == 0 {
+		str = str[:len(str)-1]
+	}
+
+	return str, nil
 }
 
 // ParseAttributesFromMessages extracts all attributes from object header messages.
@@ -295,14 +424,18 @@ func ParseAttributesFromMessages(r io.ReaderAt, messages []*HeaderMessage, sb *S
 
 	// Second pass: collect compact attributes
 	for _, msg := range messages {
-		if msg.Type == MsgAttribute {
-			attr, err := ParseAttributeMessage(msg.Data, sb.Endianness)
-			if err != nil {
-				// Log error but continue with other attributes
-				continue
-			}
-			attributes = append(attributes, attr)
+		if msg.Type != MsgAttribute {
+			continue
 		}
+		attr, err := ParseAttributeMessage(msg.Data, sb.Endianness)
+		if err != nil {
+			// Log error but continue with other attributes
+			continue
+		}
+		// Set reader for variable-length type resolution
+		attr.reader = r
+		attr.offsetSize = int(sb.OffsetSize)
+		attributes = append(attributes, attr)
 	}
 
 	// If dense storage exists, read attributes from fractal heap
@@ -392,6 +525,9 @@ func readDenseAttributes(r io.ReaderAt, attrInfo *AttributeInfoMessage, sb *Supe
 			return nil, fmt.Errorf("failed to parse attribute %d: %w", i, err)
 		}
 
+		// Set reader for variable-length type resolution
+		attr.reader = r
+		attr.offsetSize = int(sb.OffsetSize)
 		attributes = append(attributes, attr)
 	}
 

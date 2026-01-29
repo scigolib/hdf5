@@ -199,15 +199,15 @@ func (dt *DatatypeMessage) IsFixedString() bool {
 }
 
 // IsVariableString checks if datatype is a variable-length string.
+// Reference: HDF5 Format Specification III.A.2.4.d (Variable-Length Types).
 func (dt *DatatypeMessage) IsVariableString() bool {
 	if dt.Class == DatatypeVarLen {
-		// Variable-length datatype.
-		// Properties start with base type class (4 bits in first byte).
-		if len(dt.Properties) > 0 {
-			baseClass := DatatypeClass(dt.Properties[0] & 0x0F)
-			return baseClass == DatatypeString
-		}
-		return true // Assume string if no properties.
+		// For variable-length types, ClassBitField contains:
+		// - Bits 0-3: Type (0=Sequence, 1=String)
+		// - Bits 4-7: Padding type (for strings)
+		// - Bits 8-11: Character set (for strings, 0=ASCII, 1=UTF-8)
+		vlType := dt.ClassBitField & 0x0F
+		return vlType == 1 // 1 = variable-length string
 	}
 	return false
 }

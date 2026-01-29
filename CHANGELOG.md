@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.4] - 2025-01-29
+
+### 🐛 Bug Fixes
+
+#### Fixed: Variable-Length String Attribute Reading (Issue #14)
+
+Users reported that attributes could not be read from HDF5 files created by h5py.
+The issue manifested in two ways:
+1. Integer attributes on root groups were not found
+2. Variable-length string attributes returned "unsupported datatype class 9"
+
+**Root Causes**:
+
+1. **V1/V2 Attribute Alignment**: Name, datatype, and dataspace fields in attribute messages
+   must be padded to 8-byte boundaries (per `H5O_ALIGN_OLD` macro in C library), but we
+   were using exact sizes.
+
+2. **IsVariableString() Detection**: The function was checking `Properties[0] & 0x0F == DatatypeString`,
+   but per HDF5 Format Specification III.A.2.4.d, variable-length string type is indicated by
+   `ClassBitField & 0x0F == 1` (where 1 = String, 0 = Sequence).
+
+3. **VLen String Data Format**: Variable-length strings include a 4-byte length prefix before
+   the Global Heap reference, making the total size `4 + offsetSize + 4` bytes, not `offsetSize + 4`.
+
+**Fixed**:
+- `internal/core/attribute.go`: Added 8-byte alignment for V1/V2 attribute parsing
+- `internal/core/datatype.go`: Fixed `IsVariableString()` to check `ClassBitField` correctly
+- `internal/core/attribute.go`: Added `DatatypeVarLen` case to `ReadValue()` with proper vlen format
+- `internal/core/attribute.go`: Added `readVariableLengthString()` helper for Global Heap access
+
+**Result**:
+- Integer attributes on root groups now read correctly
+- Variable-length string attributes on datasets now read correctly
+- Files created by h5py work without issues
+
+**Test file**: Python script from Issue #14 creates file with:
+- Root group: `File Attribute = 123456` (integer)
+- Dataset: `Dataset Attribute 1 = "Test Attribute 1"` (vlen string)
+- Dataset: `Dataset Attribute 2 = "Test Attribute 2"` (vlen string)
+
+All attributes now read successfully.
+
+### 📊 Test Suite Results
+
+**Official HDF5 Test Suite Results**:
+- Pass rate: **100%** (378/378 valid files) - maintained
+- All existing tests pass
+- New unit tests added for variable-length string attributes
+
+**Files Changed**:
+- `internal/core/attribute.go` - VLen string support, 8-byte alignment fix
+- `internal/core/attribute_test.go` - New unit tests for vlen strings
+- `internal/core/datatype.go` - Fixed IsVariableString() logic
+- `internal/core/datatype_helpers_test.go` - Updated test cases
+
+---
+
 ## [v0.13.3] - 2025-01-28
 
 ### 🐛 Bug Fixes

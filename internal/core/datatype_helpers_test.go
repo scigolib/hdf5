@@ -262,6 +262,8 @@ func TestIsFixedString(t *testing.T) {
 }
 
 // TestIsVariableString tests variable-length string detection.
+// Reference: HDF5 Format Specification III.A.2.4.d (Variable-Length Types).
+// ClassBitField bits 0-3 contain the VL type: 0=Sequence, 1=String.
 func TestIsVariableString(t *testing.T) {
 	tests := []struct {
 		name string
@@ -269,26 +271,26 @@ func TestIsVariableString(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "varlen string with properties",
+			name: "varlen string (type=1)",
 			dt: &DatatypeMessage{
-				Class:      DatatypeVarLen,
-				Properties: []byte{0x03}, // Base class = DatatypeString (3)
+				Class:         DatatypeVarLen,
+				ClassBitField: 0x0001, // Type = 1 (String)
 			},
 			want: true,
 		},
 		{
-			name: "varlen without properties",
+			name: "varlen string UTF-8 (type=1, charset=1)",
 			dt: &DatatypeMessage{
-				Class:      DatatypeVarLen,
-				Properties: []byte{},
+				Class:         DatatypeVarLen,
+				ClassBitField: 0x0101, // Type = 1 (String), Charset = 1 (UTF-8)
 			},
 			want: true,
 		},
 		{
-			name: "varlen non-string base",
+			name: "varlen sequence (type=0)",
 			dt: &DatatypeMessage{
-				Class:      DatatypeVarLen,
-				Properties: []byte{0x01}, // Base class = DatatypeFloat (1)
+				Class:         DatatypeVarLen,
+				ClassBitField: 0x0000, // Type = 0 (Sequence)
 			},
 			want: false,
 		},

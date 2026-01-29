@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 
@@ -115,10 +116,10 @@ func TestParseAttributeMessage_Basic(t *testing.T) {
 	// Test basic attribute message parsing
 	// Version 1, no encoding byte
 
-	// Calculate exact size needed:
+	// Calculate exact size needed for V1 format with 8-byte alignment:
 	// 1 (version) + 1 (flags) + 2 (name size) + 2 (datatype size) + 2 (dataspace size)
-	// + 5 (name "test\0") + 8 (datatype) + 8 (dataspace) + 4 (data)
-	// = 33 bytes minimum
+	// + 8 (name "test\0" aligned to 8) + 8 (datatype) + 8 (dataspace) + 4 (data)
+	// = 36 bytes minimum
 	data := make([]byte, 64) // Use larger buffer to be safe
 	offset := 0
 
@@ -130,7 +131,7 @@ func TestParseAttributeMessage_Basic(t *testing.T) {
 	data[offset] = 0
 	offset++
 
-	// Name size (including null terminator)
+	// Name size (including null terminator) - actual size, not aligned
 	binary.LittleEndian.PutUint16(data[offset:offset+2], 5) // "test\0"
 	offset += 2
 
@@ -142,9 +143,9 @@ func TestParseAttributeMessage_Basic(t *testing.T) {
 	binary.LittleEndian.PutUint16(data[offset:offset+2], 8) // 8 bytes for scalar dataspace
 	offset += 2
 
-	// Name: "test\0"
-	copy(data[offset:], "test\x00")
-	offset += 5
+	// Name: "test\0" - V1 aligns to 8 bytes, so we need 8 bytes here
+	copy(data[offset:], "test\x00\x00\x00\x00") // 5 bytes + 3 padding = 8
+	offset += 8                                 // V1 alignment: (5 + 7) & ~7 = 8
 
 	// Datatype message (simplified - int32)
 	data[offset] = 0                                          // Class: fixed-point
@@ -752,4 +753,78 @@ func TestEncodeAttributeInfoMessage_RoundTrip(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAttributeReadValue_VariableLengthString tests reading variable-length string attributes.
+// This is a unit test that verifies the vlen string parsing logic.
+// Issue #14: Can't read attributes of groups and datasets
+// Reference: HDF5 Format Specification III.A.2.4.d (Variable-Length Types).
+func TestAttributeReadValue_VariableLengthString(t *testing.T) {
+	// Test that IsVariableString correctly identifies vlen strings
+	t.Run("datatype recognition", func(t *testing.T) {
+		// VL type = 1 (String) in bits 0-3 of ClassBitField
+		dt := &DatatypeMessage{
+			Class:         DatatypeVarLen,
+			ClassBitField: 0x0101, // Type=1 (string), Charset=1 (UTF-8)
+			Size:          16,     // Typical size for 8-byte addresses + 4-byte length + 4-byte index
+		}
+		require.True(t, dt.IsVariableString(), "should recognize vlen string")
+
+		// VL type = 0 (Sequence) should not be a string
+		dtSeq := &DatatypeMessage{
+			Class:         DatatypeVarLen,
+			ClassBitField: 0x0000, // Type=0 (sequence)
+			Size:          16,
+		}
+		require.False(t, dtSeq.IsVariableString(), "should not recognize vlen sequence as string")
+	})
+
+	// Test that vlen string without reader returns error
+	t.Run("missing reader", func(t *testing.T) {
+		attr := &Attribute{
+			Name: "test_vlen",
+			Datatype: &DatatypeMessage{
+				Class:         DatatypeVarLen,
+				ClassBitField: 0x0001, // Type=1 (string)
+				Size:          16,
+			},
+			Dataspace: &DataspaceMessage{
+				Dimensions: []uint64{1}, // 1 element
+			},
+			Data:       make([]byte, 16),
+			reader:     nil, // No reader
+			offsetSize: 8,
+		}
+
+		_, err := attr.ReadValue()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "variable-length attribute requires file reader")
+	})
+
+	// Test vlen sequence (non-string) returns appropriate error
+	// Note: The reader check comes before the string type check in the code,
+	// so we need a mock reader to test the non-string error path.
+	t.Run("vlen non-string not supported", func(t *testing.T) {
+		// Create a minimal mock reader (bytes.Reader implements io.ReaderAt)
+		mockReader := bytes.NewReader(make([]byte, 1024))
+
+		attr := &Attribute{
+			Name: "test_vlen_seq",
+			Datatype: &DatatypeMessage{
+				Class:         DatatypeVarLen,
+				ClassBitField: 0x0000, // Type=0 (sequence, not string)
+				Size:          16,
+			},
+			Dataspace: &DataspaceMessage{
+				Dimensions: []uint64{1},
+			},
+			Data:       make([]byte, 16),
+			reader:     mockReader,
+			offsetSize: 8,
+		}
+
+		_, err := attr.ReadValue()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "variable-length non-string types not yet supported")
+	})
 }
