@@ -175,6 +175,20 @@ func (fp *FilterPipelineMessage) ApplyFilters(data []byte) ([]byte, error) {
 			}
 			return nil, fmt.Errorf("filter %d (%s) failed: %w", filter.ID, filterName(filter.ID), err)
 		}
+
+		// LZF filter: ensure output matches expected size from cd_values[2].
+		// The HDF5 LZF filter stores the expected uncompressed chunk size in cd_values[2].
+		// If decompression produces less data than expected, pad with zeros.
+		// This can happen with sparse chunks or chunks at dataset boundaries.
+		if filter.ID == FilterLZF && len(filter.ClientData) >= 3 && filter.ClientData[2] > 0 {
+			expectedSize := int(filter.ClientData[2])
+			if len(result) < expectedSize {
+				// Pad with zeros to match expected size
+				padded := make([]byte, expectedSize)
+				copy(padded, result)
+				result = padded
+			}
+		}
 	}
 
 	return result, nil
@@ -197,6 +211,16 @@ func applyFilter(filter Filter, data []byte) ([]byte, error) {
 		return applyBZIP2(data)
 
 	case FilterLZF:
+		// LZF filter: check if data is actually uncompressed.
+		// HDF5 stores data uncompressed if compression doesn't help.
+		// cd_values[2] contains the expected uncompressed chunk size.
+		if len(filter.ClientData) >= 3 && filter.ClientData[2] > 0 {
+			expectedSize := int(filter.ClientData[2])
+			if len(data) == expectedSize {
+				// Data is already uncompressed (compression didn't help)
+				return data, nil
+			}
+		}
 		return applyLZF(data)
 
 	case FilterSZIP:
@@ -293,6 +317,10 @@ func applyBZIP2(data []byte) ([]byte, error) {
 // applyLZF decompresses LZF-compressed data.
 // LZF is a very fast compression algorithm used by PyTables and h5py.
 func applyLZF(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return data, nil
+	}
+
 	decompressed, err := lzfDecompress(data)
 	if err != nil {
 		return nil, fmt.Errorf("lzf decompression failed: %w", err)
