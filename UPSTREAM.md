@@ -30,7 +30,7 @@ Local Copy: Clone repository for development reference
 | CVE | Severity | File | Status |
 |-----|----------|------|--------|
 | [CVE-2025-2308](https://github.com/HDFGroup/hdf5/pull/5960) | HIGH | H5Zscaleoffset.c | ✅ Not affected (filter not implemented) |
-| [CVE-2025-2309](https://github.com/HDFGroup/hdf5/pull/5963) | HIGH | H5Odtype.c | ⚠️ Review needed (TASK-034) |
+| [CVE-2025-2309](https://github.com/HDFGroup/hdf5/pull/5963) | HIGH | H5Odtype.c | ✅ Not affected (bitfield data conversion not implemented) |
 
 #### Other Notable Changes
 - R-tree optimizations ([#6039](https://github.com/HDFGroup/hdf5/pull/6039))
@@ -38,8 +38,8 @@ Local Copy: Clone repository for development reference
 - HDF5 2.0.0 HISTORY files updated
 
 #### Tasks Created
-- **TASK-034**: CVE-2025-2309 bitfield datatype security review (MEDIUM)
-- **TASK-035**: CVE-2025-2308 documentation (N/A - not affected)
+- **TASK-034**: CVE-2025-2309 bitfield datatype security review (MEDIUM) ✅ DONE - Not affected
+- **TASK-035**: CVE-2025-2308 documentation (N/A - not affected) ✅ DONE
 - **TASK-036**: R-tree optimizations review (LOW)
 
 ---
@@ -86,13 +86,14 @@ This is a **Pure Go implementation**, not a CGo wrapper or line-by-line port.
 | Object Header v1,v2 | ✅        | ✅         | With continuations |
 | All Datatypes       | ✅        | ✅         | Including FP8, bfloat16 |
 | Bitfield Datatype   | ✅        | ❌         | Not supported (explicit rejection) |
-| Chunked + Filters   | ✅        | ✅         | GZIP, Shuffle, Fletcher32 |
+| Chunked + Filters   | ✅        | ✅         | GZIP, Shuffle, Fletcher32, LZF |
+| BZIP2 Filter        | ✅        | ⚠️         | Read only (stdlib) |
 | Scale-Offset Filter | ✅        | ❌         | Not implemented |
 | Dense Attributes    | ✅        | ✅         | Fractal heap + B-tree v2 |
 | Soft/External Links | ✅        | ✅         | Full support |
 | SWMR Mode           | ✅        | ❌         | Planned v0.14.0+ |
 | Parallel I/O (MPI)  | ✅        | ❌         | Planned v0.14.0+ |
-| SZIP Compression    | ✅        | ❌         | Planned v0.14.0+ |
+| SZIP Compression    | ✅        | ❌         | Stub only (requires libaec) |
 | Virtual Datasets    | ✅        | ❌         | Planned v0.14.0+ |
 
 ## Sync Workflow
