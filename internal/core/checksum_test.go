@@ -56,10 +56,10 @@ func TestJenkinsChecksum(t *testing.T) {
 			data: []byte{
 				0x89, 0x48, 0x44, 0x46, // HDF5 magic
 				0x0d, 0x0a, 0x1a, 0x0a, // Continuation
-				0x02,                   // Version
-				0x08,                   // Size of offsets
-				0x08,                   // Size of lengths
-				0x00,                   // Flags
+				0x02, // Version
+				0x08, // Size of offsets
+				0x08, // Size of lengths
+				0x00, // Flags
 			},
 			expected: 0xe8a6c5b4, // Our implementation
 		},
