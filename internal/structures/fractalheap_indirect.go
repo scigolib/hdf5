@@ -6,7 +6,6 @@ package structures
 import (
 	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"io"
 
 	"github.com/scigolib/hdf5/internal/core"
@@ -284,7 +283,7 @@ func (wb *WritableIndirectBlock) writeAt(writer Writer, address uint64, sb *core
 
 	// Checksum (if enabled)
 	if wb.Header.ChecksumEnabled {
-		checksum := crc32.ChecksumIEEE(buf[:offset])
+		checksum := core.JenkinsChecksum(buf[:offset])
 		binary.LittleEndian.PutUint32(buf[offset:], checksum)
 	}
 

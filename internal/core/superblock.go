@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 
 	"github.com/scigolib/hdf5/internal/utils"
@@ -302,8 +301,8 @@ func (sb *Superblock) writeV2(w io.WriterAt, eofAddress uint64) error {
 	// Bytes 36-43: Root group object header address
 	binary.LittleEndian.PutUint64(buf[36:44], sb.RootGroup)
 
-	// Bytes 44-47: Superblock checksum (CRC32 of bytes 0-43)
-	checksum := crc32.ChecksumIEEE(buf[0:44])
+	// Bytes 44-47: Superblock checksum (Jenkins lookup3 of bytes 0-43)
+	checksum := JenkinsChecksum(buf[0:44])
 	binary.LittleEndian.PutUint32(buf[44:48], checksum)
 
 	// Write superblock at offset 0

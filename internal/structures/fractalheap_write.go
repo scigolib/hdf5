@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 
 	"github.com/scigolib/hdf5/internal/core"
@@ -688,7 +687,7 @@ func (fh *WritableFractalHeap) writeHeaderAt(writer Writer, addr uint64, sb *cor
 	offset += 2
 
 	// Checksum (CRC32 of header without checksum field)
-	checksum := crc32.ChecksumIEEE(buf[:offset])
+	checksum := core.JenkinsChecksum(buf[:offset])
 	binary.LittleEndian.PutUint32(buf[offset:], checksum)
 
 	// Write to file at pre-allocated address
@@ -734,7 +733,7 @@ func (fh *WritableFractalHeap) writeDirectBlockAt(writer Writer, addr uint64, sb
 
 	// Checksum at END of block (last 4 bytes)
 	checksumOffset := totalSize - checksumSize
-	checksum := crc32.ChecksumIEEE(buf[:checksumOffset])
+	checksum := core.JenkinsChecksum(buf[:checksumOffset])
 	binary.LittleEndian.PutUint32(buf[checksumOffset:], checksum)
 
 	// Write to file at pre-allocated address
