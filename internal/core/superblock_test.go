@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"os"
 	"testing"
 
@@ -294,7 +293,7 @@ func TestSuperblockWrite(t *testing.T) {
 		require.Equal(t, 48, n)
 
 		// Verify checksum
-		expectedChecksum := crc32.ChecksumIEEE(buf[0:44])
+		expectedChecksum := JenkinsChecksum(buf[0:44])
 		actualChecksum := binary.LittleEndian.Uint32(buf[44:48])
 		assert.Equal(t, expectedChecksum, actualChecksum,
 			"superblock checksum mismatch")

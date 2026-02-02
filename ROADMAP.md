@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2025-01-29 | **Current Version**: v0.13.4 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.4 RELEASED! (2025-01-29 attribute reading fix) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2026-02-02 | **Current Version**: v0.13.5 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.5 RELEASED! (2026-02-02 Jenkins checksum fix) → v1.0.0 LTS (Q3 2026)
 
 ---
 
@@ -100,6 +100,13 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - Fixed vlen string data format (4-byte length prefix + Global Heap reference)
 - Files created by h5py now work correctly
 
+**v0.13.5** = Jenkins Checksum Fix ✅ RELEASED (2026-02-02)
+- Fixed Issue #17: Wrong checksum algorithm (CRC32 → Jenkins lookup3)
+- Superblock V2/V3 files now compatible with h5dump, h5py, HDF5 C library
+- Implemented JenkinsChecksum() - direct port of H5_checksum_lookup3()
+- Fixed checksums in: superblock, B-tree v2, fractal heap
+- Validated against known HDF5 files (aggr.h5)
+
 **v0.13.x** = Stable Maintenance Phase (current)
 - Monitoring for bug reports from production use
 - Performance optimizations when identified
@@ -119,7 +126,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-## 📊 Current Status (v0.13.4)
+## 📊 Current Status (v0.13.5)
 
 **Phase**: 🛡️ Stable Maintenance (monitoring, community support)
 **HDF5 2.0.0 Format Spec v4.0**: Complete! 🎉
@@ -403,6 +410,6 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-*Version 5.2 (Updated 2025-01-27)*
-*Current: v0.13.4 (STABLE) | Phase: Maintenance | Next: v0.14.0+ (community-driven) | Target: v1.0.0 LTS (Q3 2026)*
+*Version 5.3 (Updated 2026-02-02)*
+*Current: v0.13.5 (STABLE) | Phase: Maintenance | Next: v0.14.0+ (community-driven) | Target: v1.0.0 LTS (Q3 2026)*
 

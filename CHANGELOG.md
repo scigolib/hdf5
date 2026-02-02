@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.5] - 2026-02-02
+
+### 🐛 Bug Fixes
+
+#### Fixed: Jenkins Lookup3 Checksum Algorithm (Issue #17)
+
+**CRITICAL FIX**: Files created with Superblock v2/v3 could not be opened by h5dump, h5py, or the HDF5 C library due to incorrect checksum algorithm.
+
+**Problem**: We used CRC32 IEEE for metadata checksums, but HDF5 requires **Jenkins lookup3** hash with `initval=0`.
+
+**Evidence**:
+```
+Stored checksum:  0x4894513B (CRC32 IEEE - what we wrote)
+Expected:         0x62A43443 (Jenkins lookup3 - what HDF5 expects)
+```
+
+**Impact**: All files with V2/V3 superblocks were incompatible with:
+- h5dump (HDF5 command-line tool)
+- h5py (Python library)
+- HDF5 C library
+- Any other HDF5-compliant reader
+
+**Fixed Components**:
+- `internal/core/superblock.go` - Superblock V2/V3 checksum
+- `internal/structures/btreev2_write.go` - B-tree V2 header and leaf checksums
+- `internal/structures/fractalheap_write.go` - Fractal heap header checksum
+- `internal/structures/fractalheap_indirect.go` - Indirect block checksum
+
+**Implementation**:
+- Created `internal/core/checksum.go` with `JenkinsChecksum()` function
+- Direct port of `H5_checksum_lookup3()` from HDF5 C library
+- Validated against known HDF5 files (aggr.h5 checksum: 0xD5CB91E3)
+
+**Files Added**:
+- `internal/core/checksum.go` (~130 lines)
+- `internal/core/checksum_test.go` (~180 lines)
+- `internal/core/checksum_integration_test.go` (~200 lines)
+
+**Result**:
+- All V2/V3 files now compatible with HDF5 C library tools
+- Validated with h5dump and reference files
+- 100% test pass rate maintained
+
+---
+
 ## [Unreleased]
 
 ### ✨ New Features

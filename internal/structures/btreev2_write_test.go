@@ -6,7 +6,6 @@ package structures
 import (
 	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"testing"
 
 	"github.com/scigolib/hdf5/internal/core"
@@ -247,7 +246,7 @@ func TestBTreeV2_HeaderSerialization(t *testing.T) {
 	require.Equal(t, uint64(42), totalRecords)
 
 	// Verify checksum
-	expectedChecksum := crc32.ChecksumIEEE(data[:34])
+	expectedChecksum := core.JenkinsChecksum(data[:34])
 	actualChecksum := binary.LittleEndian.Uint32(data[34:38])
 	require.Equal(t, expectedChecksum, actualChecksum)
 }
@@ -295,7 +294,7 @@ func TestBTreeV2_LeafSerialization(t *testing.T) {
 
 	// Verify checksum (last 4 bytes)
 	checksumOffset := len(data) - 4
-	expectedChecksum := crc32.ChecksumIEEE(data[:checksumOffset])
+	expectedChecksum := core.JenkinsChecksum(data[:checksumOffset])
 	actualChecksum := binary.LittleEndian.Uint32(data[checksumOffset:])
 	require.Equal(t, expectedChecksum, actualChecksum)
 }
@@ -312,13 +311,13 @@ func TestBTreeV2_CRC32(t *testing.T) {
 
 	// Verify checksum is correct
 	checksumOffset := len(data) - 4
-	expectedChecksum := crc32.ChecksumIEEE(data[:checksumOffset])
+	expectedChecksum := core.JenkinsChecksum(data[:checksumOffset])
 	actualChecksum := binary.LittleEndian.Uint32(data[checksumOffset:])
 	require.Equal(t, expectedChecksum, actualChecksum)
 
 	// Corrupt data and verify checksum changes
 	data[10]++ // Change node size
-	newChecksum := crc32.ChecksumIEEE(data[:checksumOffset])
+	newChecksum := core.JenkinsChecksum(data[:checksumOffset])
 	require.NotEqual(t, expectedChecksum, newChecksum, "Checksum should change when data corrupted")
 }
 
