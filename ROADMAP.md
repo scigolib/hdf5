@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2026-02-02 | **Current Version**: v0.13.5 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.5 RELEASED! (2026-02-02 Jenkins checksum fix) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2026-02-24 | **Current Version**: v0.13.6 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.6 RELEASED! (2026-02-24) → v1.0.0 LTS (Q3 2026)
 
 ---
 
@@ -100,12 +100,14 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - Fixed vlen string data format (4-byte length prefix + Global Heap reference)
 - Files created by h5py now work correctly
 
-**v0.13.5** = Jenkins Checksum Fix ✅ RELEASED (2026-02-02)
+**v0.13.5** = Jenkins Checksum Fix + ChunkIterator + Compression ✅ RELEASED (2026-02-02)
 - Fixed Issue #17: Wrong checksum algorithm (CRC32 → Jenkins lookup3)
-- Superblock V2/V3 files now compatible with h5dump, h5py, HDF5 C library
-- Implemented JenkinsChecksum() - direct port of H5_checksum_lookup3()
-- Fixed checksums in: superblock, B-tree v2, fractal heap
-- Validated against known HDF5 files (aggr.h5)
+- ChunkIterator API for memory-efficient dataset reading (TASK-031)
+- LZF, BZIP2, SZIP compression filters (TASK-027)
+
+**v0.13.6** = Extended Slice Types + Lint Cleanup ✅ RELEASED (2026-02-24)
+- Extended slice attribute types: []int8, []int16, []uint8, []uint16, []uint32, []uint64 (TASK-040)
+- Fixed all 70 golangci-lint issues across 24 files
 
 **v0.13.x** = Stable Maintenance Phase (current)
 - Monitoring for bug reports from production use
@@ -126,7 +128,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-## 📊 Current Status (v0.13.5)
+## 📊 Current Status (v0.13.6)
 
 **Phase**: 🛡️ Stable Maintenance (monitoring, community support)
 **HDF5 2.0.0 Format Spec v4.0**: Complete! 🎉
@@ -410,6 +412,6 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-*Version 5.3 (Updated 2026-02-02)*
-*Current: v0.13.5 (STABLE) | Phase: Maintenance | Next: v0.14.0+ (community-driven) | Target: v1.0.0 LTS (Q3 2026)*
+*Version 5.4 (Updated 2026-02-24)*
+*Current: v0.13.6 (STABLE) | Phase: Maintenance | Next: v0.14.0+ (community-driven) | Target: v1.0.0 LTS (Q3 2026)*
 

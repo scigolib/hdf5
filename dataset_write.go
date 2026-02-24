@@ -238,7 +238,7 @@ func (h *arrayTypeHandler) GetInfo(config *datasetConfig) (*datatypeInfo, error)
 	// Calculate total array size (product of all dimensions * element size)
 	arraySize := uint32(1)
 	for _, dim := range config.arrayDims {
-		arraySize *= uint32(dim) //nolint:gosec // Safe: dimension size limited
+		arraySize *= uint32(dim)
 	}
 	arraySize *= baseInfo.size
 
@@ -322,11 +322,11 @@ func (h *enumTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, err
 		case 1:
 			valueBytes[offset] = byte(val)
 		case 2:
-			binary.LittleEndian.PutUint16(valueBytes[offset:], uint16(val)) //nolint:gosec // Safe: validated size
+			binary.LittleEndian.PutUint16(valueBytes[offset:], uint16(val))
 		case 4:
-			binary.LittleEndian.PutUint32(valueBytes[offset:], uint32(val)) //nolint:gosec // Safe: validated size
+			binary.LittleEndian.PutUint32(valueBytes[offset:], uint32(val))
 		case 8:
-			binary.LittleEndian.PutUint64(valueBytes[offset:], uint64(val)) //nolint:gosec // Safe: validated size
+			binary.LittleEndian.PutUint64(valueBytes[offset:], uint64(val))
 		}
 	}
 
@@ -1356,7 +1356,6 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 			// Convert sequence to bytes (little-endian)
 			seqBytes := make([]byte, len(seq)*4)
 			for j, val := range seq {
-				//nolint:gosec // G115: Safe conversion int32->uint32 for binary encoding
 				binary.LittleEndian.PutUint32(seqBytes[j*4:], uint32(val))
 			}
 
@@ -1377,7 +1376,6 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 		for i, seq := range v {
 			seqBytes := make([]byte, len(seq)*8)
 			for j, val := range seq {
-				//nolint:gosec // G115: Safe conversion int64->uint64 for binary encoding
 				binary.LittleEndian.PutUint64(seqBytes[j*8:], uint64(val))
 			}
 
@@ -1674,7 +1672,7 @@ func encode2ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
 	switch v := data.(type) {
 	case []int16:
 		for i, val := range v {
-			binary.LittleEndian.PutUint16(buf[i*2:], uint16(val)) //nolint:gosec // Safe: int16 always fits in uint16
+			binary.LittleEndian.PutUint16(buf[i*2:], uint16(val))
 		}
 	case []uint16:
 		for i, val := range v {
@@ -1691,7 +1689,7 @@ func encode4ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
 	switch v := data.(type) {
 	case []int32:
 		for i, val := range v {
-			binary.LittleEndian.PutUint32(buf[i*4:], uint32(val)) //nolint:gosec // Safe: int32 always fits in uint32
+			binary.LittleEndian.PutUint32(buf[i*4:], uint32(val))
 		}
 	case []uint32:
 		for i, val := range v {
@@ -1708,7 +1706,7 @@ func encode8ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
 	switch v := data.(type) {
 	case []int64:
 		for i, val := range v {
-			binary.LittleEndian.PutUint64(buf[i*8:], uint64(val)) //nolint:gosec // Safe: int64 always fits in uint64
+			binary.LittleEndian.PutUint64(buf[i*8:], uint64(val))
 		}
 	case []uint64:
 		for i, val := range v {
@@ -1733,7 +1731,7 @@ func encodeFloatData(data interface{}, elemSize uint32, expectedSize uint64) ([]
 		return nil, fmt.Errorf("expected []float32 or []float64, got %T", data)
 	}
 
-	actualSize := uint64(dataLen) * uint64(elemSize) //nolint:gosec // Safe: slice length conversion
+	actualSize := uint64(dataLen) * uint64(elemSize)
 	if actualSize != expectedSize {
 		return nil, fmt.Errorf("data size mismatch: expected %d bytes, got %d bytes", expectedSize, actualSize)
 	}

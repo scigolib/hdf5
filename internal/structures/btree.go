@@ -61,7 +61,6 @@ func ReadBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) ([]BTr
 
 	for i := uint16(0); i < entryCount; i++ {
 		entryBuf := utils.GetBuffer(entrySize)
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		offset := address + 8 + uint64(i)*uint64(entrySize)
 
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface

@@ -277,7 +277,6 @@ func (dgw *DenseGroupWriter) createObjectHeader(fw *FileWriter, allocator *Alloc
 	// Each message: 1 (type) + 2 (size) + 1 (flags) + len(data)
 	var messageSize uint64
 	for _, msg := range ohw.Messages {
-		//nolint:gosec // G115: message size calculation, safe for HDF5 messages
 		messageSize += uint64(1 + 2 + 1 + len(msg.Data)) // type + size + flags + data
 	}
 
@@ -352,7 +351,7 @@ func compactUint64Size(value uint64) int {
 func encodeCompactUint64(buf []byte, value uint64) {
 	size := compactUint64Size(value)
 	for i := 0; i < size; i++ {
-		buf[i] = byte(value >> (8 * i))
+		buf[i] = byte(value >> (8 * i)) //nolint:gosec // G115: variable-size encoding
 	}
 }
 
@@ -361,7 +360,7 @@ func encodeCompactUint64(buf []byte, value uint64) {
 func writeUint64(buf []byte, value uint64, size int, endianness binary.ByteOrder) {
 	switch size {
 	case 1:
-		buf[0] = byte(value)
+		buf[0] = byte(value) //nolint:gosec // G115: variable-size encoding
 	case 2:
 		endianness.PutUint16(buf, uint16(value)) //nolint:gosec // Safe: size limited to 2 bytes
 	case 4:

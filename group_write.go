@@ -123,7 +123,7 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, uint64, error) {
 	// Create symbol table node
 	stNode := structures.NewSymbolTableNode(32)
 	entrySize := 2*offsetSize + 4 + 4 + 16
-	stNodeSize := uint64(8 + 32*entrySize) //nolint:gosec // Safe: small constant calculation
+	stNodeSize := uint64(8 + 32*entrySize)
 	stNodeAddr, err := fw.writer.Allocate(stNodeSize)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("failed to allocate symbol table node: %w", err)
@@ -139,7 +139,7 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, uint64, error) {
 		return 0, 0, 0, fmt.Errorf("failed to add B-tree key: %w", err)
 	}
 
-	btreeSize := uint64(24 + (2*16+1)*offsetSize + 2*16*offsetSize) //nolint:gosec // Safe: small constant calculation
+	btreeSize := uint64(24 + (2*16+1)*offsetSize + 2*16*offsetSize)
 	btreeAddr, err := fw.writer.Allocate(btreeSize)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("failed to allocate B-tree: %w", err)

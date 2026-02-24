@@ -286,14 +286,14 @@ func writeResults(stats *SuiteStats) error {
 	sb.WriteString("========================================\n")
 	sb.WriteString("Official HDF5 Test Suite Results\n")
 	sb.WriteString("========================================\n")
-	sb.WriteString(fmt.Sprintf("Date:      %s\n", stats.StartTime.Format("2006-01-02 15:04:05")))
-	sb.WriteString(fmt.Sprintf("Total:     %d files\n", stats.Total))
-	sb.WriteString(fmt.Sprintf("Pass:      %d files\n", stats.Pass))
-	sb.WriteString(fmt.Sprintf("Fail:      %d files\n", stats.Fail))
-	sb.WriteString(fmt.Sprintf("Skip:      %d files (known invalid/unsupported)\n", stats.Skip))
+	fmt.Fprintf(&sb, "Date:      %s\n", stats.StartTime.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&sb, "Total:     %d files\n", stats.Total)
+	fmt.Fprintf(&sb, "Pass:      %d files\n", stats.Pass)
+	fmt.Fprintf(&sb, "Fail:      %d files\n", stats.Fail)
+	fmt.Fprintf(&sb, "Skip:      %d files (known invalid/unsupported)\n", stats.Skip)
 	validFiles := stats.Total - stats.Skip
-	sb.WriteString(fmt.Sprintf("Pass Rate: %.1f%% (of %d valid files)\n", stats.PassRate, validFiles))
-	sb.WriteString(fmt.Sprintf("Duration:  %v\n", stats.Duration.Round(time.Millisecond)))
+	fmt.Fprintf(&sb, "Pass Rate: %.1f%% (of %d valid files)\n", stats.PassRate, validFiles)
+	fmt.Fprintf(&sb, "Duration:  %v\n", stats.Duration.Round(time.Millisecond))
 	sb.WriteString("========================================\n\n")
 
 	// Write failures by category.
@@ -320,16 +320,16 @@ func writeResults(stats *SuiteStats) error {
 		})
 
 		for _, cc := range categories {
-			sb.WriteString(fmt.Sprintf("  %s: %d files\n", cc.category, cc.count))
+			fmt.Fprintf(&sb, "  %s: %d files\n", cc.category, cc.count)
 		}
 		sb.WriteString("\n")
 
 		// Write detailed failures.
 		sb.WriteString("DETAILED FAILURES:\n")
 		for i, f := range stats.Failures {
-			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, f.FileName))
-			sb.WriteString(fmt.Sprintf("   Category: %s\n", f.Category))
-			sb.WriteString(fmt.Sprintf("   Error:    %s\n", f.Error))
+			fmt.Fprintf(&sb, "%d. %s\n", i+1, f.FileName)
+			fmt.Fprintf(&sb, "   Category: %s\n", f.Category)
+			fmt.Fprintf(&sb, "   Error:    %s\n", f.Error)
 			sb.WriteString("\n")
 		}
 	}

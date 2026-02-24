@@ -815,7 +815,6 @@ func computeOffsetSize(value uint64) uint8 {
 	}
 
 	// Round up to bytes
-	//nolint:gosec // G115: bits range is bounded by uint64 size (max 64 bits)
 	return uint8((bits + 7) / 8)
 }
 
@@ -1116,7 +1115,7 @@ func EncodeAttributeInfoMessage(aim *AttributeInfoMessage, sb *Superblock) ([]by
 func writeAddress(buf []byte, addr uint64, size int, endianness binary.ByteOrder) {
 	switch size {
 	case 1:
-		buf[0] = byte(addr)
+		buf[0] = byte(addr) //nolint:gosec // G115: variable-size address encoding
 	case 2:
 		endianness.PutUint16(buf, uint16(addr)) //nolint:gosec // Safe: size limited to 2 bytes
 	case 4:

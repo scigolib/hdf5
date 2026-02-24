@@ -312,7 +312,7 @@ func CreateBasicDatatypeMessage(class DatatypeClass, size uint32) (*DatatypeMess
 		// Integer: 4 bytes properties
 		properties = make([]byte, 4)
 		properties[0] = 0              // Byte order: 0=little-endian
-		properties[1] = byte(size * 8) // Precision in bits
+		properties[1] = byte(size * 8) //nolint:gosec // G115: precision bits, size <= 8
 		properties[2] = 0              // Offset
 		properties[3] = 0              // Padding
 
@@ -320,7 +320,7 @@ func CreateBasicDatatypeMessage(class DatatypeClass, size uint32) (*DatatypeMess
 		// Float: 12 bytes properties
 		properties = make([]byte, 12)
 		properties[0] = 0              // Byte order: 0=little-endian
-		properties[1] = byte(size * 8) // Precision in bits
+		properties[1] = byte(size * 8) //nolint:gosec // G115: precision bits, size <= 8
 		properties[2] = 0              // Offset
 		// Rest: exponent/mantissa info (simplified for now)
 

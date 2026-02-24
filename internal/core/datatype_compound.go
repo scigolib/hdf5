@@ -46,7 +46,6 @@ func ParseCompoundType(dt *DatatypeMessage) (*CompoundType, error) {
 	switch dt.Version {
 	case 1:
 		// For version 1, number of members is in ClassBitField bits 0-15.
-		//nolint:gosec // G115: HDF5 binary format bitfield extraction
 		numMembers := uint16(dt.ClassBitField & 0xFFFF)
 		return parseCompoundV1(compound, dt.Properties, numMembers)
 	case 3:

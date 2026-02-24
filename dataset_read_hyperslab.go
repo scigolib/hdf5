@@ -760,7 +760,6 @@ func generateChunkCoordinates(first, last []uint64) [][]uint64 {
 	// Calculate total number of chunks
 	totalChunks := 1
 	for i := 0; i < ndims; i++ {
-		//nolint:gosec // G115: Chunk count calculation, overflow extremely unlikely in practice
 		totalChunks *= int(last[i] - first[i] + 1)
 	}
 

@@ -12,7 +12,7 @@
 [![Stars](https://img.shields.io/github/stars/scigolib/hdf5?style=flat-square&logo=github)](https://github.com/scigolib/hdf5/stargazers)
 [![Discussions](https://img.shields.io/github/discussions/scigolib/hdf5?style=flat-square&logo=github&label=discussions)](https://github.com/scigolib/hdf5/discussions)
 
-A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. **v0.13.5: Critical checksum fix - Jenkins lookup3 algorithm for h5dump/h5py compatibility!**
+A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. HDF5 2.0.0 compatible, production-ready read/write support.
 
 ---
 
@@ -194,9 +194,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 
 ## 🎯 Current Status
 
-**Version**: v0.13.5 (RELEASED 2026-02-02 - Jenkins Checksum Fix) ✅
-
-**Critical Fix: Jenkins lookup3 checksums for h5dump/h5py compatibility. HDF5 2.0.0 Ready with 86.1% coverage!** 🎉
+**HDF5 2.0.0 Ready with 86.1% coverage!** 🎉
 
 ### ✅ Fully Implemented
 - **File Structure**:
@@ -397,8 +395,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Status**: Stable - HDF5 2.0.0 compatible with security hardening
-**Version**: v0.13.5 (Critical checksum fix - Jenkins lookup3 for h5dump/h5py compatibility)
-**Last Updated**: 2026-02-02
 
 ---
 

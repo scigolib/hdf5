@@ -149,8 +149,8 @@ func (fp *FilterPipeline) EncodePipelineMessage() ([]byte, error) {
 
 	buf := make([]byte, 0, 8+len(fp.filters)*32) // Pre-allocate for header + filters
 	header := make([]byte, 8)
-	header[0] = 2 // Version 2
-	header[1] = byte(len(fp.filters))
+	header[0] = 2                     // Version 2
+	header[1] = byte(len(fp.filters)) //nolint:gosec // G115: filter count bounded by HDF5 format
 	// Reserved bytes 2-7 are already zero
 	buf = append(buf, header...)
 

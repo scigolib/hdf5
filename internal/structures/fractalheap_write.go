@@ -130,8 +130,8 @@ type WritableDirectBlock struct {
 func NewWritableFractalHeap(blockSize uint64) *WritableFractalHeap {
 	// Compute heap offset and length sizes
 	// Reference: H5HFhdr.c - H5HF__hdr_finish_init_phase1()
-	maxHeapSize := uint16(16)                      // 16 bits for heap size (65KB max offset)
-	heapOffsetSize := uint8((maxHeapSize + 7) / 8) //nolint:gosec // G115: Division by 8, result always fits in uint8
+	maxHeapSize := uint16(16) // 16 bits for heap size (65KB max offset)
+	heapOffsetSize := uint8((maxHeapSize + 7) / 8)
 
 	// Length size based on max managed object size
 	maxObjSize := uint64(DefaultMaxManagedObjectSize)
@@ -505,7 +505,7 @@ func (fh *WritableFractalHeap) WriteToFile(writer Writer, allocator Allocator, s
 	directBlockSize := fh.DirectBlock.Size
 
 	// Allocate both addresses
-	headerAddr, err := allocator.Allocate(uint64(headerSize)) //nolint:gosec // G115: headerSize bounded by HDF5 format
+	headerAddr, err := allocator.Allocate(uint64(headerSize))
 	if err != nil {
 		return 0, fmt.Errorf("failed to allocate heap header: %w", err)
 	}
