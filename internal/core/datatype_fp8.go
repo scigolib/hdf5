@@ -155,7 +155,6 @@ func Float32ToFP8E4M3(f float32) FP8E4M3 {
 	}
 
 	// Normal number.
-	//nolint:gosec // G115: Validated range check above ensures no overflow.
 	biasedExponent := uint8(exponentInt + fp8E4M3ExponentBias)
 	mantissaValue := f / float32(math.Pow(2, float64(exponentInt)))
 	mantissaFraction := mantissaValue - 1.0 // Remove implicit leading 1.
@@ -319,7 +318,6 @@ func Float32ToFP8E5M2(f float32) FP8E5M2 {
 	}
 
 	// Normal number.
-	//nolint:gosec // G115: Validated range check above ensures no overflow.
 	biasedExponent := uint8(exponentInt + fp8E5M2ExponentBias)
 	mantissaValue := f / float32(math.Pow(2, float64(exponentInt)))
 	mantissaFraction := mantissaValue - 1.0 // Remove implicit leading 1.

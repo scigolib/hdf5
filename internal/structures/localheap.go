@@ -92,7 +92,6 @@ func LoadLocalHeap(r io.ReaderAt, address uint64, sb *core.Superblock) (*LocalHe
 
 	// Allocate and read data segment from the ACTUAL address in the header
 	heap.Data = make([]byte, dataSegmentSize)
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(heap.Data, int64(dataSegmentAddr)); err != nil {
 		return nil, utils.WrapError("local heap data read failed", err)
 	}
@@ -170,7 +169,7 @@ func (h *LocalHeap) AddString(s string) (offset uint64, err error) {
 
 	// Check if we have space
 	currentSize := uint64(len(h.strings))
-	if currentSize+uint64(needed) > h.DataSegmentSize { //nolint:gosec // Safe: size calculation
+	if currentSize+uint64(needed) > h.DataSegmentSize {
 		return 0, errors.New("local heap is full")
 	}
 

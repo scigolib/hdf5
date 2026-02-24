@@ -17,7 +17,7 @@ import (
 func writeUint64(buf []byte, value uint64, size int, endianness binary.ByteOrder) {
 	switch size {
 	case 1:
-		buf[0] = byte(value)
+		buf[0] = byte(value) //nolint:gosec // G115: variable-size encoding
 	case 2:
 		endianness.PutUint16(buf, uint16(value)) //nolint:gosec // Safe: size limited to 2 bytes
 	case 4:
@@ -575,7 +575,6 @@ func (bt *WritableBTreeV2) encodeLeafNode(sb *core.Superblock) ([]byte, error) {
 
 // calculateHeaderSize calculates the size of the B-tree v2 header.
 func (bt *WritableBTreeV2) calculateHeaderSize(sb *core.Superblock) uint64 {
-	//nolint:gosec // G115: size calculation, overflow not possible with valid HDF5 file
 	return uint64(4 + 1 + 1 + 4 + 2 + 2 + 1 + 1 + int(sb.OffsetSize) + 2 + 8 + 4)
 	// Signature + Version + Type + NodeSize + RecordSize + Depth +
 	// SplitPercent + MergePercent + RootNodeAddr + NumRecordsRoot + TotalRecords + Checksum
@@ -584,7 +583,6 @@ func (bt *WritableBTreeV2) calculateHeaderSize(sb *core.Superblock) uint64 {
 // calculateLeafSize calculates the size of the leaf node.
 func (bt *WritableBTreeV2) calculateLeafSize(_ *core.Superblock) uint64 {
 	numRecords := len(bt.leaf.Records)
-	//nolint:gosec // G115: size calculation, overflow not possible with valid record counts
 	return uint64(4 + 1 + 1 + (numRecords * 11) + 4)
 	// Signature + Version + Type + Records + Checksum
 }

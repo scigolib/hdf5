@@ -82,7 +82,6 @@ func calculateCompoundPropsLen(properties []byte, version uint8) (int, error) {
 		}
 
 		// Recursively calculate member datatype size
-		//nolint:gosec // G602: bounds checked above (offset+8 <= len(properties))
 		memberDt, err := ParseDatatypeMessage(properties[offset:])
 		if err != nil {
 			return 0, fmt.Errorf("member %d: failed to parse datatype: %w", i, err)
@@ -103,9 +102,7 @@ func ParseDatatypeMessage(data []byte) (*DatatypeMessage, error) {
 	// Bytes 0-3: Class and Version packed.
 	classAndVersion := binary.LittleEndian.Uint32(data[0:4])
 
-	//nolint:gosec // G115: HDF5 binary format unpacking
 	class := DatatypeClass(classAndVersion & 0x0F)
-	//nolint:gosec // G115: HDF5 binary format unpacking
 	version := uint8((classAndVersion >> 4) & 0x0F)
 	classBitField := (classAndVersion >> 8) & 0x00FFFFFF
 
@@ -220,7 +217,6 @@ func (dt *DatatypeMessage) IsCompound() bool {
 // GetStringPadding returns the string padding type.
 // 0 = null-terminated, 1 = null-padded, 2 = space-padded.
 func (dt *DatatypeMessage) GetStringPadding() uint8 {
-	//nolint:gosec // G115: HDF5 binary format bitfield extraction
 	return uint8(dt.ClassBitField & 0x0F)
 }
 

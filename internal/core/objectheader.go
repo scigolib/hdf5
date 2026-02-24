@@ -240,7 +240,6 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, _ *Superblock,
 		}
 	}
 
-	//nolint:gosec // G115: Safe conversion for HDF5 structure sizes
 	current += uint64(chunkSizeBytes)
 	// V2 headers have a 4-byte CRC32 checksum at the end of each chunk.
 	// The chunkSize includes the checksum, so we subtract 4 to get the

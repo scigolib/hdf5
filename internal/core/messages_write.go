@@ -141,7 +141,7 @@ func encodeChunkedLayout(chunkDims []uint64, btreeAddress uint64, sb *Superblock
 
 	// Chunk dimensions (each 4 bytes, uint32)
 	for _, dim := range chunkDims {
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(dim)) //nolint:gosec // G115: HDF5 limits dimensions to uint32
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(dim))
 		offset += 4
 	}
 
@@ -251,7 +251,7 @@ func encodeDatatypeNumeric(dt *DatatypeMessage) ([]byte, error) {
 
 		properties = make([]byte, 12)
 		properties[0] = byteOrder         // Byte order
-		properties[1] = byte(dt.Size * 8) // Precision in bits
+		properties[1] = byte(dt.Size * 8) //nolint:gosec // G115: precision bits, size <= 8
 		properties[2] = 0                 // Offset (always 0 for standard floats)
 		properties[3] = exponentBits      // Exponent size
 		properties[4] = mantissaBits      // Mantissa size
@@ -261,7 +261,7 @@ func encodeDatatypeNumeric(dt *DatatypeMessage) ([]byte, error) {
 		// Fixed-point (integer) properties (4 bytes)
 		properties = make([]byte, 4)
 		properties[0] = byte(dt.ClassBitField & 0x01) // Byte order (little-endian = 0)
-		properties[1] = byte(dt.Size * 8)             // Precision in bits
+		properties[1] = byte(dt.Size * 8)             //nolint:gosec // G115: precision bits, size <= 8
 		properties[2] = 0                             // Offset
 		properties[3] = 0                             // Padding type
 	}
@@ -615,7 +615,7 @@ func EncodeAttributeMessage(name string, datatype *DatatypeMessage, dataspace *D
 func writeUint64(buf []byte, value uint64, size int, endianness binary.ByteOrder) {
 	switch size {
 	case 1:
-		buf[0] = byte(value)
+		buf[0] = byte(value) //nolint:gosec // G115: variable-size encoding
 	case 2:
 		endianness.PutUint16(buf, uint16(value)) //nolint:gosec // Safe: size limited to 2 bytes
 	case 4:
@@ -625,7 +625,7 @@ func writeUint64(buf []byte, value uint64, size int, endianness binary.ByteOrder
 	default:
 		// For other sizes, write what fits
 		for i := 0; i < size && i < 8; i++ {
-			buf[i] = byte(value >> (i * 8))
+			buf[i] = byte(value >> (i * 8)) //nolint:gosec // G115: variable-size encoding
 		}
 	}
 }

@@ -285,7 +285,7 @@ func writeAddr(data []byte, addr uint64, size int, endianness binary.ByteOrder) 
 
 	switch size {
 	case 1:
-		data[0] = byte(addr)
+		data[0] = byte(addr) //nolint:gosec // G115: variable-size address encoding
 	case 2:
 		endianness.PutUint16(data[:2], uint16(addr)) //nolint:gosec // Safe: address size matches offset size
 	case 4:

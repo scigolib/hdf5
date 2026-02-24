@@ -529,17 +529,17 @@ func readUint(data []byte, size int, endianness binary.ByteOrder) uint64 {
 	case 2:
 		return uint64(endianness.Uint16(data[:2]))
 	case 4:
-		return uint64(endianness.Uint32(data[:4])) //nolint:gosec // G602: Size validated by caller
+		return uint64(endianness.Uint32(data[:4]))
 	case 8:
-		return endianness.Uint64(data[:8]) //nolint:gosec // G602: Size validated by caller
+		return endianness.Uint64(data[:8])
 	default:
 		// Variable size - read as little-endian bytes
 		var val uint64
 		for i := 0; i < size && i < 8; i++ {
 			if endianness == binary.LittleEndian {
-				val |= uint64(data[i]) << (8 * i)
+				val |= uint64(data[i]) << (8 * i) //nolint:gosec // G602: loop bounded by size parameter
 			} else {
-				val = (val << 8) | uint64(data[i])
+				val = (val << 8) | uint64(data[i]) //nolint:gosec // G602: loop bounded by size parameter
 			}
 		}
 		return val
@@ -562,6 +562,5 @@ func computeOffsetSize(value uint64) uint8 {
 	}
 
 	// Round up to bytes
-	//nolint:gosec // G115: safe conversion, bits <= 64, result <= 8
 	return uint8((bits + 7) / 8)
 }

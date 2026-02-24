@@ -125,7 +125,7 @@ func lzfCompress(input []byte) ([]byte, error) {
 		// Calculate hash of next 3 bytes.
 		hash := hashLZF(input[inPos], input[inPos+1], input[inPos+2])
 		ref := int(htab[hash])
-		htab[hash] = uint32(inPos) //nolint:gosec // G115: inPos < len(input), fits in uint32
+		htab[hash] = uint32(inPos)
 
 		// Check if we have a valid match:
 		// - ref must be before current position
@@ -202,7 +202,7 @@ func appendLiteral(output, literal []byte) []byte {
 		}
 
 		// Control byte: 000LLLLL where LLLLL = runLen - 1.
-		ctrl := byte(runLen - 1)
+		ctrl := byte(runLen - 1) //nolint:gosec // G115: runLen bounded to 1-32
 		output = append(output, ctrl)
 		output = append(output, literal[:runLen]...)
 
@@ -223,16 +223,16 @@ func appendBackref(output []byte, offset, length int) []byte {
 		// Format: RRR OXXXX XXXXXXXX
 		// R = length - 2 (000 = 3 bytes, 110 = 8 bytes)
 		// O + X = offset - 1 (13 bits, max 8191)
-		runBits := (length - 2) << 5 // Bits 7-5
-		ctrl := byte(runBits | (offset >> 8))
+		runBits := (length - 2) << 5          // Bits 7-5
+		ctrl := byte(runBits | (offset >> 8)) //nolint:gosec // G115: LZF backreference encoding
 		output = append(output, ctrl, byte(offset&0xFF))
 	} else {
 		// Long backreference: 9-264 bytes, offset 1-8192.
 		// Format: 111 OXXXX XXXXXXXX RRRRRRRR
 		// R = length - 9 (0 = 9 bytes, 255 = 264 bytes)
 		// O + X = offset - 1 (13 bits, max 8191)
-		ctrl := byte(0xE0 | (offset >> 8)) // 111 + high 5 bits of offset
-		output = append(output, ctrl, byte(offset&0xFF), byte(length-9))
+		ctrl := byte(0xE0 | (offset >> 8))                               //nolint:gosec // G115: LZF backreference encoding
+		output = append(output, ctrl, byte(offset&0xFF), byte(length-9)) //nolint:gosec // G115: LZF backreference encoding
 	}
 
 	return output

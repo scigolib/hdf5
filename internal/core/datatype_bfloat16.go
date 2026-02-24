@@ -55,7 +55,6 @@ func Float32ToBFloat16(f float32) BFloat16 {
 	}
 
 	// Take upper 16 bits.
-	//nolint:gosec // G115: Validated range, intentional truncation to uint16.
 	return BFloat16(bits >> 16)
 }
 
