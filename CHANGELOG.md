@@ -56,6 +56,21 @@ Expected:         0x62A43443 (Jenkins lookup3 - what HDF5 expects)
 
 ### ✨ New Features
 
+#### Extended Slice Attribute Types (TASK-040)
+
+Added support for all integer slice types in attribute writing. Previously only `[]int32`,
+`[]int64`, `[]float32`, `[]float64` were supported for slice attributes.
+
+**New slice types**: `[]int8`, `[]int16`, `[]uint8`, `[]uint16`, `[]uint32`, `[]uint64`
+
+Scalar attributes already supported all sizes — this closes the gap for slices.
+
+**Files Modified**:
+- `attribute_write.go` - Added 6 types to `inferSlice()` and `encodeSliceValue()`
+- `group_attributes_test.go` - Round-trip test for all 10 slice types
+
+*Inspired by PR #19 from @CWBudde (MeKo-Christian).*
+
 #### ChunkIterator API for Memory-Efficient Reading (TASK-031)
 
 Added a convenient iterator API for reading chunked datasets chunk-by-chunk without loading

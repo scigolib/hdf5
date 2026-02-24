@@ -218,6 +218,51 @@ func TestGroupWriter_WriteAttribute_MultipleTypes(t *testing.T) {
 	require.Len(t, attrs, 11, "expected 11 attributes")
 }
 
+// TestGroupWriter_WriteAttribute_SliceTypes tests all supported slice types for attributes.
+func TestGroupWriter_WriteAttribute_SliceTypes(t *testing.T) {
+	testFile := "test_group_attribute_slices.h5"
+	defer func() { _ = os.Remove(testFile) }()
+
+	fw, err := CreateForWrite(testFile, CreateTruncate)
+	require.NoError(t, err)
+
+	group, err := fw.CreateGroup("/data")
+	require.NoError(t, err)
+
+	// Write all slice types
+	require.NoError(t, group.WriteAttribute("int8_slice", []int8{-1, 0, 1, 127}))
+	require.NoError(t, group.WriteAttribute("uint8_slice", []uint8{0, 128, 255}))
+	require.NoError(t, group.WriteAttribute("int16_slice", []int16{-32768, 0, 32767}))
+	require.NoError(t, group.WriteAttribute("uint16_slice", []uint16{0, 1000, 65535}))
+	require.NoError(t, group.WriteAttribute("int32_slice", []int32{-100000, 0, 100000}))
+	require.NoError(t, group.WriteAttribute("uint32_slice", []uint32{0, 3000000000}))
+	require.NoError(t, group.WriteAttribute("int64_slice", []int64{-10000000000, 10000000000}))
+	require.NoError(t, group.WriteAttribute("uint64_slice", []uint64{0, 18446744073709551615}))
+	require.NoError(t, group.WriteAttribute("float32_slice", []float32{1.5, 2.5, 3.5}))
+	require.NoError(t, group.WriteAttribute("float64_slice", []float64{1.1, 2.2, 3.3}))
+
+	require.NoError(t, fw.Close())
+
+	// Reopen and verify
+	f, err := Open(testFile)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	root := f.Root()
+	var dataGroup *Group
+	for _, child := range root.Children() {
+		if g, ok := child.(*Group); ok && g.Name() == "data" {
+			dataGroup = g
+			break
+		}
+	}
+	require.NotNil(t, dataGroup)
+
+	attrs, err := dataGroup.Attributes()
+	require.NoError(t, err)
+	require.Len(t, attrs, 10, "expected 10 slice attributes")
+}
+
 // TestGroupWriter_Path tests the Path() method.
 func TestGroupWriter_Path(t *testing.T) {
 	testFile := "test_group_path.h5"
