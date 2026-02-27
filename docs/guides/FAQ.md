@@ -82,7 +82,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 - ✅ Hyperslab selection (efficient data slicing) - 10-250x faster!
 
 **Quality metrics**:
-- Test coverage: 86.1%
+- Test coverage: 88%+ library packages
 - Lint issues: 0 (34+ linters)
 - 57 reference test files
 - 200+ test cases

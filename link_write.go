@@ -364,7 +364,7 @@ func validateSoftLinkTargetPath(path string) error {
 //   - error: if target not found, cycle detected, or max depth exceeded
 //
 // Internal use only - will be called when accessing soft link in v0.12.0.
-func (fw *FileWriter) resolveSoftLink(linkAddr uint64, visitedPaths map[string]bool) (uint64, error) { //nolint:unused // Future use in v0.12.0
+func (fw *FileWriter) resolveSoftLink(linkAddr uint64, visitedPaths map[string]bool) (uint64, error) {
 	_ = linkAddr
 	_ = visitedPaths
 	return 0, fmt.Errorf("soft link resolution not yet implemented (planned for v0.12.0)")
@@ -558,7 +558,7 @@ func validateExternalFileName(fileName string) error {
 //   - error: if file/object not found or cycle detected
 //
 // Internal use only - will be called when accessing external link in v0.12.0.
-func (fw *FileWriter) resolveExternalLink(linkAddr uint64, visitedFiles map[string]bool) (*File, uint64, error) { //nolint:unused // Future use in v0.12.0
+func (fw *FileWriter) resolveExternalLink(linkAddr uint64, visitedFiles map[string]bool) (*File, uint64, error) {
 	_ = linkAddr
 	_ = visitedFiles
 	return nil, 0, fmt.Errorf("external link resolution not yet implemented in MVP v0.11.5-beta (planned for v0.12.0)")
