@@ -71,7 +71,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - 64-bit chunk dimensions (>4GB chunks)
 - AI/ML datatypes (FP8 E4M3/E5M2, bfloat16)
 - 4 CVEs fixed (overflow protection throughout)
-- 86.1% coverage, 0 linter issues
+- 88%+ library coverage, 0 linter issues
 
 **v0.13.1** = Documentation Correction Hotfix ✅ RELEASED (same day)
 - Fixed incorrect "Superblock Version 4" references (non-existent)
@@ -274,7 +274,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - ✅ **Production quality** confirmed
 
 **Quality Metrics**:
-- ✅ Test coverage 86.1% (exceeded >70% target)
+- ✅ Test coverage 88%+ library packages (exceeded >70% target)
 - ✅ Official HDF5 test suite 98.2% pass rate
 - ✅ 0 linter issues (34+ linters)
 - ✅ Comprehensive documentation (5 guides, 5 examples)

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.7] - 2026-02-27
+
+### 🧪 Test Coverage Boost
+
+Major test coverage improvement across all library packages. Added ~250 new test functions
+covering read, write, and internal paths.
+
+**Coverage improvements by package:**
+
+| Package | Before | After | Delta |
+|---------|--------|-------|-------|
+| Root (hdf5) | 75.8% | 82.4% | +6.6% |
+| internal/core | 76.0% | 87.9% | +11.9% |
+| internal/structures | 77.1% | 91.5% | +14.4% |
+| internal/writer | — | 88.2% | — |
+| internal/rebalancing | — | 95.0% | — |
+| internal/utils | — | 96.2% | — |
+
+**Key areas covered:**
+- Public API: ReadStrings, ReadCompound, loadObject, loadChildren, NamedDatatype
+- Hyperslab: compact, float32/int64, 3D/strided, chunked layouts
+- Write paths: all integer types, string datasets, compound datasets, chunked+filters
+- Dense attributes: fractal heap + B-tree v2 full pipeline
+- Filter pipeline: BZIP2, LZF decompression, filter dispatch
+- Internal structures: incremental/lazy rebalancing, fractal heap ops, B-tree v2
+
+### 🔧 Maintenance
+
+- Fixed all gosec G602 slice bounds warnings (btree_v1.go, btree_group.go, dataset_write.go)
+- Fixed unused-parameter and octalLiteral lint issues
+- 0 lint issues across 34+ linters
+
+---
+
 ## [v0.13.6] - 2026-02-24
 
 ### ✨ New Features
