@@ -757,35 +757,29 @@ func TestIncrementalRebalancer_RebalancingLoop(t *testing.T) {
 	bt.EnableLazyRebalancing(DefaultLazyConfig())
 
 	// Add nodes to process.
-	bt.lazyState.UnderflowNodes = []uint64{0x100, 0x200}
+	bt.lazyState.UnderflowNodes = []uint64{0x100, 0x200, 0x300}
 
-	config := IncrementalRebalancingConfig{
-		Enabled:  true,
-		Budget:   50 * time.Millisecond,
-		Interval: 20 * time.Millisecond, // Quick ticks for testing
+	ir := &IncrementalRebalancer{
+		btree: bt,
+		config: IncrementalRebalancingConfig{
+			Enabled:  true,
+			Budget:   50 * time.Millisecond,
+			Interval: 20 * time.Millisecond,
+		},
+		stopChan:    make(chan struct{}),
+		stoppedChan: make(chan struct{}),
 	}
 
-	err := bt.EnableIncrementalRebalancing(config)
-	if err != nil {
-		t.Fatalf("EnableIncrementalRebalancing failed: %v", err)
-	}
+	// Call rebalanceIncremental directly (no background goroutine = no race).
+	ir.rebalanceIncremental()
 
-	// Wait for the loop to process the nodes.
-	deadline := time.After(2 * time.Second)
-	for {
-		select {
-		case <-deadline:
-			t.Fatal("timed out waiting for incremental rebalancing to complete")
-		default:
-			if len(bt.lazyState.UnderflowNodes) == 0 {
-				goto done
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
+	progress := ir.GetProgress()
+	if progress.NodesRebalanced != 3 {
+		t.Errorf("expected 3 nodes rebalanced, got %d", progress.NodesRebalanced)
 	}
-done:
-
-	_ = bt.StopIncrementalRebalancing()
+	if len(bt.lazyState.UnderflowNodes) != 0 {
+		t.Errorf("expected 0 remaining nodes, got %d", len(bt.lazyState.UnderflowNodes))
+	}
 }
 
 // TestIncrementalRebalancer_ETACalculation tests ETA computation with remaining nodes.
@@ -797,7 +791,7 @@ func TestIncrementalRebalancer_ETACalculation(t *testing.T) {
 		btree: bt,
 		config: IncrementalRebalancingConfig{
 			Enabled:  true,
-			Budget:   1 * time.Nanosecond, // Very small budget to process only a few
+			Budget:   1 * time.Millisecond, // Small budget to process a subset
 			Interval: 50 * time.Millisecond,
 		},
 		stopChan:    make(chan struct{}),
@@ -805,7 +799,7 @@ func TestIncrementalRebalancer_ETACalculation(t *testing.T) {
 	}
 
 	// Add many nodes so budget is exhausted before all are processed.
-	nodes := make([]uint64, 100000)
+	nodes := make([]uint64, 1000000)
 	for i := range nodes {
 		nodes[i] = uint64(0x100 + i)
 	}
