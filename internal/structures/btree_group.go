@@ -283,19 +283,22 @@ func writeAddr(data []byte, addr uint64, size int, endianness binary.ByteOrder) 
 		size = len(data)
 	}
 
+	// Use data[:size] for all slicing so gosec can verify bounds statically.
+	d := data[:size]
+
 	switch size {
 	case 1:
-		data[0] = byte(addr) //nolint:gosec // G115: variable-size address encoding
+		d[0] = byte(addr) //nolint:gosec // G115: variable-size address encoding
 	case 2:
-		endianness.PutUint16(data[:2], uint16(addr)) //nolint:gosec // Safe: address size matches offset size
+		endianness.PutUint16(d, uint16(addr)) //nolint:gosec // Safe: address size matches offset size
 	case 4:
-		endianness.PutUint32(data[:4], uint32(addr)) //nolint:gosec // Safe: address size matches offset size
+		endianness.PutUint32(d, uint32(addr)) //nolint:gosec // Safe: address size matches offset size
 	case 8:
-		endianness.PutUint64(data[:8], addr)
+		endianness.PutUint64(d, addr)
 	default:
-		// Pad to requested size
+		// Pad to requested size.
 		var buf [8]byte
 		endianness.PutUint64(buf[:], addr)
-		copy(data[:size], buf[:size])
+		copy(d, buf[:size])
 	}
 }

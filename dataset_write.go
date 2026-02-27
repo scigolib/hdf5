@@ -874,11 +874,13 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 				len(config.maxDims), len(dims))
 		}
 
-		// Validate each maxDim >= dim
-		for i, maxDim := range config.maxDims {
-			if maxDim != Unlimited && maxDim < dims[i] {
+		// Validate each maxDim >= dim.
+		for i := 0; i < len(config.maxDims) && i < len(dims); i++ {
+			maxDim := config.maxDims[i]
+			dim := dims[i]
+			if maxDim != Unlimited && maxDim < dim {
 				return nil, fmt.Errorf("maxDims[%d] (%d) must be >= dims[%d] (%d)",
-					i, maxDim, i, dims[i])
+					i, maxDim, i, dim)
 			}
 		}
 
