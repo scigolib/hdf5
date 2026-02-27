@@ -212,19 +212,22 @@ func readAddress(data []byte, size int) uint64 {
 		size = len(data)
 	}
 
+	// Use data[:size] for all slicing so gosec can verify bounds statically.
+	d := data[:size]
+
 	switch size {
 	case 1:
-		return uint64(data[0])
+		return uint64(d[0])
 	case 2:
-		return uint64(binary.LittleEndian.Uint16(data[:2]))
+		return uint64(binary.LittleEndian.Uint16(d))
 	case 4:
-		return uint64(binary.LittleEndian.Uint32(data[:4]))
+		return uint64(binary.LittleEndian.Uint32(d))
 	case 8:
-		return binary.LittleEndian.Uint64(data[:8])
+		return binary.LittleEndian.Uint64(d)
 	default:
 		// Pad to 8 bytes.
 		var buf [8]byte
-		copy(buf[:], data[:size])
+		copy(buf[:], d)
 		return binary.LittleEndian.Uint64(buf[:])
 	}
 }
