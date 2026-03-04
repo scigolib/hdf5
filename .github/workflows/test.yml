@@ -50,6 +50,9 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: go vet ./...
 
+    - name: Install UV
+      uses: astral-sh/setup-uv@v6
+
     - name: Run unit tests with race detector
       shell: bash
       run: go test -short -v -race -coverprofile=coverage.txt -covermode=atomic ./...
