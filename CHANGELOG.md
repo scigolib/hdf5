@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.8] - 2026-03-04
+
+### 🐛 Bug Fix
+
+#### Superblock EOA Compatibility (Issue #22)
+
+Fixed a critical compatibility issue where HDF5 files created by this library could not be
+read by h5py, h5wasm, or other HDF5 readers. The root cause was that the superblock's
+End-of-File Address (EOA) was written once at file creation time but never updated as
+datasets, attributes, and groups were added to the file.
+
+**Symptoms**: h5py reported `KeyError: 'Unable to synchronously open object (actual len exceeds EOA)'`,
+h5wasm reported `actual_len exceeds EOA`.
+
+**Fix**: `FileWriter.Close()` now rewrites the superblock with the final EOA from the allocator
+before closing the file. This ensures the EOA always matches the actual file size.
+
+**Impact**: All files created with v0.11.0 through v0.13.7 may have incorrect EOA if they
+contain any datasets or attributes. Files created with v0.13.8+ are fully compatible with
+h5py, h5wasm, h5dump, and the HDF5 C library.
+
+Reported by [@vrv-bit](https://github.com/vrv-bit).
+
+#### FileWriter.Close() resource leak on Windows
+
+`FileWriter.Close()` now also closes the read-side file handle opened by `OpenForWrite()`.
+Previously, the `*File` handle from `Open()` was never closed, causing Windows file locking
+errors during cleanup (e.g., `t.TempDir()` removal in tests).
+
+---
+
 ## [v0.13.7] - 2026-02-27
 
 ### 🧪 Test Coverage Boost
