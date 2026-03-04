@@ -82,8 +82,9 @@ func TestObjectHeaderWriter_WriteTo(t *testing.T) {
 			address: 48, // After superblock v2
 			// Header: 4 (sig) + 1 (ver) + 1 (flags) + 1 (chunk size) = 7
 			// Message: 1 (type) + 2 (size) + 1 (flags) + 18 (data) = 22
-			// Total: 7 + 22 = 29
-			wantSize: 29,
+			// Checksum: 4 (Jenkins lookup3)
+			// Total: 7 + 22 + 4 = 33
+			wantSize: 33,
 			wantErr:  false,
 			validateBytes: func(t *testing.T, data []byte) {
 				// Validate signature
@@ -95,8 +96,8 @@ func TestObjectHeaderWriter_WriteTo(t *testing.T) {
 				// Validate flags
 				assert.Equal(t, uint8(0), data[5], "Should have flags=0")
 
-				// Validate chunk size
-				assert.Equal(t, uint8(22), data[6], "Chunk size should be 22 (1+2+1+18)")
+				// Validate chunk size (messages + checksum)
+				assert.Equal(t, uint8(26), data[6], "Chunk size should be 26 (22 messages + 4 checksum)")
 
 				// Validate message type (Link Info = 2)
 				assert.Equal(t, uint8(2), data[7], "Message type should be 2 (Link Info)")
@@ -118,6 +119,11 @@ func TestObjectHeaderWriter_WriteTo(t *testing.T) {
 
 				btreeAddr := binary.LittleEndian.Uint64(linkInfo[10:18])
 				assert.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), btreeAddr, "B-tree address should be UNDEF")
+
+				// Validate Jenkins checksum (last 4 bytes)
+				checksum := binary.LittleEndian.Uint32(data[29:33])
+				expectedChecksum := JenkinsChecksum(data[:29])
+				assert.Equal(t, expectedChecksum, checksum, "Jenkins checksum should match")
 			},
 		},
 		{
@@ -131,20 +137,30 @@ func TestObjectHeaderWriter_WriteTo(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "chunk size too large for 1-byte encoding",
+			name: "large chunk uses 2-byte size encoding",
 			header: &ObjectHeaderWriter{
 				Version: 2,
-				Flags:   0, // Bits 0-1 = 0 means 1-byte chunk size (max 255)
+				Flags:   0,
 				Messages: []MessageWriter{
 					{
 						Type: MsgLinkInfo,
-						// Test data size: 1 (type) + 2 (size) + 1 (flags) + 300 (data) = 304 bytes (exceeds 255 limit).
+						// Message: 1 (type) + 2 (size) + 1 (flags) + 300 (data) = 304 bytes
+						// Chunk size: 304 + 4 (checksum) = 308 → needs 2-byte encoding
 						Data: make([]byte, 300),
 					},
 				},
 			},
 			address: 0,
-			wantErr: true,
+			// Header: 4 (sig) + 1 (ver) + 1 (flags) + 2 (chunk size, 2-byte) + 304 (message) + 4 (checksum) = 316
+			wantSize: 316,
+			wantErr:  false,
+			validateBytes: func(t *testing.T, data []byte) {
+				// Flags should have bits 0-1 = 1 (2-byte chunk size)
+				assert.Equal(t, uint8(1), data[5]&0x03, "Flags bits 0-1 should be 1 (2-byte chunk size)")
+				// Chunk size at offset 6-7 (2 bytes, little-endian)
+				chunkSize := binary.LittleEndian.Uint16(data[6:8])
+				assert.Equal(t, uint16(308), chunkSize, "Chunk size should be 308")
+			},
 		},
 	}
 
@@ -244,12 +260,13 @@ func TestObjectHeaderWriter_MultipleMessages(t *testing.T) {
 	// Header: 4+1+1+1 = 7
 	// Message 1: 1+2+1+10 = 14
 	// Message 2: 1+2+1+4 = 8
-	// Total chunk: 14+8 = 22
-	// Total: 7 + 22 = 29
-	assert.Equal(t, uint64(29), size)
+	// Checksum: 4
+	// Total chunk: 14+8+4 = 26
+	// Total: 7 + 26 = 33
+	assert.Equal(t, uint64(33), size)
 
 	data := writer.Bytes()
 
-	// Validate chunk size
-	assert.Equal(t, uint8(22), data[6], "Chunk size should be sum of messages")
+	// Validate chunk size (includes 4-byte Jenkins checksum)
+	assert.Equal(t, uint8(26), data[6], "Chunk size should be sum of messages + checksum")
 }

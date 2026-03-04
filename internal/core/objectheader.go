@@ -241,7 +241,7 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, _ *Superblock,
 	}
 
 	current += uint64(chunkSizeBytes)
-	// V2 headers have a 4-byte CRC32 checksum at the end of each chunk.
+	// V2 headers have a 4-byte Jenkins lookup3 checksum at the end of each chunk.
 	// The chunkSize includes the checksum, so we subtract 4 to get the
 	// end-of-messages boundary (H5O_SIZEOF_CHKSUM = 4).
 	end := current + chunkSize - 4

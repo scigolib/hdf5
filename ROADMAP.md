@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2026-03-04 | **Current Version**: v0.13.8 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.8 RELEASED! (2026-03-04) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2026-03-04 | **Current Version**: v0.13.9 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.9 RELEASED! (2026-03-04) → v1.0.0 LTS (Q3 2026)
 
 ---
 
@@ -54,6 +54,8 @@ v0.13.2 (BUGFIX - V0 superblock) ✅ RELEASED 2025-01-17
 v0.13.3 (FEATURE - Named Datatypes, Soft Links) ✅ RELEASED 2025-01-28
          ↓ (community adoption + feedback + monitoring)
 v0.13.8 (HOTFIX - EOA compatibility) ✅ RELEASED 2026-03-04
+         ↓ (object header checksum fix)
+v0.13.9 (HOTFIX - V2 object header checksum) ✅ RELEASED 2026-03-04
          ↓ (maintenance continues)
 v0.13.x (maintenance phase) → Stable maintenance, bug fixes, minor enhancements
          ↓ (6-9 months production validation)

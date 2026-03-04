@@ -66,8 +66,8 @@ func TestObjectHeaderWriterSize(t *testing.T) {
 			name:     "v2 empty header",
 			version:  2,
 			messages: []MessageWriter{},
-			want:     7, // Signature (4) + Version (1) + Flags (1) + Chunk Size (1)
-			desc:     "7-byte header only",
+			want:     11, // Signature (4) + Version (1) + Flags (1) + Chunk Size (1) + Checksum (4)
+			desc:     "7-byte prefix + 4-byte checksum",
 		},
 		{
 			name:    "v2 single message",
@@ -78,8 +78,8 @@ func TestObjectHeaderWriterSize(t *testing.T) {
 					Data: make([]byte, 16), // 16 bytes data
 				},
 			},
-			want: 27, // 7 (header) + 20 (Type 1 + Size 2 + Flags 1 + Data 16)
-			desc: "7-byte header + 1+2+1+16 message",
+			want: 31, // 7 (prefix) + 20 (Type 1 + Size 2 + Flags 1 + Data 16) + 4 (checksum)
+			desc: "7-byte prefix + 1+2+1+16 message + 4-byte checksum",
 		},
 		{
 			name:    "v2 two messages",
@@ -94,8 +94,8 @@ func TestObjectHeaderWriterSize(t *testing.T) {
 					Data: make([]byte, 12),
 				},
 			},
-			want: 35, // 7 + 12 (1+2+1+8) + 16 (1+2+1+12)
-			desc: "7 + (1+2+1+8) + (1+2+1+12)",
+			want: 39, // 7 + 12 (1+2+1+8) + 16 (1+2+1+12) + 4 (checksum)
+			desc: "7 + (1+2+1+8) + (1+2+1+12) + 4 (checksum)",
 		},
 	}
 
@@ -180,21 +180,21 @@ func TestSizeV2(t *testing.T) {
 		{
 			name:     "no messages",
 			messages: []MessageWriter{},
-			want:     7, // Just header
+			want:     11, // 7 (prefix) + 4 (checksum)
 		},
 		{
 			name: "single byte message",
 			messages: []MessageWriter{
 				{Type: MsgDataspace, Data: make([]byte, 1)},
 			},
-			want: 12, // 7 + 5 (1+2+1+1) but size field is 2 bytes, so 7 + 1+2+1+1 = 12
+			want: 16, // 7 + 5 (1+2+1+1) + 4 (checksum)
 		},
 		{
 			name: "large message",
 			messages: []MessageWriter{
 				{Type: MsgDataspace, Data: make([]byte, 100)},
 			},
-			want: 111, // 7 + 104 (1+2+1+100)
+			want: 115, // 7 + 104 (1+2+1+100) + 4 (checksum)
 		},
 	}
 
