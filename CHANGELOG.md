@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.9] - 2026-03-04
+
+### 🐛 Bug Fix
+
+#### V2 Object Header Checksum (Issue #24)
+
+Fixed a critical compatibility issue where V2 object headers were written without the mandatory
+4-byte Jenkins lookup3 checksum. HDF5 readers (h5py, h5wasm, h5dump) validate this checksum
+on every object header read, causing "incorrect metadata checksum" errors on files created
+by this library.
+
+**Symptoms**: h5py/h5wasm reported `incorrect metadata checksum after all read attempts`
+when opening files with datasets or groups created by this library.
+
+**Root cause**: `writeToV2()` wrote the OHDR signature, version, flags, chunk size, and
+messages — but completely omitted the 4-byte Jenkins lookup3 checksum that must terminate
+every V2 object header chunk per the HDF5 Format Specification.
+
+**Fix**:
+- Added Jenkins lookup3 checksum computation and writing to `writeToV2()`
+- Added support for variable chunk size field width (1/2/4/8 bytes) per HDF5 spec flags bits 0-1
+- Unified all manual header size calculations to use `ObjectHeaderWriter.Size()`
+- Verified against HDF5 C reference implementation (`H5Ocache.c`)
+
+**Impact**: All files created with v0.11.0 through v0.13.8 have invalid V2 object header
+checksums. Files created with v0.13.9+ include correct checksums and are fully compatible
+with h5py, h5wasm, h5dump, and the HDF5 C library.
+
+Reported by [@vrv-bit](https://github.com/vrv-bit).
+
+---
+
 ## [v0.13.8] - 2026-03-04
 
 ### 🐛 Bug Fix

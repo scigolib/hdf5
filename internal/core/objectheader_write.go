@@ -134,8 +134,41 @@ func (ohw *ObjectHeaderWriter) sizeV2() uint64 {
 		messageDataSize += 1 + 2 + 1 + uint64(len(msg.Data))
 	}
 
-	// Header size: Signature (4) + Version (1) + Flags (1) + Chunk Size (1) + Messages
-	return 4 + 1 + 1 + 1 + messageDataSize
+	const checksumSize = 4
+	chunkSize := messageDataSize + checksumSize
+	chunkSizeFieldWidth := chunkSizeFieldWidth(chunkSize)
+
+	// Header size: Signature (4) + Version (1) + Flags (1) + ChunkSizeField (1/2/4/8) + Messages + Checksum (4)
+	return 4 + 1 + 1 + chunkSizeFieldWidth + messageDataSize + checksumSize
+}
+
+// chunkSizeFieldWidth returns the number of bytes needed for the chunk size field
+// based on the chunk size value. HDF5 flags bits 0-1: 0=1byte, 1=2bytes, 2=4bytes, 3=8bytes.
+func chunkSizeFieldWidth(chunkSize uint64) uint64 {
+	switch {
+	case chunkSize <= 255:
+		return 1
+	case chunkSize <= 65535:
+		return 2
+	case chunkSize <= 0xFFFFFFFF:
+		return 4
+	default:
+		return 8
+	}
+}
+
+// writeChunkSize writes the chunk size value with the given field width (1/2/4/8 bytes).
+func writeChunkSize(buf []byte, chunkSize, width uint64) {
+	switch width {
+	case 1:
+		buf[0] = byte(chunkSize) //nolint:gosec // G115: value validated by chunkSizeFieldWidth
+	case 2:
+		binary.LittleEndian.PutUint16(buf[:2], uint16(chunkSize)) //nolint:gosec // G115: validated by chunkSizeFieldWidth
+	case 4:
+		binary.LittleEndian.PutUint32(buf[:4], uint32(chunkSize)) //nolint:gosec // G115: validated by chunkSizeFieldWidth
+	case 8:
+		binary.LittleEndian.PutUint64(buf[:8], chunkSize)
+	}
 }
 
 // WriteTo writes the object header to the writer at the specified address.
@@ -280,19 +313,30 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 		messageDataSize += 1 + 2 + 1 + uint64(len(msg.Data))
 	}
 
-	// Calculate total chunk size
-	// Chunk contains all messages
-	chunkSize := messageDataSize
+	// Calculate total chunk size (includes 4-byte Jenkins checksum per HDF5 spec).
+	// The chunk size field value includes the checksum space.
+	const checksumSize = 4
+	chunkSize := messageDataSize + checksumSize
 
-	// Validate chunk size fits in encoding
-	// For MVP, flags bits 0-1 = 0, so chunk size is 1 byte (max 255)
-	if chunkSize > 255 {
-		return 0, fmt.Errorf("chunk size %d exceeds maximum for 1-byte encoding (255)", chunkSize)
+	// Determine chunk size field width based on value.
+	// HDF5 spec: flags bits 0-1 encode the width: 0=1byte, 1=2bytes, 2=4bytes, 3=8bytes.
+	csWidth := chunkSizeFieldWidth(chunkSize)
+	flagsBits := uint8(0)
+	switch csWidth {
+	case 1:
+		flagsBits = 0
+	case 2:
+		flagsBits = 1
+	case 4:
+		flagsBits = 2
+	case 8:
+		flagsBits = 3
 	}
+	flags := (ohw.Flags & 0xFC) | flagsBits // Preserve other flag bits, set bits 0-1
 
 	// Build header
-	// Signature (4) + Version (1) + Flags (1) + Chunk Size (1) + Messages (variable)
-	headerSize := 4 + 1 + 1 + 1 + chunkSize
+	// Signature (4) + Version (1) + Flags (1) + Chunk Size (variable) + Messages + Checksum (4)
+	headerSize := 4 + 1 + 1 + csWidth + chunkSize
 	buf := make([]byte, headerSize)
 
 	offset := 0
@@ -305,13 +349,13 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 	buf[offset] = ohw.Version
 	offset++
 
-	// Flags
-	buf[offset] = ohw.Flags
+	// Flags (with chunk size width encoded in bits 0-1)
+	buf[offset] = flags
 	offset++
 
-	// Chunk 0 size (1 byte for flags bits 0-1 = 0)
-	buf[offset] = uint8(chunkSize)
-	offset++
+	// Chunk 0 size (variable width based on flags bits 0-1)
+	writeChunkSize(buf[offset:], chunkSize, csWidth)
+	offset += int(csWidth) //nolint:gosec // G115: csWidth is 1, 2, 4, or 8
 
 	// Write messages
 	for _, msg := range ohw.Messages {
@@ -332,6 +376,10 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 		copy(buf[offset:offset+len(msg.Data)], msg.Data)
 		offset += len(msg.Data)
 	}
+
+	// Jenkins lookup3 checksum over all preceding bytes (signature through messages).
+	checksum := JenkinsChecksum(buf[:offset])
+	binary.LittleEndian.PutUint32(buf[offset:offset+checksumSize], checksum)
 
 	// Write to file
 	n, err := w.WriteAt(buf, int64(address)) //nolint:gosec // Safe: address within file bounds

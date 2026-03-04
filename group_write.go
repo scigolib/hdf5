@@ -229,11 +229,8 @@ func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 		},
 	}
 
-	// Calculate object header size
-	// Header: 4 (sig) + 1 (ver) + 1 (flags) + 1 (chunk size) = 7 bytes
-	// Message: 1 (type) + 2 (size) + 1 (flags) + len(data)
-	messageDataSize := 1 + 2 + 1 + uint64(len(stMsg))
-	headerSize := 7 + messageDataSize
+	// Calculate object header size using the writer's own method
+	headerSize := ohw.Size()
 
 	headerAddr, err := fw.writer.Allocate(headerSize)
 	if err != nil {

@@ -1168,22 +1168,9 @@ func calculateObjectHeaderSize(ohw *core.ObjectHeaderWriter) (uint64, error) {
 		return 0, fmt.Errorf("only object header version 2 supported")
 	}
 
-	// Calculate message data size
-	var messageDataSize uint64
-	for _, msg := range ohw.Messages {
-		// Each message: Type (1) + Size (2) + Flags (1) + Data (variable)
-		messageDataSize += 1 + 2 + 1 + uint64(len(msg.Data))
-	}
-
-	// Validate chunk size fits in 1 byte (MVP limitation)
-	if messageDataSize > 255 {
-		return 0, fmt.Errorf("message data size %d exceeds 255 bytes (MVP limitation)", messageDataSize)
-	}
-
-	// Header: Signature (4) + Version (1) + Flags (1) + Chunk Size (1) + Messages
-	headerSize := 4 + 1 + 1 + 1 + messageDataSize
-
-	return headerSize, nil
+	// Use the ObjectHeaderWriter's own Size() method which correctly handles
+	// variable chunk size field width and Jenkins checksum.
+	return ohw.Size(), nil
 }
 
 // DatasetWriter provides write access to a dataset.

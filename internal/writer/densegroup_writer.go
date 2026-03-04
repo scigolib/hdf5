@@ -272,15 +272,8 @@ func (dgw *DenseGroupWriter) createObjectHeader(fw *FileWriter, allocator *Alloc
 		},
 	}
 
-	// Calculate object header size
-	// Header: 4 (sig) + 1 (ver) + 1 (flags) + 1 (chunk size) = 7 bytes (v2 header)
-	// Each message: 1 (type) + 2 (size) + 1 (flags) + len(data)
-	var messageSize uint64
-	for _, msg := range ohw.Messages {
-		messageSize += uint64(1 + 2 + 1 + len(msg.Data)) // type + size + flags + data
-	}
-
-	headerSize := 7 + messageSize // 7-byte header + messages
+	// Calculate object header size using the writer's own method
+	headerSize := ohw.Size()
 
 	// Allocate space for object header
 	headerAddr, err := allocator.Allocate(headerSize)
