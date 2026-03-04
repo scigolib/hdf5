@@ -2276,6 +2276,18 @@ func (fw *FileWriter) Close() error {
 		}
 	}
 
+	// CRITICAL FIX (Issue #22): Rewrite superblock with final End-of-File address.
+	// The superblock EOA is written once at file creation time, but subsequent
+	// allocations (datasets, attributes, groups) extend the file beyond the
+	// initial EOA. Without updating it, h5py/h5wasm/h5dump fail with
+	// "actual len exceeds EOA".
+	if fw.file != nil && fw.file.sb != nil {
+		finalEOF := fw.writer.EndOfFile()
+		if err := fw.file.sb.WriteTo(fw.writer, finalEOF); err != nil {
+			return fmt.Errorf("failed to update superblock EOA: %w", err)
+		}
+	}
+
 	// Flush buffered writes
 	if err := fw.writer.Flush(); err != nil {
 		return fmt.Errorf("failed to flush: %w", err)
@@ -2284,6 +2296,15 @@ func (fw *FileWriter) Close() error {
 	// Close writer
 	if err := fw.writer.Close(); err != nil {
 		return fmt.Errorf("failed to close writer: %w", err)
+	}
+
+	// Close the read-side file handle (opened by OpenForWrite via Open()).
+	// On Windows, an unclosed handle prevents TempDir cleanup and any
+	// subsequent file operations.
+	if fw.file != nil {
+		if err := fw.file.Close(); err != nil {
+			return fmt.Errorf("failed to close read handle: %w", err)
+		}
 	}
 
 	fw.writer = nil
