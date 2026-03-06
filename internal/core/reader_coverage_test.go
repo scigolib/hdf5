@@ -232,7 +232,7 @@ func TestReadDenseAttributes_EndToEnd(t *testing.T) {
 	}
 
 	// Build a Version 3 attribute message for a scalar int32 named "density".
-	attrMsg := buildWave4V3AttrMessage(t, "density", 12345)
+	attrMsg := buildTestV3AttrMessage(t, "density", 12345)
 
 	// We need a valid BTHD + BTLF + FRHP + FHDB.
 	// Addresses in our memory buffer:
@@ -413,7 +413,7 @@ func TestCollectAllChunks_NonLeafNode(t *testing.T) {
 	keySize := 4 + 4 + ndims*8 // 4 nbytes + 4 filter_mask + ndims*8 coords
 
 	// --- Build leaf node 0 at 0x0200: 2 entries ---
-	leaf0 := buildWave4BTreeLeafNode(t, offsetSize, chunkDims, []wave4ChunkEntry{
+	leaf0 := buildTestBTreeLeafNode(t, offsetSize, chunkDims, []testChunkEntry{
 		{byteOffsets: []uint64{0}, nbytes: 80, addr: 0xA000},
 		{byteOffsets: []uint64{10}, nbytes: 80, addr: 0xA100},
 	})
@@ -425,7 +425,7 @@ func TestCollectAllChunks_NonLeafNode(t *testing.T) {
 	leaf0 = append(leaf0, leaf0FinalKey...)
 
 	// --- Build leaf node 1 at 0x0400: 1 entry ---
-	leaf1 := buildWave4BTreeLeafNode(t, offsetSize, chunkDims, []wave4ChunkEntry{
+	leaf1 := buildTestBTreeLeafNode(t, offsetSize, chunkDims, []testChunkEntry{
 		{byteOffsets: []uint64{20}, nbytes: 80, addr: 0xB000},
 	})
 	leaf1FinalKey := make([]byte, keySize)
@@ -508,7 +508,7 @@ func TestCollectAllChunks_NonLeaf_2D(t *testing.T) {
 	const leafAddr = uint64(0x0200)
 
 	// Build leaf with 1 entry.
-	leaf := buildWave4BTreeLeafNode(t, offsetSize, chunkDims, []wave4ChunkEntry{
+	leaf := buildTestBTreeLeafNode(t, offsetSize, chunkDims, []testChunkEntry{
 		{byteOffsets: []uint64{0, 0}, nbytes: 200, addr: 0xC000},
 	})
 	finalKey := make([]byte, keySize)
@@ -567,15 +567,15 @@ func TestReadDatasetStrings_ContiguousLayout(t *testing.T) {
 		Messages: []*HeaderMessage{
 			{
 				Type: MsgDatatype,
-				Data: buildWave4FixedStringDtMsg(6, 0), // 6 bytes, null-terminated
+				Data: buildTestFixedStringDtMsg(6, 0), // 6 bytes, null-terminated
 			},
 			{
 				Type: MsgDataspace,
-				Data: buildWave4DataspaceMsg([]uint64{3}),
+				Data: buildTestDataspaceMsg([]uint64{3}),
 			},
 			{
 				Type: MsgDataLayout,
-				Data: buildWave4ContiguousLayoutMsg(dataAddr, 18),
+				Data: buildTestContiguousLayoutMsg(dataAddr, 18),
 			},
 		},
 	}
@@ -602,11 +602,11 @@ func TestReadDatasetStrings_UnsupportedLayoutClass(t *testing.T) {
 		Messages: []*HeaderMessage{
 			{
 				Type: MsgDatatype,
-				Data: buildWave4FixedStringDtMsg(5, 0),
+				Data: buildTestFixedStringDtMsg(5, 0),
 			},
 			{
 				Type: MsgDataspace,
-				Data: buildWave4DataspaceMsg([]uint64{2}),
+				Data: buildTestDataspaceMsg([]uint64{2}),
 			},
 			{
 				Type: MsgDataLayout,
@@ -631,15 +631,15 @@ func TestReadDatasetStrings_ContiguousReadError(t *testing.T) {
 		Messages: []*HeaderMessage{
 			{
 				Type: MsgDatatype,
-				Data: buildWave4FixedStringDtMsg(5, 0),
+				Data: buildTestFixedStringDtMsg(5, 0),
 			},
 			{
 				Type: MsgDataspace,
-				Data: buildWave4DataspaceMsg([]uint64{2}),
+				Data: buildTestDataspaceMsg([]uint64{2}),
 			},
 			{
 				Type: MsgDataLayout,
-				Data: buildWave4ContiguousLayoutMsg(0x99999, 10),
+				Data: buildTestContiguousLayoutMsg(0x99999, 10),
 			},
 		},
 	}
@@ -999,13 +999,13 @@ func TestConvertToStrings_UnknownStringType(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Helper functions (wave4 prefix to avoid name conflicts)
+// Helper functions for test construction
 // ---------------------------------------------------------------------------
 
-// buildWave4V3AttrMessage builds a Version 3 attribute message for a scalar
+// buildTestV3AttrMessage builds a Version 3 attribute message for a scalar
 // int32 attribute. This is similar to the existing buildV3AttrMessage but
 // uses a distinct name to avoid test helper conflicts.
-func buildWave4V3AttrMessage(t *testing.T, name string, value int32) []byte {
+func buildTestV3AttrMessage(t *testing.T, name string, value int32) []byte {
 	t.Helper()
 
 	nameBytes := append([]byte(name), 0)
@@ -1051,16 +1051,16 @@ func buildWave4V3AttrMessage(t *testing.T, name string, value int32) []byte {
 	return data
 }
 
-// wave4ChunkEntry describes a chunk for building B-tree leaf nodes.
-type wave4ChunkEntry struct {
+// testChunkEntry describes a chunk for building B-tree leaf nodes.
+type testChunkEntry struct {
 	byteOffsets []uint64
 	nbytes      uint32
 	addr        uint64
 }
 
-// buildWave4BTreeLeafNode builds a serialized B-tree v1 leaf node with the
+// buildTestBTreeLeafNode builds a serialized B-tree v1 leaf node with the
 // given chunk entries. Caller must append the final key separately.
-func buildWave4BTreeLeafNode(t *testing.T, offsetSize uint8, chunkDims []uint64, entries []wave4ChunkEntry) []byte {
+func buildTestBTreeLeafNode(t *testing.T, offsetSize uint8, chunkDims []uint64, entries []testChunkEntry) []byte {
 	t.Helper()
 
 	ndims := len(chunkDims)
@@ -1102,8 +1102,8 @@ func buildWave4BTreeLeafNode(t *testing.T, offsetSize uint8, chunkDims []uint64,
 	return buf.Bytes()
 }
 
-// buildWave4FixedStringDtMsg creates a fixed-length string datatype message.
-func buildWave4FixedStringDtMsg(size uint32, paddingType uint8) []byte {
+// buildTestFixedStringDtMsg creates a fixed-length string datatype message.
+func buildTestFixedStringDtMsg(size uint32, paddingType uint8) []byte {
 	data := make([]byte, 8)
 	classBitField := uint32(paddingType & 0x0F)
 	classAndVersion := uint32(DatatypeString) | (1 << 4) | (classBitField << 8)
@@ -1112,8 +1112,8 @@ func buildWave4FixedStringDtMsg(size uint32, paddingType uint8) []byte {
 	return data
 }
 
-// buildWave4DataspaceMsg creates a simple dataspace message (version 1).
-func buildWave4DataspaceMsg(dims []uint64) []byte {
+// buildTestDataspaceMsg creates a simple dataspace message (version 1).
+func buildTestDataspaceMsg(dims []uint64) []byte {
 	data := make([]byte, 8+len(dims)*8)
 	data[0] = 1
 	data[1] = uint8(len(dims))
@@ -1126,8 +1126,8 @@ func buildWave4DataspaceMsg(dims []uint64) []byte {
 	return data
 }
 
-// buildWave4ContiguousLayoutMsg creates a contiguous layout message (version 3).
-func buildWave4ContiguousLayoutMsg(address, size uint64) []byte {
+// buildTestContiguousLayoutMsg creates a contiguous layout message (version 3).
+func buildTestContiguousLayoutMsg(address, size uint64) []byte {
 	data := make([]byte, 18)
 	data[0] = 3
 	data[1] = uint8(LayoutContiguous)
