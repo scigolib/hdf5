@@ -215,55 +215,57 @@ func encodeDatatypeNumeric(dt *DatatypeMessage) ([]byte, error) {
 		return nil, fmt.Errorf("invalid numeric datatype size: %d (must be 1, 2, 4, or 8)", dt.Size)
 	}
 
-	// For numeric types, properties contain:
-	// - Byte Order: 1 byte
-	// - Precision: 1 byte
-	// - Offset: 1 byte
-	// Plus additional fields for floating-point types
+	// Per C reference (H5Odtype.c - H5O__dtype_encode_helper):
+	// Properties format uses uint16 pairs and type-specific fields.
 	var properties []byte
 
 	if dt.Class == DatatypeFloat {
-		// Floating-point properties (12 bytes total)
-		// Byte order (bit 0 of ClassBitField), little-endian = 0
-		byteOrder := byte(dt.ClassBitField & 0x01)
+		// Floating-point properties (12 bytes total per H5Odtype.c):
+		//   uint16: bit_offset (always 0 for standard IEEE 754)
+		//   uint16: bit_precision (total bits: 32 or 64)
+		//   uint8:  exponent bit position
+		//   uint8:  exponent size (bits)
+		//   uint8:  mantissa bit position
+		//   uint8:  mantissa size (bits)
+		//   uint32: exponent bias
 
-		// For IEEE 754:
-		// - float32: mantissa=23 bits, exponent=8 bits
-		// - float64: mantissa=52 bits, exponent=11 bits
-		var mantissaBits, exponentBits uint8
-		var exponentBias uint8
+		var epos, esize, mpos, msize uint8
+		var ebias uint32
 
 		switch dt.Size {
 		case 4:
-			// float32
-			mantissaBits = 23
-			exponentBits = 8
-			exponentBias = 127
+			// IEEE 754 float32: sign(1) + exp(8) + mantissa(23) = 32 bits
+			epos = 23  // exponent starts after mantissa
+			esize = 8  // 8-bit exponent
+			mpos = 0   // mantissa starts at bit 0
+			msize = 23 // 23-bit mantissa
+			ebias = 127
 		case 8:
-			// float64
-			mantissaBits = 52
-			exponentBits = 11
-			//nolint:mnd // Standard IEEE 754 bias for float64
-			exponentBias = 127 // Will be adjusted in full implementation
+			// IEEE 754 float64: sign(1) + exp(11) + mantissa(52) = 64 bits
+			epos = 52  // exponent starts after mantissa
+			esize = 11 // 11-bit exponent
+			mpos = 0   // mantissa starts at bit 0
+			msize = 52 // 52-bit mantissa
+			ebias = 1023
 		default:
 			return nil, fmt.Errorf("unsupported float size: %d", dt.Size)
 		}
 
 		properties = make([]byte, 12)
-		properties[0] = byteOrder         // Byte order
-		properties[1] = byte(dt.Size * 8) //nolint:gosec // G115: precision bits, size <= 8
-		properties[2] = 0                 // Offset (always 0 for standard floats)
-		properties[3] = exponentBits      // Exponent size
-		properties[4] = mantissaBits      // Mantissa size
-		properties[5] = exponentBias      // Exponent bias
-		// Remaining bytes: mantissa location, exponent location, etc. (set to 0 for standard)
+		binary.LittleEndian.PutUint16(properties[0:2], 0)               // bit_offset = 0
+		binary.LittleEndian.PutUint16(properties[2:4], uint16(dt.Size*8)) //nolint:gosec // G115: precision bits
+		properties[4] = epos
+		properties[5] = esize
+		properties[6] = mpos
+		properties[7] = msize
+		binary.LittleEndian.PutUint32(properties[8:12], ebias)
 	} else {
-		// Fixed-point (integer) properties (4 bytes)
+		// Fixed-point (integer) properties (4 bytes per H5Odtype.c):
+		//   uint16: bit_offset (always 0)
+		//   uint16: bit_precision (total bits)
 		properties = make([]byte, 4)
-		properties[0] = byte(dt.ClassBitField & 0x01) // Byte order (little-endian = 0)
-		properties[1] = byte(dt.Size * 8)             //nolint:gosec // G115: precision bits, size <= 8
-		properties[2] = 0                             // Offset
-		properties[3] = 0                             // Padding type
+		binary.LittleEndian.PutUint16(properties[0:2], 0)                 // bit_offset = 0
+		binary.LittleEndian.PutUint16(properties[2:4], uint16(dt.Size*8)) //nolint:gosec // G115: precision bits
 	}
 
 	// Build message: header (8 bytes) + properties

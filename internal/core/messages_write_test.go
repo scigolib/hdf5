@@ -192,9 +192,18 @@ func TestEncodeDatatypeMessage_Numeric(t *testing.T) {
 				size := binary.LittleEndian.Uint32(data[4:8])
 				assert.Equal(t, uint32(4), size)
 
-				// Float properties: precision should be 32 bits
-				precision := data[9]
-				assert.Equal(t, byte(32), precision)
+				// Float properties per H5Odtype.c:
+				// uint16 bit_offset=0, uint16 bit_precision=32, epos, esize, mpos, msize, uint32 ebias
+				bitOffset := binary.LittleEndian.Uint16(data[8:10])
+				assert.Equal(t, uint16(0), bitOffset)
+				bitPrecision := binary.LittleEndian.Uint16(data[10:12])
+				assert.Equal(t, uint16(32), bitPrecision)
+				assert.Equal(t, uint8(23), data[12]) // epos
+				assert.Equal(t, uint8(8), data[13])  // esize
+				assert.Equal(t, uint8(0), data[14])  // mpos
+				assert.Equal(t, uint8(23), data[15]) // msize
+				ebias := binary.LittleEndian.Uint32(data[16:20])
+				assert.Equal(t, uint32(127), ebias)
 			},
 		},
 		{
@@ -203,7 +212,7 @@ func TestEncodeDatatypeMessage_Numeric(t *testing.T) {
 				Class:         DatatypeFloat,
 				Version:       1,
 				Size:          8,
-				ClassBitField: 0x00,
+				ClassBitField: 0x3F20,
 			},
 			wantErr: false,
 			validate: func(t *testing.T, data []byte) {
@@ -212,9 +221,15 @@ func TestEncodeDatatypeMessage_Numeric(t *testing.T) {
 				size := binary.LittleEndian.Uint32(data[4:8])
 				assert.Equal(t, uint32(8), size)
 
-				// Precision should be 64 bits
-				precision := data[9]
-				assert.Equal(t, byte(64), precision)
+				// Float64 properties
+				bitPrecision := binary.LittleEndian.Uint16(data[10:12])
+				assert.Equal(t, uint16(64), bitPrecision)
+				assert.Equal(t, uint8(52), data[12]) // epos
+				assert.Equal(t, uint8(11), data[13]) // esize
+				assert.Equal(t, uint8(0), data[14])  // mpos
+				assert.Equal(t, uint8(52), data[15]) // msize
+				ebias := binary.LittleEndian.Uint32(data[16:20])
+				assert.Equal(t, uint32(1023), ebias)
 			},
 		},
 		{
