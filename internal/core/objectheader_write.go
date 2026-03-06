@@ -134,11 +134,13 @@ func (ohw *ObjectHeaderWriter) sizeV2() uint64 {
 		messageDataSize += 1 + 2 + 1 + uint64(len(msg.Data))
 	}
 
+	// Per HDF5 C reference (H5Ocache.c:1207, H5Opkg.h:85-107):
+	// chunk_size in file = message data ONLY (excludes checksum and header prefix).
+	// The C library reconstructs full chunk size as: chunk_size + H5O_SIZEOF_HDR.
 	const checksumSize = 4
-	chunkSize := messageDataSize + checksumSize
-	chunkSizeFieldWidth := chunkSizeFieldWidth(chunkSize)
+	chunkSizeFieldWidth := chunkSizeFieldWidth(messageDataSize)
 
-	// Header size: Signature (4) + Version (1) + Flags (1) + ChunkSizeField (1/2/4/8) + Messages + Checksum (4)
+	// Total on-disk size: Signature (4) + Version (1) + Flags (1) + ChunkSizeField + Messages + Checksum (4)
 	return 4 + 1 + 1 + chunkSizeFieldWidth + messageDataSize + checksumSize
 }
 
@@ -313,10 +315,11 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 		messageDataSize += 1 + 2 + 1 + uint64(len(msg.Data))
 	}
 
-	// Calculate total chunk size (includes 4-byte Jenkins checksum per HDF5 spec).
-	// The chunk size field value includes the checksum space.
+	// Per HDF5 C reference (H5Ocache.c:1207): chunk_size in file = messages ONLY.
+	// The C library adds H5O_SIZEOF_HDR (which includes checksum) to get full chunk size.
+	// Checksum is still written after messages but NOT counted in chunk_size field.
 	const checksumSize = 4
-	chunkSize := messageDataSize + checksumSize
+	chunkSize := messageDataSize
 
 	// Determine chunk size field width based on value.
 	// HDF5 spec: flags bits 0-1 encode the width: 0=1byte, 1=2bytes, 2=4bytes, 3=8bytes.
@@ -334,9 +337,9 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 	}
 	flags := (ohw.Flags & 0xFC) | flagsBits // Preserve other flag bits, set bits 0-1
 
-	// Build header
-	// Signature (4) + Version (1) + Flags (1) + Chunk Size (variable) + Messages + Checksum (4)
-	headerSize := 4 + 1 + 1 + csWidth + chunkSize
+	// Build header buffer: prefix + messages + checksum
+	// Signature (4) + Version (1) + Flags (1) + Chunk Size field (variable) + Messages + Checksum (4)
+	headerSize := 4 + 1 + 1 + csWidth + messageDataSize + uint64(checksumSize)
 	buf := make([]byte, headerSize)
 
 	offset := 0

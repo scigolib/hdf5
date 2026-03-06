@@ -241,10 +241,10 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, _ *Superblock,
 	}
 
 	current += uint64(chunkSizeBytes)
-	// V2 headers have a 4-byte Jenkins lookup3 checksum at the end of each chunk.
-	// The chunkSize includes the checksum, so we subtract 4 to get the
-	// end-of-messages boundary (H5O_SIZEOF_CHKSUM = 4).
-	end := current + chunkSize - 4
+	// Per HDF5 C reference (H5Ocache.c:1207, H5Opkg.h:85-107):
+	// chunk_size in file = message data ONLY (does not include checksum).
+	// The 4-byte Jenkins lookup3 checksum follows immediately after the messages.
+	end := current + chunkSize
 
 	// Determine message header size based on flags.
 	// V2 message format: Type (1) + Size (2) + Flags (1) = 4 bytes
