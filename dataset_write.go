@@ -2751,12 +2751,20 @@ func createRootGroupStructureV0(fw *writer.FileWriter) (*rootGroupInfo, error) {
 	// Local heap size: minimum ~256 bytes
 	heapSize := uint64(256)
 
-	// Step 2: Calculate fixed addresses (no Allocate - we write at fixed offsets)
+	// Step 2: Calculate fixed addresses and reserve space via allocator.
 	// Superblock v0: 0x00-0x5F (96 bytes)
 	rootGroupAddr := uint64(96)                    // 0x60 - immediately after superblock
 	rootBTreeAddr := rootGroupAddr + objHeaderSize // After object header
 	rootStNodeAddr := rootBTreeAddr + btreeSize    // After B-tree
 	rootHeapAddr := rootStNodeAddr + stNodeSize    // After symbol table node
+
+	// CRITICAL: Reserve this space in the allocator so future Allocate() calls
+	// (e.g., CreateDataset) don't overlap with root group structures.
+	// Total size: from rootGroupAddr to end of heap data segment.
+	totalRootSize := objHeaderSize + btreeSize + stNodeSize + 32 + heapSize // 32 = heap header
+	if _, err := fw.Allocate(totalRootSize); err != nil {
+		return nil, fmt.Errorf("failed to reserve root group space: %w", err)
+	}
 
 	// Step 3: Write structures in ASCENDING ADDRESS ORDER
 	// CRITICAL: Sequential write order prevents sparse file holes on Windows!
