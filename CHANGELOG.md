@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.10] - 2026-03-06
+
+### 🐛 Bug Fix
+
+#### h5dump/h5ls/h5py Interoperability (Issue #24)
+
+Fixed 4 critical interoperability issues that prevented external HDF5 tools from correctly
+reading files created by this library. After this fix, h5dump, h5ls, h5py, and h5wasm all
+read files without errors.
+
+**Bug #1: V2 OHDR chunk_size included checksum**
+
+Per C reference (`H5Ocache.c:1207`, `H5Opkg.h:85-107`), the chunk_size field in V2 object
+headers must contain message data only, excluding the 4-byte Jenkins checksum. Our write path
+included the checksum in chunk_size, and the read path compensated by subtracting 4 — two
+wrongs making a right. Both paths fixed together.
+
+**Bug #2: Local heap missing root group empty string at offset 0**
+
+Per C reference (`H5Gstab.c:144`), offset 0 in the local heap data segment must contain an
+empty string (`\0`) for the root group name. Without this, h5ls could not resolve object names
+in the root group.
+
+**Bug #3: Incorrect datatype encoding**
+
+Per C reference (`H5Odtype.c`), integer properties use `uint16` pairs (`bit_offset`, `bit_precision`),
+and float properties use the full 12-byte IEEE 754 layout (`bit_offset`, `bit_precision`, `epos`,
+`esize`, `mpos`, `msize`, `ebias`). Our encoding used incorrect byte layouts.
+
+Additionally, `ClassBitField` values were wrong:
+- Signed integers: `0x00` → `0x08` (H5T_SGN_2, two's complement)
+- Float32: `0x00` → `0x1F20` (sign bit=31, implied mantissa normalization)
+- Float64: `0x00` → `0x3F20` (sign bit=63, implied mantissa normalization)
+
+h5dump showed `H5T_STD_U32LE` instead of `H5T_STD_I32LE` for signed integers, and floats
+were not recognized as IEEE format.
+
+**Bug #4: B-tree right key not updated + v0 allocator overlap**
+
+`linkToParent()` added entries to the symbol table node and heap, but did not update the
+B-tree right key (`key[1]`). Without the correct right key boundary, h5ls/h5dump showed
+empty root groups.
+
+Root cause of extended debugging: v0 superblock initialization wrote root group structures
+(object header, B-tree, SNOD, heap) at fixed addresses (96–1768) using raw `WriteAt`,
+without reserving space in the allocator. Subsequent `CreateDataset` calls got overlapping
+addresses from `Allocate()`, corrupting the root group. Fix: reserve `totalRootSize` via
+`Allocate()` after writing v0 root structures.
+
+**Validation**: h5dump, h5ls, and h5py all correctly read files with both v0 and v2
+superblocks. Datatypes display correctly (`H5T_STD_I32LE`, `H5T_IEEE_F64LE`).
+
+Reported by [@vrv-bit](https://github.com/vrv-bit).
+
+---
+
 ## [v0.13.9] - 2026-03-04
 
 ### 🐛 Bug Fix
