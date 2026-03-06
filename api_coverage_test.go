@@ -15,10 +15,10 @@ import (
 // Section 1: loadObject coverage -- exercise all object-type branches
 // ---------------------------------------------------------------------------
 
-// TestWave4_LoadObject_DatasetFromV0File verifies that loadObject correctly
+// TestLoadObject_DatasetFromV0File verifies that loadObject correctly
 // resolves dataset objects in a v0 superblock file. This covers the
 // ObjectTypeDataset branch within loadObject.
-func TestWave4_LoadObject_DatasetFromV0File(t *testing.T) {
+func TestLoadObject_DatasetFromV0File(t *testing.T) {
 	t.Parallel()
 
 	// fill_old.h5 is a v0 superblock file with datasets at root level.
@@ -45,11 +45,11 @@ func TestWave4_LoadObject_DatasetFromV0File(t *testing.T) {
 	require.True(t, foundDataset, "should find at least one Dataset in fill_old.h5")
 }
 
-// TestWave4_LoadObject_GroupFromV0File verifies that loadObject correctly
+// TestLoadObject_GroupFromV0File verifies that loadObject correctly
 // resolves nested group objects in a v0 superblock file. This covers the
 // ObjectTypeGroup branch within loadObject, plus the fallback through
 // ObjectTypeUnknown for v0 groups.
-func TestWave4_LoadObject_GroupFromV0File(t *testing.T) {
+func TestLoadObject_GroupFromV0File(t *testing.T) {
 	t.Parallel()
 
 	// group_old.h5 is a v0 superblock file with a nested group "/old".
@@ -69,10 +69,10 @@ func TestWave4_LoadObject_GroupFromV0File(t *testing.T) {
 	require.Contains(t, childGroup.Name(), "old")
 }
 
-// TestWave4_LoadObject_NestedGroupsV0 verifies loadObject with deeply nested
+// TestLoadObject_NestedGroupsV0 verifies loadObject with deeply nested
 // groups in a v0 file. tbogus.h5 has /group/ with child datasets, exercising
 // loadChildren with TREE B-tree format and multiple entries.
-func TestWave4_LoadObject_NestedGroupsV0(t *testing.T) {
+func TestLoadObject_NestedGroupsV0(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/reference/tbogus.h5")
@@ -100,9 +100,9 @@ func TestWave4_LoadObject_NestedGroupsV0(t *testing.T) {
 	require.Equal(t, "/", paths[0], "first path should be root")
 }
 
-// TestWave4_LoadObject_ManyDatasetsV0 verifies loadChildren with a large number
+// TestLoadObject_ManyDatasetsV0 verifies loadChildren with a large number
 // of children. le_data.h5 has 24 datasets at root level in v0 format.
-func TestWave4_LoadObject_ManyDatasetsV0(t *testing.T) {
+func TestLoadObject_ManyDatasetsV0(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/reference/le_data.h5")
@@ -124,9 +124,9 @@ func TestWave4_LoadObject_ManyDatasetsV0(t *testing.T) {
 	}
 }
 
-// TestWave4_LoadObject_MultipleGroupsV0 verifies loadObject for v0 files
+// TestLoadObject_MultipleGroupsV0 verifies loadObject for v0 files
 // containing multiple group children. mergemsg.h5 has /grp1, /grp2, /grp3.
-func TestWave4_LoadObject_MultipleGroupsV0(t *testing.T) {
+func TestLoadObject_MultipleGroupsV0(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/reference/mergemsg.h5")
@@ -157,9 +157,9 @@ func TestWave4_LoadObject_MultipleGroupsV0(t *testing.T) {
 // Section 2: loadChildren coverage -- more branch paths through B-tree
 // ---------------------------------------------------------------------------
 
-// TestWave4_LoadChildren_V0WithBigEndian verifies loadChildren on a big-endian
+// TestLoadChildren_V0WithBigEndian verifies loadChildren on a big-endian
 // v0 file with many datasets (be_data.h5).
-func TestWave4_LoadChildren_V0WithBigEndian(t *testing.T) {
+func TestLoadChildren_V0WithBigEndian(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/reference/be_data.h5")
@@ -174,9 +174,9 @@ func TestWave4_LoadChildren_V0WithBigEndian(t *testing.T) {
 	require.Equal(t, 24, len(children), "be_data.h5 should have 24 children")
 }
 
-// TestWave4_LoadChildren_V0WithDeflate verifies loadChildren correctly
+// TestLoadChildren_V0WithDeflate verifies loadChildren correctly
 // identifies Dataset objects in v0 files with compressed data.
-func TestWave4_LoadChildren_V0WithDeflate(t *testing.T) {
+func TestLoadChildren_V0WithDeflate(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/reference/deflate.h5")
@@ -199,9 +199,9 @@ func TestWave4_LoadChildren_V0WithDeflate(t *testing.T) {
 // Section 3: Dataset reading API coverage (read path from group.go)
 // ---------------------------------------------------------------------------
 
-// TestWave4_DatasetRead_Float64FromV0 tests Dataset.Read() on a v0 file.
+// TestDatasetRead_Float64FromV0 tests Dataset.Read() on a v0 file.
 // This exercises the Read() method through loadObject.
-func TestWave4_DatasetRead_Float64FromV0(t *testing.T) {
+func TestDatasetRead_Float64FromV0(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/reference/filespace_1_8.h5")
@@ -221,8 +221,8 @@ func TestWave4_DatasetRead_Float64FromV0(t *testing.T) {
 	require.Len(t, data, 100, "filespace_1_8 dataset has 100 elements")
 }
 
-// TestWave4_DatasetInfo_FromV0 tests Dataset.Info() method.
-func TestWave4_DatasetInfo_FromV0(t *testing.T) {
+// TestDatasetInfo_FromV0 tests Dataset.Info() method.
+func TestDatasetInfo_FromV0(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/reference/filespace_1_8.h5")
@@ -243,9 +243,9 @@ func TestWave4_DatasetInfo_FromV0(t *testing.T) {
 	assert.Contains(t, info, "integer", "should describe integer type")
 }
 
-// TestWave4_DatasetAttributes_FromV0 tests Dataset.Attributes() and
+// TestDatasetAttributes_FromV0 tests Dataset.Attributes() and
 // ListAttributes() on a dataset. specmetaread.h5 has datasets at root.
-func TestWave4_DatasetAttributes_FromV0(t *testing.T) {
+func TestDatasetAttributes_FromV0(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/reference/specmetaread.h5")
@@ -272,9 +272,9 @@ func TestWave4_DatasetAttributes_FromV0(t *testing.T) {
 		"Attributes and ListAttributes should return same count")
 }
 
-// TestWave4_DatasetReadAttribute_NotFound tests Dataset.ReadAttribute() with
+// TestDatasetReadAttribute_NotFound tests Dataset.ReadAttribute() with
 // a non-existent attribute name.
-func TestWave4_DatasetReadAttribute_NotFound(t *testing.T) {
+func TestDatasetReadAttribute_NotFound(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/reference/specmetaread.h5")
@@ -298,9 +298,9 @@ func TestWave4_DatasetReadAttribute_NotFound(t *testing.T) {
 // Section 4: Group.Attributes() coverage -- both modern and traditional paths
 // ---------------------------------------------------------------------------
 
-// TestWave4_GroupAttributes_ModernGroup tests Group.Attributes() on modern
+// TestGroupAttributes_ModernGroup tests Group.Attributes() on modern
 // v2 format groups that have stored address (non-zero).
-func TestWave4_GroupAttributes_ModernGroup(t *testing.T) {
+func TestGroupAttributes_ModernGroup(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/with_groups.h5")
@@ -325,9 +325,9 @@ func TestWave4_GroupAttributes_ModernGroup(t *testing.T) {
 	})
 }
 
-// TestWave4_GroupAttributes_TraditionalV0Group tests Group.Attributes() on
+// TestGroupAttributes_TraditionalV0Group tests Group.Attributes() on
 // a v0 traditional format group where address may be 0 (SNOD format).
-func TestWave4_GroupAttributes_TraditionalV0Group(t *testing.T) {
+func TestGroupAttributes_TraditionalV0Group(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/reference/group_old.h5")
@@ -348,14 +348,14 @@ func TestWave4_GroupAttributes_TraditionalV0Group(t *testing.T) {
 // Section 5: Write-path coverage -- round-trip tests for group/dataset/attrs
 // ---------------------------------------------------------------------------
 
-// TestWave4_WriteReadRoundTrip_MixedObjectTypes verifies write -> read -> verify
+// TestWriteReadRoundTrip_MixedObjectTypes verifies write -> read -> verify
 // for files with mixed groups and datasets. This exercises loadObject for
 // ObjectTypeGroup and ObjectTypeDataset branches in the write-created files.
-func TestWave4_WriteReadRoundTrip_MixedObjectTypes(t *testing.T) {
+func TestWriteReadRoundTrip_MixedObjectTypes(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_mixed.h5")
+	filename := filepath.Join(tempDir, "test_mixed.h5")
 
 	// Write file with mixed structure.
 	func() {
@@ -406,15 +406,15 @@ func TestWave4_WriteReadRoundTrip_MixedObjectTypes(t *testing.T) {
 	require.Equal(t, 3, datasets, "should have 3 datasets")
 }
 
-// TestWave4_WriteReadRoundTrip_V0FileOnly creates a v0 format empty file
+// TestWriteReadRoundTrip_V0FileOnly creates a v0 format empty file
 // and verifies it can be reopened. V0 with datasets uses the symbol table
 // format which is not fully supported for write->reopen, but the empty
 // file round-trip exercises the v0 superblock and root group paths.
-func TestWave4_WriteReadRoundTrip_V0FileOnly(t *testing.T) {
+func TestWriteReadRoundTrip_V0FileOnly(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_v0.h5")
+	filename := filepath.Join(tempDir, "test_v0.h5")
 
 	// Write empty v0 file.
 	func() {
@@ -439,14 +439,14 @@ func TestWave4_WriteReadRoundTrip_V0FileOnly(t *testing.T) {
 	require.Empty(t, children, "empty v0 file should have 0 children")
 }
 
-// TestWave4_WriteReadRoundTrip_V2WithGroupsAndDatasets creates a v2 format
+// TestWriteReadRoundTrip_V2WithGroupsAndDatasets creates a v2 format
 // file with nested groups and datasets, covering loadObject, loadModernGroup,
 // and loadChildren thoroughly via write -> read -> verify.
-func TestWave4_WriteReadRoundTrip_V2WithGroupsAndDatasets(t *testing.T) {
+func TestWriteReadRoundTrip_V2WithGroupsAndDatasets(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_v2_nested.h5")
+	filename := filepath.Join(tempDir, "test_v2_nested.h5")
 
 	// Write.
 	func() {
@@ -494,16 +494,16 @@ func TestWave4_WriteReadRoundTrip_V2WithGroupsAndDatasets(t *testing.T) {
 // Section 6: RebalanceAttributeBTree -- test the objectHeader != nil path
 // ---------------------------------------------------------------------------
 
-// TestWave4_RebalanceAttributeBTree_DenseViaReadHeader tests the code path
+// TestRebalanceAttributeBTree_DenseViaReadHeader tests the code path
 // in RebalanceAttributeBTree where denseAttrInfo==nil but objectHeader==nil,
 // so it reads the object header from disk. We create a file with 10+ attrs
 // (triggers dense storage), close it, reopen it fresh, and call
 // RebalanceAttributeBTree.
-func TestWave4_RebalanceAttributeBTree_DenseViaReadHeader(t *testing.T) {
+func TestRebalanceAttributeBTree_DenseViaReadHeader(t *testing.T) {
 	t.Parallel()
 
 	// Use explicit file path with defer Remove to avoid TempDir cleanup race.
-	filename := filepath.Join("tmp", "wave4_rebalance_read_header.h5")
+	filename := filepath.Join("tmp", "test_rebalance_read_header.h5")
 	defer func() { _ = os.Remove(filename) }()
 
 	// Step 1: Create file with dense attributes.
@@ -563,14 +563,14 @@ func TestWave4_RebalanceAttributeBTree_DenseViaReadHeader(t *testing.T) {
 	require.NoError(t, f.Close())
 }
 
-// TestWave4_RebalanceAttributeBTree_CompactOnly tests RebalanceAttributeBTree
+// TestRebalanceAttributeBTree_CompactOnly tests RebalanceAttributeBTree
 // on a dataset with only compact attributes (less than 8). The code should
 // find attrInfo==nil and return nil (no-op).
-func TestWave4_RebalanceAttributeBTree_CompactOnly(t *testing.T) {
+func TestRebalanceAttributeBTree_CompactOnly(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_rebalance_compact.h5")
+	filename := filepath.Join(tempDir, "test_rebalance_compact.h5")
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
@@ -595,14 +595,14 @@ func TestWave4_RebalanceAttributeBTree_CompactOnly(t *testing.T) {
 // Section 7: Dataset attribute write/read round-trip with all scalar types
 // ---------------------------------------------------------------------------
 
-// TestWave4_AttributeWriteRead_AllScalarTypes verifies round-trip for all
+// TestAttributeWriteRead_AllScalarTypes verifies round-trip for all
 // supported scalar attribute types. This increases coverage for
 // inferDatatypeFromValue, encodeAttributeValue, and writeCompactAttribute.
-func TestWave4_AttributeWriteRead_AllScalarTypes(t *testing.T) {
+func TestAttributeWriteRead_AllScalarTypes(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_attr_scalars.h5")
+	filename := filepath.Join(tempDir, "test_attr_scalars.h5")
 
 	tests := []struct {
 		name  string
@@ -657,13 +657,13 @@ func TestWave4_AttributeWriteRead_AllScalarTypes(t *testing.T) {
 	require.Len(t, attrs, len(tests), "should have all %d attributes", len(tests))
 }
 
-// TestWave4_AttributeWriteRead_SliceTypes verifies round-trip for all
+// TestAttributeWriteRead_SliceTypes verifies round-trip for all
 // supported slice attribute types.
-func TestWave4_AttributeWriteRead_SliceTypes(t *testing.T) {
+func TestAttributeWriteRead_SliceTypes(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_attr_slices.h5")
+	filename := filepath.Join(tempDir, "test_attr_slices.h5")
 
 	tests := []struct {
 		name  string
@@ -720,8 +720,8 @@ func TestWave4_AttributeWriteRead_SliceTypes(t *testing.T) {
 // Section 8: inferDatatypeFromValue edge cases
 // ---------------------------------------------------------------------------
 
-// TestWave4_InferDatatypeFromValue_Nil tests nil value handling.
-func TestWave4_InferDatatypeFromValue_Nil(t *testing.T) {
+// TestInferDatatypeFromValue_Nil tests nil value handling.
+func TestInferDatatypeFromValue_Nil(t *testing.T) {
 	t.Parallel()
 
 	_, _, err := inferDatatypeFromValue(nil)
@@ -729,9 +729,9 @@ func TestWave4_InferDatatypeFromValue_Nil(t *testing.T) {
 	assert.Contains(t, err.Error(), "nil or invalid")
 }
 
-// TestWave4_InferDatatypeFromValue_UnsupportedSlice tests unsupported slice
+// TestInferDatatypeFromValue_UnsupportedSlice tests unsupported slice
 // element type.
-func TestWave4_InferDatatypeFromValue_UnsupportedSlice(t *testing.T) {
+func TestInferDatatypeFromValue_UnsupportedSlice(t *testing.T) {
 	t.Parallel()
 
 	_, _, err := inferDatatypeFromValue([]bool{true, false})
@@ -739,8 +739,8 @@ func TestWave4_InferDatatypeFromValue_UnsupportedSlice(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported")
 }
 
-// TestWave4_EncodeAttributeValue_UnsupportedType tests encoding unsupported type.
-func TestWave4_EncodeAttributeValue_UnsupportedType(t *testing.T) {
+// TestEncodeAttributeValue_UnsupportedType tests encoding unsupported type.
+func TestEncodeAttributeValue_UnsupportedType(t *testing.T) {
 	t.Parallel()
 
 	_, err := encodeAttributeValue(struct{}{})
@@ -748,9 +748,9 @@ func TestWave4_EncodeAttributeValue_UnsupportedType(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported")
 }
 
-// TestWave4_EncodeSliceValue_UnsupportedElemType tests encoding slice with
+// TestEncodeSliceValue_UnsupportedElemType tests encoding slice with
 // unsupported element type.
-func TestWave4_EncodeSliceValue_UnsupportedElemType(t *testing.T) {
+func TestEncodeSliceValue_UnsupportedElemType(t *testing.T) {
 	t.Parallel()
 
 	_, _, err := inferDatatypeFromValue([]complex64{1 + 2i})
@@ -762,14 +762,14 @@ func TestWave4_EncodeSliceValue_UnsupportedElemType(t *testing.T) {
 // Section 9: loadGroup -- edge case: invalid group address
 // ---------------------------------------------------------------------------
 
-// TestWave4_LoadGroup_InvalidAddress tests that loadGroup returns an error
+// TestLoadGroup_InvalidAddress tests that loadGroup returns an error
 // for address 0.
-func TestWave4_LoadGroup_InvalidAddress(t *testing.T) {
+func TestLoadGroup_InvalidAddress(t *testing.T) {
 	t.Parallel()
 
 	// Create a minimal file to get a File handle.
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_invalid_addr.h5")
+	filename := filepath.Join(tempDir, "test_invalid_addr.h5")
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
@@ -789,13 +789,13 @@ func TestWave4_LoadGroup_InvalidAddress(t *testing.T) {
 // Section 10: Dataset reading methods -- additional coverage
 // ---------------------------------------------------------------------------
 
-// TestWave4_DatasetReadStrings_WriteRead verifies Dataset.ReadStrings()
+// TestDatasetReadStrings_WriteRead verifies Dataset.ReadStrings()
 // via a write-read round trip.
-func TestWave4_DatasetReadStrings_WriteRead(t *testing.T) {
+func TestDatasetReadStrings_WriteRead(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_strings.h5")
+	filename := filepath.Join(tempDir, "test_strings.h5")
 
 	// Write string dataset.
 	func() {
@@ -830,12 +830,12 @@ func TestWave4_DatasetReadStrings_WriteRead(t *testing.T) {
 	assert.Equal(t, "gamma", strings[2])
 }
 
-// TestWave4_DatasetReadCompound_WriteRead verifies Dataset.ReadCompound().
-func TestWave4_DatasetReadCompound_WriteRead(t *testing.T) {
+// TestDatasetReadCompound_WriteRead verifies Dataset.ReadCompound().
+func TestDatasetReadCompound_WriteRead(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_compound.h5")
+	filename := filepath.Join(tempDir, "test_compound.h5")
 
 	// Write compound dataset using the correct API (raw bytes).
 	func() {
@@ -895,8 +895,8 @@ func TestWave4_DatasetReadCompound_WriteRead(t *testing.T) {
 // Section 11: NamedDatatype coverage
 // ---------------------------------------------------------------------------
 
-// TestWave4_NamedDatatype_Methods tests Name() and Datatype() methods.
-func TestWave4_NamedDatatype_Methods(t *testing.T) {
+// TestNamedDatatype_Methods tests Name() and Datatype() methods.
+func TestNamedDatatype_Methods(t *testing.T) {
 	t.Parallel()
 
 	ndt := &NamedDatatype{
@@ -918,20 +918,20 @@ func TestWave4_NamedDatatype_Methods(t *testing.T) {
 // Section 12: File.Open error paths
 // ---------------------------------------------------------------------------
 
-// TestWave4_Open_ErrorPaths tests various error conditions for Open().
-func TestWave4_Open_ErrorPaths(t *testing.T) {
+// TestOpen_ErrorPaths tests various error conditions for Open().
+func TestOpen_ErrorPaths(t *testing.T) {
 	t.Parallel()
 
 	t.Run("non-existent file", func(t *testing.T) {
 		t.Parallel()
-		_, err := Open("testdata/does_not_exist_wave4.h5")
+		_, err := Open("testdata/does_not_exist_test.h5")
 		require.Error(t, err)
 	})
 
 	t.Run("not an HDF5 file", func(t *testing.T) {
 		t.Parallel()
 		// Use this test file itself as input -- it is not HDF5.
-		_, err := Open("root_coverage_wave4_test.go")
+		_, err := Open("api_coverage_test.go")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not an HDF5 file")
 	})
@@ -950,9 +950,9 @@ func TestWave4_Open_ErrorPaths(t *testing.T) {
 // Section 13: Walk with NamedDatatype (ensure Walk handles it)
 // ---------------------------------------------------------------------------
 
-// TestWave4_WalkWithAllObjectTypes exercises Walk with groups, datasets,
+// TestWalkWithAllObjectTypes exercises Walk with groups, datasets,
 // and verifies object type assertion works for mixed structures.
-func TestWave4_WalkWithAllObjectTypes(t *testing.T) {
+func TestWalkWithAllObjectTypes(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/with_groups.h5")
@@ -990,9 +990,9 @@ func TestWave4_WalkWithAllObjectTypes(t *testing.T) {
 // Section 14: Additional V0 file coverage
 // ---------------------------------------------------------------------------
 
-// TestWave4_V0Files_TableDriven runs through multiple v0 reference files
+// TestV0Files_TableDriven runs through multiple v0 reference files
 // to ensure they all load correctly and objects resolve.
-func TestWave4_V0Files_TableDriven(t *testing.T) {
+func TestV0Files_TableDriven(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1043,8 +1043,8 @@ func TestWave4_V0Files_TableDriven(t *testing.T) {
 	}
 }
 
-// TestWave4_V2V3Files_TableDriven runs through v2 and v3 reference files.
-func TestWave4_V2V3Files_TableDriven(t *testing.T) {
+// TestV2V3Files_TableDriven runs through v2 and v3 reference files.
+func TestV2V3Files_TableDriven(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1090,14 +1090,14 @@ func TestWave4_V2V3Files_TableDriven(t *testing.T) {
 // Section 15: Dense attribute storage -- full lifecycle round-trip
 // ---------------------------------------------------------------------------
 
-// TestWave4_DenseAttributes_FullLifecycle creates a file with dense
+// TestDenseAttributes_FullLifecycle creates a file with dense
 // attributes, closes it, reopens for reading, and verifies all attributes.
 // This exercises transitionToDenseAttributes and writeDenseAttribute.
-func TestWave4_DenseAttributes_FullLifecycle(t *testing.T) {
+func TestDenseAttributes_FullLifecycle(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_dense_lifecycle.h5")
+	filename := filepath.Join(tempDir, "test_dense_lifecycle.h5")
 
 	const numAttrs = 15
 
@@ -1141,13 +1141,13 @@ func TestWave4_DenseAttributes_FullLifecycle(t *testing.T) {
 	require.Len(t, names, numAttrs)
 }
 
-// TestWave4_DenseAttributes_WriteDeleteRebalanceVerify creates dense attrs,
+// TestDenseAttributes_WriteDeleteRebalanceVerify creates dense attrs,
 // deletes some, rebalances, and verifies remaining.
-func TestWave4_DenseAttributes_WriteDeleteRebalanceVerify(t *testing.T) {
+func TestDenseAttributes_WriteDeleteRebalanceVerify(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_dense_delete_rebalance.h5")
+	filename := filepath.Join(tempDir, "test_dense_delete_rebalance.h5")
 
 	const totalAttrs = 12
 	const deleteAttrs = 4
@@ -1203,9 +1203,9 @@ func TestWave4_DenseAttributes_WriteDeleteRebalanceVerify(t *testing.T) {
 // Section 16: inferDatatypeFromValue -- all supported types comprehensively
 // ---------------------------------------------------------------------------
 
-// TestWave4_InferDatatypeFromValue_AllTypes is a comprehensive table-driven
+// TestInferDatatypeFromValue_AllTypes is a comprehensive table-driven
 // test for all type branches in inferDatatypeFromValue.
-func TestWave4_InferDatatypeFromValue_AllTypes(t *testing.T) {
+func TestInferDatatypeFromValue_AllTypes(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1279,8 +1279,8 @@ func TestWave4_InferDatatypeFromValue_AllTypes(t *testing.T) {
 // Section 17: encodeAttributeValue -- all types comprehensively
 // ---------------------------------------------------------------------------
 
-// TestWave4_EncodeAttributeValue_AllTypes tests encoding for all supported types.
-func TestWave4_EncodeAttributeValue_AllTypes(t *testing.T) {
+// TestEncodeAttributeValue_AllTypes tests encoding for all supported types.
+func TestEncodeAttributeValue_AllTypes(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1333,8 +1333,8 @@ func TestWave4_EncodeAttributeValue_AllTypes(t *testing.T) {
 // Section 18: Dataset.Address() and Dataset.Name() coverage
 // ---------------------------------------------------------------------------
 
-// TestWave4_DatasetAddressAndName verifies Address() and Name() methods.
-func TestWave4_DatasetAddressAndName(t *testing.T) {
+// TestDatasetAddressAndName verifies Address() and Name() methods.
+func TestDatasetAddressAndName(t *testing.T) {
 	t.Parallel()
 
 	ds := &Dataset{
@@ -1350,8 +1350,8 @@ func TestWave4_DatasetAddressAndName(t *testing.T) {
 // Section 19: Group.Name() and Group.Children() basic coverage
 // ---------------------------------------------------------------------------
 
-// TestWave4_GroupNameAndChildren verifies basic Group methods.
-func TestWave4_GroupNameAndChildren(t *testing.T) {
+// TestGroupNameAndChildren verifies basic Group methods.
+func TestGroupNameAndChildren(t *testing.T) {
 	t.Parallel()
 
 	g := &Group{
@@ -1372,25 +1372,25 @@ func TestWave4_GroupNameAndChildren(t *testing.T) {
 // Section 20: CreateForWrite error paths
 // ---------------------------------------------------------------------------
 
-// TestWave4_CreateForWrite_InvalidOption tests CreateForWrite with invalid
+// TestCreateForWrite_InvalidOption tests CreateForWrite with invalid
 // option type.
-func TestWave4_CreateForWrite_InvalidOption(t *testing.T) {
+func TestCreateForWrite_InvalidOption(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_invalid_opt.h5")
+	filename := filepath.Join(tempDir, "test_invalid_opt.h5")
 
 	_, err := CreateForWrite(filename, CreateTruncate, "invalid_option")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid option type")
 }
 
-// TestWave4_Create_InvalidMode tests Create with invalid mode.
-func TestWave4_Create_InvalidMode(t *testing.T) {
+// TestCreate_InvalidModeValue tests Create with invalid mode value.
+func TestCreate_InvalidModeValue(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_invalid_mode.h5")
+	filename := filepath.Join(tempDir, "test_invalid_mode.h5")
 
 	_, err := Create(filename, CreateMode(99))
 	require.Error(t, err)
@@ -1401,11 +1401,11 @@ func TestWave4_Create_InvalidMode(t *testing.T) {
 // Section 21: Dataset.Attributes(), ReadAttribute() with actual attrs
 // ---------------------------------------------------------------------------
 
-// TestWave4_DatasetAttributes_WithAttrsFromOfficialFile tests Dataset
+// TestDatasetAttributes_WithAttrsFromOfficialFile tests Dataset
 // attribute reading on a file that actually has attributes (tall.h5).
 // This covers the success path of Dataset.Attributes(), ListAttributes(),
 // ReadAttribute(), and Info().
-func TestWave4_DatasetAttributes_WithAttrsFromOfficialFile(t *testing.T) {
+func TestDatasetAttributes_WithAttrsFromOfficialFile(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/tall.h5")
@@ -1450,9 +1450,9 @@ func TestWave4_DatasetAttributes_WithAttrsFromOfficialFile(t *testing.T) {
 	require.NotEmpty(t, info)
 }
 
-// TestWave4_GroupAttributes_WithAttrsFromOfficialFile tests Group attribute
+// TestGroupAttributes_WithAttrsFromOfficialFile tests Group attribute
 // reading on tall.h5 which has attributes on root group.
-func TestWave4_GroupAttributes_WithAttrsFromOfficialFile(t *testing.T) {
+func TestGroupAttributes_WithAttrsFromOfficialFile(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/tall.h5")
@@ -1468,9 +1468,9 @@ func TestWave4_GroupAttributes_WithAttrsFromOfficialFile(t *testing.T) {
 	require.Greater(t, len(attrs), 0, "root group should have attributes")
 }
 
-// TestWave4_DatasetAttributes_ManyAttrs tests reading a dataset with 33
+// TestDatasetAttributes_ManyAttrs tests reading a dataset with 33
 // attributes from tattr2.h5. This exercises dense attribute reading paths.
-func TestWave4_DatasetAttributes_ManyAttrs(t *testing.T) {
+func TestDatasetAttributes_ManyAttrs(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/tattr2.h5")
@@ -1506,9 +1506,9 @@ func TestWave4_DatasetAttributes_ManyAttrs(t *testing.T) {
 // Section 22: NamedDatatype via official test files
 // ---------------------------------------------------------------------------
 
-// TestWave4_NamedDatatype_FromOfficialFile reads h5copytst_new.h5 which
+// TestNamedDatatype_FromOfficialFile reads h5copytst_new.h5 which
 // has named datatypes, exercising the ObjectTypeDatatype branch in loadObject.
-func TestWave4_NamedDatatype_FromOfficialFile(t *testing.T) {
+func TestNamedDatatype_FromOfficialFile(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/h5copytst_new.h5")
@@ -1530,9 +1530,9 @@ func TestWave4_NamedDatatype_FromOfficialFile(t *testing.T) {
 	require.Greater(t, namedDatatypes, 0, "h5copytst_new.h5 should have named datatypes")
 }
 
-// TestWave4_NamedDatatype_VariousFiles tests named datatypes across
+// TestNamedDatatype_VariousFiles tests named datatypes across
 // multiple official files.
-func TestWave4_NamedDatatype_VariousFiles(t *testing.T) {
+func TestNamedDatatype_VariousFiles(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1580,9 +1580,9 @@ func TestWave4_NamedDatatype_VariousFiles(t *testing.T) {
 // Section 23: Complex nested group structures (loadChildren deep branches)
 // ---------------------------------------------------------------------------
 
-// TestWave4_DeepNestedGroups tests loading deeply nested groups from
+// TestDeepNestedGroups tests loading deeply nested groups from
 // h5ex_g_traverse.h5 (8 groups, 2 datasets).
-func TestWave4_DeepNestedGroups(t *testing.T) {
+func TestDeepNestedGroups(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/h5ex_g_traverse.h5")
@@ -1615,9 +1615,9 @@ func TestWave4_DeepNestedGroups(t *testing.T) {
 	require.GreaterOrEqual(t, maxDepth, 2, "should have at least 2 levels deep")
 }
 
-// TestWave4_TGroup_ManyGroups exercises loadChildren with 14 groups from
+// TestTGroup_ManyGroups exercises loadChildren with 14 groups from
 // tgroup.h5, which has a complex group hierarchy.
-func TestWave4_TGroup_ManyGroups(t *testing.T) {
+func TestTGroup_ManyGroups(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/tgroup.h5")
@@ -1634,9 +1634,9 @@ func TestWave4_TGroup_ManyGroups(t *testing.T) {
 	require.GreaterOrEqual(t, groups, 10, "tgroup.h5 should have many groups")
 }
 
-// TestWave4_TAll_MixedStructure exercises loadObject with a mix of groups
+// TestTAll_MixedStructure exercises loadObject with a mix of groups
 // and datasets from tall.h5.
-func TestWave4_TAll_MixedStructure(t *testing.T) {
+func TestTAll_MixedStructure(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/tall.h5")
@@ -1660,8 +1660,8 @@ func TestWave4_TAll_MixedStructure(t *testing.T) {
 	require.Equal(t, "/", paths[0], "first path should be root")
 }
 
-// TestWave4_THLink_HardLinks exercises hard link resolution from thlink.h5.
-func TestWave4_THLink_HardLinks(t *testing.T) {
+// TestTHLink_HardLinks exercises hard link resolution from thlink.h5.
+func TestTHLink_HardLinks(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/thlink.h5")
@@ -1682,9 +1682,9 @@ func TestWave4_THLink_HardLinks(t *testing.T) {
 	require.GreaterOrEqual(t, datasets, 3, "thlink.h5 should have 3 datasets")
 }
 
-// TestWave4_TManyDatasets reads h5diff_dset1.h5 with 41 datasets to
+// TestTManyDatasets reads h5diff_dset1.h5 with 41 datasets to
 // heavily exercise loadObject's dataset branch.
-func TestWave4_TManyDatasets(t *testing.T) {
+func TestTManyDatasets(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/h5diff_dset1.h5")
@@ -1701,8 +1701,8 @@ func TestWave4_TManyDatasets(t *testing.T) {
 	require.GreaterOrEqual(t, datasets, 30, "h5diff_dset1.h5 should have 30+ datasets")
 }
 
-// TestWave4_TLargeObjName reads tlarge_objname.h5 which has 52 groups.
-func TestWave4_TLargeObjName(t *testing.T) {
+// TestTLargeObjName reads tlarge_objname.h5 which has 52 groups.
+func TestTLargeObjName(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/tlarge_objname.h5")
@@ -1723,10 +1723,10 @@ func TestWave4_TLargeObjName(t *testing.T) {
 // Section 24: loadGroupWithCachedSymbolTable coverage
 // ---------------------------------------------------------------------------
 
-// TestWave4_LoadGroupWithCachedSymbolTable_ViaNestedGroups verifies the
+// TestLoadGroupWithCachedSymbolTable_ViaNestedGroups verifies the
 // cached symbol table path by reading v0 files with nested groups where
 // CacheType=1 entries are present.
-func TestWave4_LoadGroupWithCachedSymbolTable_ViaNestedGroups(t *testing.T) {
+func TestLoadGroupWithCachedSymbolTable_ViaNestedGroups(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1773,13 +1773,13 @@ func TestWave4_LoadGroupWithCachedSymbolTable_ViaNestedGroups(t *testing.T) {
 // Section 25: Read+Write attribute on group (via write path)
 // ---------------------------------------------------------------------------
 
-// TestWave4_GroupAttributeWrite_ReadVerify writes attributes to a group
+// TestGroupAttributeWrite_ReadVerify writes attributes to a group
 // and verifies them after reopen.
-func TestWave4_GroupAttributeWrite_ReadVerify(t *testing.T) {
+func TestGroupAttributeWrite_ReadVerify(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_group_attrs.h5")
+	filename := filepath.Join(tempDir, "test_group_attrs.h5")
 
 	// Write.
 	func() {
@@ -1840,8 +1840,8 @@ func TestWave4_GroupAttributeWrite_ReadVerify(t *testing.T) {
 // Section 26: Dataset.Read() for integer data from v0 reference files
 // ---------------------------------------------------------------------------
 
-// TestWave4_DatasetRead_IntegerFromV0 reads integer datasets from v0 files.
-func TestWave4_DatasetRead_IntegerFromV0(t *testing.T) {
+// TestDatasetRead_IntegerFromV0 reads integer datasets from v0 files.
+func TestDatasetRead_IntegerFromV0(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/reference/specmetaread.h5")
@@ -1866,8 +1866,8 @@ func TestWave4_DatasetRead_IntegerFromV0(t *testing.T) {
 // Section 27: File reader method
 // ---------------------------------------------------------------------------
 
-// TestWave4_FileReader tests File.Reader() method.
-func TestWave4_FileReader(t *testing.T) {
+// TestFileReader tests File.Reader() method.
+func TestFileReader(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/v2.h5")
@@ -1885,8 +1885,8 @@ func TestWave4_FileReader(t *testing.T) {
 	require.Equal(t, "\x89HDF\r\n\x1a\n", string(buf))
 }
 
-// TestWave4_FileSuperblock tests File.Superblock() method.
-func TestWave4_FileSuperblock(t *testing.T) {
+// TestFileSuperblock tests File.Superblock() method.
+func TestFileSuperblock(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/v2.h5")
@@ -1902,9 +1902,9 @@ func TestWave4_FileSuperblock(t *testing.T) {
 // Section 28: H5CopyTstNew - comprehensive mixed object types
 // ---------------------------------------------------------------------------
 
-// TestWave4_H5CopyTstNew_AllObjectTypes reads h5copytst_new.h5 which has
+// TestH5CopyTstNew_AllObjectTypes reads h5copytst_new.h5 which has
 // groups, datasets, and named datatypes -- all three object types in one file.
-func TestWave4_H5CopyTstNew_AllObjectTypes(t *testing.T) {
+func TestH5CopyTstNew_AllObjectTypes(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/h5copytst_new.h5")
@@ -1935,13 +1935,13 @@ func TestWave4_H5CopyTstNew_AllObjectTypes(t *testing.T) {
 // Section 29: Soft links in v0 files
 // ---------------------------------------------------------------------------
 
-// TestWave4_SoftLinks_WriteAndReadBack tests creating soft links and reading
+// TestSoftLinks_WriteAndReadBack tests creating soft links and reading
 // them back. Soft links are skipped during traversal (per C library behavior).
-func TestWave4_SoftLinks_WriteAndReadBack(t *testing.T) {
+func TestSoftLinks_WriteAndReadBack(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_softlinks.h5")
+	filename := filepath.Join(tempDir, "test_softlinks.h5")
 
 	// Write.
 	func() {
@@ -1985,12 +1985,12 @@ func TestWave4_SoftLinks_WriteAndReadBack(t *testing.T) {
 // Section 30: External links in files
 // ---------------------------------------------------------------------------
 
-// TestWave4_ExternalLinks_WriteAndReadBack tests creating external links.
-func TestWave4_ExternalLinks_WriteAndReadBack(t *testing.T) {
+// TestExternalLinks_WriteAndReadBack tests creating external links.
+func TestExternalLinks_WriteAndReadBack(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_extlinks.h5")
+	filename := filepath.Join(tempDir, "test_extlinks.h5")
 
 	// Write.
 	func() {
@@ -2022,9 +2022,9 @@ func TestWave4_ExternalLinks_WriteAndReadBack(t *testing.T) {
 // Section 31: Many datasets from v2 official file
 // ---------------------------------------------------------------------------
 
-// TestWave4_OldH5fcExtNone_V0ManyDatasets reads old_h5fc_ext_none.h5
+// TestOldH5fcExtNone_V0ManyDatasets reads old_h5fc_ext_none.h5
 // which is v0 with 2 groups and 9 datasets.
-func TestWave4_OldH5fcExtNone_V0ManyDatasets(t *testing.T) {
+func TestOldH5fcExtNone_V0ManyDatasets(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/old_h5fc_ext_none.h5")
@@ -2045,10 +2045,10 @@ func TestWave4_OldH5fcExtNone_V0ManyDatasets(t *testing.T) {
 // Section 32: h5repack_early with 100 named datatypes
 // ---------------------------------------------------------------------------
 
-// TestWave4_H5RepackEarly_ManyNamedDatatypes reads h5repack_early.h5 which
+// TestH5RepackEarly_ManyNamedDatatypes reads h5repack_early.h5 which
 // has 100 named (committed) datatypes, heavily exercising the
 // ObjectTypeDatatype branch in loadObject.
-func TestWave4_H5RepackEarly_ManyNamedDatatypes(t *testing.T) {
+func TestH5RepackEarly_ManyNamedDatatypes(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/h5repack_early.h5")
@@ -2069,9 +2069,9 @@ func TestWave4_H5RepackEarly_ManyNamedDatatypes(t *testing.T) {
 // Section 33: h5diff_attr_v_level1 -- attrs on groups and datasets
 // ---------------------------------------------------------------------------
 
-// TestWave4_H5DiffAttr_AttrsOnGroupsAndDatasets reads h5diff_attr_v_level1.h5
+// TestH5DiffAttr_AttrsOnGroupsAndDatasets reads h5diff_attr_v_level1.h5
 // which has attributes on both groups and datasets.
-func TestWave4_H5DiffAttr_AttrsOnGroupsAndDatasets(t *testing.T) {
+func TestH5DiffAttr_AttrsOnGroupsAndDatasets(t *testing.T) {
 	t.Parallel()
 
 	f, err := Open("testdata/hdf5_official/h5diff_attr_v_level1.h5")
@@ -2105,15 +2105,15 @@ func TestWave4_H5DiffAttr_AttrsOnGroupsAndDatasets(t *testing.T) {
 // Section 34: Dataset Write with all integer datatypes (encode* coverage)
 // ---------------------------------------------------------------------------
 
-// TestWave4_WriteDataset_AllIntegerTypes creates datasets with all integer
+// TestWriteDataset_AllIntegerTypes creates datasets with all integer
 // types and verifies round-trip. This exercises encode1ByteIntegers,
 // encode2ByteIntegers, encode4ByteIntegers, encode8ByteIntegers for both
 // signed and unsigned paths.
-func TestWave4_WriteDataset_AllIntegerTypes(t *testing.T) {
+func TestWriteDataset_AllIntegerTypes(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_all_ints.h5")
+	filename := filepath.Join(tempDir, "test_all_ints.h5")
 
 	// Write all integer types.
 	func() {
@@ -2201,12 +2201,12 @@ func TestWave4_WriteDataset_AllIntegerTypes(t *testing.T) {
 	}
 }
 
-// TestWave4_WriteDataset_StringType tests string dataset write/read.
-func TestWave4_WriteDataset_StringType(t *testing.T) {
+// TestWriteDataset_StringType tests string dataset write/read.
+func TestWriteDataset_StringType(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_strings_ds.h5")
+	filename := filepath.Join(tempDir, "test_strings_ds.h5")
 
 	func() {
 		fw, err := CreateForWrite(filename, CreateTruncate)
@@ -2241,13 +2241,13 @@ func TestWave4_WriteDataset_StringType(t *testing.T) {
 // Section 35: OpenForWrite and OpenDataset coverage
 // ---------------------------------------------------------------------------
 
-// TestWave4_OpenForWrite_ReadWriteModify tests OpenForWrite + OpenDataset
+// TestOpenForWrite_ReadWriteModify tests OpenForWrite + OpenDataset
 // and modifying attributes on existing datasets.
-func TestWave4_OpenForWrite_ReadWriteModify(t *testing.T) {
+func TestOpenForWrite_ReadWriteModify(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_rmw.h5")
+	filename := filepath.Join(tempDir, "test_rmw.h5")
 
 	// Create initial file.
 	func() {
@@ -2272,7 +2272,7 @@ func TestWave4_OpenForWrite_ReadWriteModify(t *testing.T) {
 
 		// Write new attribute (upsert).
 		require.NoError(t, ds.WriteAttribute("version", int32(2)))
-		require.NoError(t, ds.WriteAttribute("source", "wave4_test"))
+		require.NoError(t, ds.WriteAttribute("source", "test_test"))
 
 		require.NoError(t, fw.Close())
 	}()
@@ -2298,12 +2298,12 @@ func TestWave4_OpenForWrite_ReadWriteModify(t *testing.T) {
 // Section 36: CreateDataset error paths
 // ---------------------------------------------------------------------------
 
-// TestWave4_CreateDataset_ErrorPaths tests various error conditions.
-func TestWave4_CreateDataset_ErrorPaths(t *testing.T) {
+// TestCreateDataset_ErrorPaths tests various error conditions.
+func TestCreateDataset_ErrorPaths(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_ds_errors.h5")
+	filename := filepath.Join(tempDir, "test_ds_errors.h5")
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
@@ -2334,12 +2334,12 @@ func TestWave4_CreateDataset_ErrorPaths(t *testing.T) {
 // Section 37: FileWriter.Close coverage
 // ---------------------------------------------------------------------------
 
-// TestWave4_FileWriterClose_WithDatasets tests Close() flushes correctly.
-func TestWave4_FileWriterClose_WithDatasets(t *testing.T) {
+// TestFileWriterClose_WithDatasets tests Close() flushes correctly.
+func TestFileWriterClose_WithDatasets(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_close.h5")
+	filename := filepath.Join(tempDir, "test_close.h5")
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
@@ -2365,12 +2365,12 @@ func TestWave4_FileWriterClose_WithDatasets(t *testing.T) {
 // Section 38: RebalanceAttributeBTree -- with OpenForWrite path
 // ---------------------------------------------------------------------------
 
-// TestWave4_RebalanceAllBTrees_WithMultipleDatasets tests the global
+// TestRebalanceAllBTrees_WithMultipleDatasets tests the global
 // rebalance on a file opened with OpenForWrite.
-func TestWave4_RebalanceAllBTrees_WithMultipleDatasets(t *testing.T) {
+func TestRebalanceAllBTrees_WithMultipleDatasets(t *testing.T) {
 	t.Parallel()
 
-	filename := filepath.Join("tmp", "wave4_rebalance_all.h5")
+	filename := filepath.Join("tmp", "test_rebalance_all.h5")
 	defer func() { _ = os.Remove(filename) }()
 
 	// Create file with multiple datasets with dense attrs.
@@ -2425,12 +2425,12 @@ func TestWave4_RebalanceAllBTrees_WithMultipleDatasets(t *testing.T) {
 // Section 39: CreateExclusive mode
 // ---------------------------------------------------------------------------
 
-// TestWave4_CreateExclusive tests the CreateExclusive mode.
-func TestWave4_CreateExclusive(t *testing.T) {
+// TestCreateExclusive tests the CreateExclusive mode.
+func TestCreateExclusive(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_exclusive.h5")
+	filename := filepath.Join(tempDir, "test_exclusive.h5")
 
 	// First create should succeed.
 	fw, err := CreateForWrite(filename, CreateExclusive)
@@ -2446,13 +2446,13 @@ func TestWave4_CreateExclusive(t *testing.T) {
 // Section 40: Dataset.Read type conversion from non-float64
 // ---------------------------------------------------------------------------
 
-// TestWave4_DatasetRead_IntTypesConvertToFloat64 tests that Read() converts
+// TestDatasetRead_IntTypesConvertToFloat64 tests that Read() converts
 // integer datasets to float64 properly.
-func TestWave4_DatasetRead_IntTypesConvertToFloat64(t *testing.T) {
+func TestDatasetRead_IntTypesConvertToFloat64(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "wave4_read_ints.h5")
+	filename := filepath.Join(tempDir, "test_read_ints.h5")
 
 	func() {
 		fw, err := CreateForWrite(filename, CreateTruncate)

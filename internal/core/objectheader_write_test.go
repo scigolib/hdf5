@@ -80,10 +80,11 @@ func TestObjectHeaderWriter_WriteTo(t *testing.T) {
 			name:    "minimal root group",
 			header:  NewMinimalRootGroupHeader(),
 			address: 48, // After superblock v2
-			// Header: 4 (sig) + 1 (ver) + 1 (flags) + 1 (chunk size) = 7
+			// Header prefix: 4 (sig) + 1 (ver) + 1 (flags) + 1 (chunk size) = 7
 			// Message: 1 (type) + 2 (size) + 1 (flags) + 18 (data) = 22
 			// Checksum: 4 (Jenkins lookup3)
-			// Total: 7 + 22 + 4 = 33
+			// Chunk size field value: 22 (messages only, excludes checksum)
+			// Total on-disk: 7 + 22 + 4 = 33
 			wantSize: 33,
 			wantErr:  false,
 			validateBytes: func(t *testing.T, data []byte) {
@@ -96,8 +97,8 @@ func TestObjectHeaderWriter_WriteTo(t *testing.T) {
 				// Validate flags
 				assert.Equal(t, uint8(0), data[5], "Should have flags=0")
 
-				// Validate chunk size (messages + checksum)
-				assert.Equal(t, uint8(26), data[6], "Chunk size should be 26 (22 messages + 4 checksum)")
+				// Validate chunk size (messages only, per C reference H5Ocache.c:1207)
+				assert.Equal(t, uint8(22), data[6], "Chunk size should be 22 (messages only, excludes checksum)")
 
 				// Validate message type (Link Info = 2)
 				assert.Equal(t, uint8(2), data[7], "Message type should be 2 (Link Info)")
@@ -145,7 +146,7 @@ func TestObjectHeaderWriter_WriteTo(t *testing.T) {
 					{
 						Type: MsgLinkInfo,
 						// Message: 1 (type) + 2 (size) + 1 (flags) + 300 (data) = 304 bytes
-						// Chunk size: 304 + 4 (checksum) = 308 → needs 2-byte encoding
+						// Chunk size: 304 (messages only, excludes checksum) → needs 2-byte encoding
 						Data: make([]byte, 300),
 					},
 				},
@@ -159,7 +160,7 @@ func TestObjectHeaderWriter_WriteTo(t *testing.T) {
 				assert.Equal(t, uint8(1), data[5]&0x03, "Flags bits 0-1 should be 1 (2-byte chunk size)")
 				// Chunk size at offset 6-7 (2 bytes, little-endian)
 				chunkSize := binary.LittleEndian.Uint16(data[6:8])
-				assert.Equal(t, uint16(308), chunkSize, "Chunk size should be 308")
+				assert.Equal(t, uint16(304), chunkSize, "Chunk size should be 304")
 			},
 		},
 	}
@@ -261,12 +262,12 @@ func TestObjectHeaderWriter_MultipleMessages(t *testing.T) {
 	// Message 1: 1+2+1+10 = 14
 	// Message 2: 1+2+1+4 = 8
 	// Checksum: 4
-	// Total chunk: 14+8+4 = 26
-	// Total: 7 + 26 = 33
+	// Chunk size field: 14+8 = 22 (messages only, excludes checksum)
+	// Total on-disk: 7 + 22 + 4 = 33
 	assert.Equal(t, uint64(33), size)
 
 	data := writer.Bytes()
 
 	// Validate chunk size (includes 4-byte Jenkins checksum)
-	assert.Equal(t, uint8(26), data[6], "Chunk size should be sum of messages + checksum")
+	assert.Equal(t, uint8(22), data[6], "Chunk size should be sum of messages (excludes checksum)")
 }

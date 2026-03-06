@@ -466,18 +466,22 @@ var datatypeRegistry map[Datatype]datatypeHandler
 func init() {
 	datatypeRegistry = map[Datatype]datatypeHandler{
 		// Basic integers (fixed-point)
-		Int8:   &basicTypeHandler{core.DatatypeFixed, 1, 0x00},
-		Int16:  &basicTypeHandler{core.DatatypeFixed, 2, 0x00},
-		Int32:  &basicTypeHandler{core.DatatypeFixed, 4, 0x00},
-		Int64:  &basicTypeHandler{core.DatatypeFixed, 8, 0x00},
+		// Signed integers: bit 3 = H5T_SGN_2 (two's complement) per H5Tpublic.h
+		Int8:  &basicTypeHandler{core.DatatypeFixed, 1, 0x08},
+		Int16: &basicTypeHandler{core.DatatypeFixed, 2, 0x08},
+		Int32: &basicTypeHandler{core.DatatypeFixed, 4, 0x08},
+		Int64: &basicTypeHandler{core.DatatypeFixed, 8, 0x08},
+		// Unsigned integers: no sign bit
 		Uint8:  &basicTypeHandler{core.DatatypeFixed, 1, 0x00},
 		Uint16: &basicTypeHandler{core.DatatypeFixed, 2, 0x00},
 		Uint32: &basicTypeHandler{core.DatatypeFixed, 4, 0x00},
 		Uint64: &basicTypeHandler{core.DatatypeFixed, 8, 0x00},
 
 		// Floats
-		Float32: &basicTypeHandler{core.DatatypeFloat, 4, 0x00},
-		Float64: &basicTypeHandler{core.DatatypeFloat, 8, 0x00},
+		// Float ClassBitField: bits 0-7 = byte order + norm (0x20 = implied MSB),
+		// bits 8-15 = sign bit position (31 for float32, 63 for float64)
+		Float32: &basicTypeHandler{core.DatatypeFloat, 4, 0x1F20}, // sign=31, norm=implied
+		Float64: &basicTypeHandler{core.DatatypeFloat, 8, 0x3F20}, // sign=63, norm=implied
 
 		// String
 		String: &stringTypeHandler{},
@@ -2747,12 +2751,20 @@ func createRootGroupStructureV0(fw *writer.FileWriter) (*rootGroupInfo, error) {
 	// Local heap size: minimum ~256 bytes
 	heapSize := uint64(256)
 
-	// Step 2: Calculate fixed addresses (no Allocate - we write at fixed offsets)
+	// Step 2: Calculate fixed addresses and reserve space via allocator.
 	// Superblock v0: 0x00-0x5F (96 bytes)
 	rootGroupAddr := uint64(96)                    // 0x60 - immediately after superblock
 	rootBTreeAddr := rootGroupAddr + objHeaderSize // After object header
 	rootStNodeAddr := rootBTreeAddr + btreeSize    // After B-tree
 	rootHeapAddr := rootStNodeAddr + stNodeSize    // After symbol table node
+
+	// CRITICAL: Reserve this space in the allocator so future Allocate() calls
+	// (e.g., CreateDataset) don't overlap with root group structures.
+	// Total size: from rootGroupAddr to end of heap data segment.
+	totalRootSize := objHeaderSize + btreeSize + stNodeSize + 32 + heapSize // 32 = heap header
+	if _, err := fw.Allocate(totalRootSize); err != nil {
+		return nil, fmt.Errorf("failed to reserve root group space: %w", err)
+	}
 
 	// Step 3: Write structures in ASCENDING ADDRESS ORDER
 	// CRITICAL: Sequential write order prevents sparse file holes on Windows!

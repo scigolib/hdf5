@@ -296,11 +296,12 @@ func parsePath(path string) (parent, name string) {
 //   - error: If linking fails
 func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint64) error {
 	// Get parent group metadata
-	var heapAddr, stNodeAddr uint64
+	var heapAddr, stNodeAddr, btreeAddr uint64
 	if parentPath == "" || parentPath == "/" {
 		// Root group - use root metadata
 		heapAddr = fw.rootHeapAddr
 		stNodeAddr = fw.rootStNodeAddr
+		btreeAddr = fw.rootBTreeAddr
 	} else {
 		// Non-root group - look up metadata
 		meta, exists := fw.groups[parentPath]
@@ -309,6 +310,7 @@ func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint6
 		}
 		heapAddr = meta.heapAddr
 		stNodeAddr = meta.stNodeAddr
+		btreeAddr = meta.btreeAddr
 	}
 
 	// Step 1: Read existing local heap
@@ -349,6 +351,25 @@ func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint6
 	offsetSize := fw.file.sb.OffsetSize
 	if err := stNode.WriteAt(fw.writer, stNodeAddr, offsetSize, 32, fw.file.sb.Endianness); err != nil {
 		return fmt.Errorf("write symbol table: %w", err)
+	}
+
+	// Step 7: Update B-tree right key (key[1]) to reflect max name offset.
+	// Per HDF5 spec, B-tree v1 with N children has N+1 keys.
+	// Key[0] = 0 (left boundary), Key[N] = max name offset (right boundary).
+	// Without this, h5ls/h5dump cannot find children in the group.
+	var maxNameOffset uint64
+	for _, e := range stNode.Entries {
+		if e.LinkNameOffset > maxNameOffset {
+			maxNameOffset = e.LinkNameOffset
+		}
+	}
+	// Key[1] is at: btreeAddr + 24 (header) + 2*offsetSize (key[0] + child[0])
+	rightKeyOffset := btreeAddr + 24 + 2*uint64(offsetSize)
+	var keyBuf [8]byte
+	fw.file.sb.Endianness.PutUint64(keyBuf[:], maxNameOffset)
+	//nolint:gosec // G115: Safe — rightKeyOffset is within B-tree bounds
+	if _, err := fw.writer.WriteAt(keyBuf[:offsetSize], int64(rightKeyOffset)); err != nil {
+		return fmt.Errorf("write B-tree right key: %w", err)
 	}
 
 	return nil

@@ -1275,9 +1275,10 @@ func TestPrepareForModification(t *testing.T) {
 			t.Fatalf("PrepareForModification failed: %v", err)
 		}
 
-		// usedSize should be 0 (no non-zero bytes found).
-		if len(h.strings) != 0 {
-			t.Errorf("strings length = %d, want 0 for all-zeros data", len(h.strings))
+		// usedSize starts at 1 (root group empty string at offset 0).
+		// No non-zero bytes found, so usedSize stays 1.
+		if len(h.strings) != 1 {
+			t.Errorf("strings length = %d, want 1 for all-zeros data (root group empty string)", len(h.strings))
 		}
 	})
 }
