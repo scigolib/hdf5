@@ -517,7 +517,7 @@ func TestNewLocalHeap(t *testing.T) {
 			require.Equal(t, tt.expectedSize, heap.DataSegmentSize)
 			require.Equal(t, uint64(1), heap.OffsetToHeadFreeList) // H5HL_FREE_NULL
 			require.NotNil(t, heap.strings)
-			require.Equal(t, 0, len(heap.strings))
+			require.Equal(t, 1, len(heap.strings)) // Root group empty string at offset 0
 		})
 	}
 }
@@ -534,28 +534,28 @@ func TestLocalHeap_AddString(t *testing.T) {
 			name:            "single string",
 			heapSize:        64,
 			stringsToAdd:    []string{"hello"},
-			expectedOffsets: []uint64{0},
+			expectedOffsets: []uint64{1}, // offset 0 is root group empty string
 			expectError:     false,
 		},
 		{
 			name:            "multiple strings",
 			heapSize:        64,
 			stringsToAdd:    []string{"first", "second", "third"},
-			expectedOffsets: []uint64{0, 6, 13}, // "first\0" (6), "second\0" (7), "third\0" (6)
+			expectedOffsets: []uint64{1, 7, 14}, // +1 for root empty string; "first\0" (6), "second\0" (7), "third\0" (6)
 			expectError:     false,
 		},
 		{
 			name:            "empty string",
 			heapSize:        64,
 			stringsToAdd:    []string{""},
-			expectedOffsets: []uint64{0},
+			expectedOffsets: []uint64{1}, // offset 0 is root group empty string
 			expectError:     false,
 		},
 		{
 			name:            "strings with spaces",
 			heapSize:        64,
 			stringsToAdd:    []string{"hello world", "foo bar"},
-			expectedOffsets: []uint64{0, 12}, // "hello world\0" (12)
+			expectedOffsets: []uint64{1, 13}, // +1 for root empty string; "hello world\0" (12)
 			expectError:     false,
 		},
 		{
@@ -675,10 +675,13 @@ func TestLocalHeap_WriteTo(t *testing.T) {
 				// Verify header
 				require.Equal(t, "HEAP", string(data[0:4]))
 
-				// Verify data contains "hello\0"
+				// Verify root group empty string at offset 0
 				dataStart := 32
-				require.Equal(t, "hello", string(data[dataStart:dataStart+5]))
-				require.Equal(t, byte(0), data[dataStart+5]) // Null terminator
+				require.Equal(t, byte(0), data[dataStart]) // Root group empty string
+
+				// Verify data contains "hello\0" at offset 1
+				require.Equal(t, "hello", string(data[dataStart+1:dataStart+6]))
+				require.Equal(t, byte(0), data[dataStart+6]) // Null terminator
 			},
 		},
 		{
@@ -692,9 +695,13 @@ func TestLocalHeap_WriteTo(t *testing.T) {
 			},
 			address: 0,
 			verify: func(t *testing.T, data []byte, _ *LocalHeap) {
-				// Verify all strings are present
+				// Verify all strings are present (offset 0 = root group empty string)
 				dataStart := 32
 				offset := dataStart
+
+				// Root group empty string at offset 0
+				require.Equal(t, byte(0), data[offset])
+				offset++
 
 				// "first\0"
 				require.Equal(t, "first", string(data[offset:offset+5]))

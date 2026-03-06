@@ -144,12 +144,18 @@ func NewLocalHeap(initialSize uint64) *LocalHeap {
 		initialSize = ((initialSize / 8) + 1) * 8
 	}
 
-	return &LocalHeap{
+	heap := &LocalHeap{
 		DataSegmentSize:      initialSize,
 		OffsetToHeadFreeList: 1, // 1 = H5HL_FREE_NULL (no free list in MVP)
 		DataSegmentAddress:   0, // Will be set when heap is written
 		strings:              make([]byte, 0, initialSize),
 	}
+
+	// Per C reference (H5Gstab.c:144): offset 0 MUST contain empty string ""
+	// for the root group name. This is a single null byte at offset 0.
+	heap.strings = append(heap.strings, 0)
+
+	return heap
 }
 
 // AddString adds a null-terminated string to the heap and returns its offset.
@@ -289,7 +295,8 @@ func (h *LocalHeap) PrepareForModification() error {
 
 	// Find the actual used size (up to last non-zero byte, PLUS its null terminator)
 	// We need to include the null terminator after the last string!
-	usedSize := 0
+	// Start at 1 to preserve the root group empty string at offset 0 (H5Gstab.c:144)
+	usedSize := 1
 	for i := len(h.Data) - 1; i >= 0; i-- {
 		if h.Data[i] != 0 {
 			// Found last non-zero byte
