@@ -17,6 +17,8 @@ def main(filename):
         int_data = group["uint"]
         float_data = group["float"]
 
+        assert group.attrs['attr'] == 0
+
         for i in range(5):
             assert int_data[i] == i
             assert float_data[i] == i

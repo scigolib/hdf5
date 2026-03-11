@@ -1,7 +1,6 @@
 package hdf5
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"testing"
@@ -19,7 +18,11 @@ func TestWrite_H5PyRead(t *testing.T) {
 	defer func() { _ = fw.Close() }()
 
 	// Create root-level group
-	_, err = fw.CreateGroup("/group")
+	grp, err := fw.CreateGroup("/group")
+	require.NoError(t, err)
+
+	// Add attribute to the group
+	err = grp.WriteAttribute("attr", uint8(0))
 	require.NoError(t, err)
 
 	// Create datasets in group with data
@@ -40,6 +43,5 @@ func TestWrite_H5PyRead(t *testing.T) {
 	// Run UV script to load HDF file and verify no error
 	cmd := exec.Command("uv", "run", "h5py_write_interop_test.py", testFile)
 	_, err = cmd.Output()
-	fmt.Println(err)
 	require.NoError(t, err)
 }
