@@ -264,7 +264,7 @@ func encodeDatatypeNumeric(dt *DatatypeMessage) ([]byte, error) {
 		//   uint16: bit_offset (always 0)
 		//   uint16: bit_precision (total bits)
 		properties = make([]byte, 4)
-		binary.LittleEndian.PutUint16(properties[0:2], 0) // bit_offset = 0
+		binary.LittleEndian.PutUint16(properties[0:2], 0)                 // bit_offset = 0
 		binary.LittleEndian.PutUint16(properties[2:4], uint16(dt.Size*8)) //nolint:gosec // G115: dt.Size is 1/2/4/8, max value 64 fits uint16
 	}
 
