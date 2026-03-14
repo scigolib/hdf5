@@ -136,6 +136,10 @@ const (
 	// VLenUint64 represents variable-length uint64 sequences.
 	// Go type: [][]uint64.
 	VLenUint64 Datatype = 506
+
+	// VLenUint8 represents variable-length uint8 sequences (byte arrays).
+	// Go type: [][]byte.
+	VLenUint8 Datatype = 507
 )
 
 // Unlimited represents unlimited dimension size for resizable datasets.
@@ -523,6 +527,7 @@ func init() {
 		VLenFloat64: &vlenTypeHandler{Float64},
 		VLenUint32:  &vlenTypeHandler{Uint32},
 		VLenUint64:  &vlenTypeHandler{Uint64},
+		VLenUint8:   &vlenTypeHandler{Uint8},
 	}
 }
 
@@ -1311,7 +1316,7 @@ func (dw *DatasetWriter) WriteRaw(data []byte) error {
 // writeVLen handles writing variable-length data (strings, ragged arrays).
 // Data is written to global heap, and heap IDs are stored in the dataset.
 //
-//nolint:gocyclo,gocognit,cyclop,funlen // Complex by nature: handles multiple vlen types with validation
+//nolint:gocyclo,gocognit,cyclop,funlen,maintidx // Complex by nature: handles multiple vlen types with validation
 func (dw *DatasetWriter) writeVLen(data interface{}) error {
 	// Calculate expected number of elements
 	elemCount := uint64(1)
@@ -1451,6 +1456,21 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 			heapID, err := dw.fileWriter.globalHeapWriter.WriteToGlobalHeap(seqBytes)
 			if err != nil {
 				return fmt.Errorf("write float64 sequence %d to heap: %w", i, err)
+			}
+			heapIDs[i] = heapID
+		}
+
+	case [][]byte:
+		// Variable-length uint8 sequences (byte arrays)
+		if uint64(len(v)) != elemCount {
+			return fmt.Errorf("data length %d doesn't match dataset size %d", len(v), elemCount)
+		}
+
+		for i, seq := range v {
+			// Uint8 elements are single bytes — direct copy, no binary encoding needed.
+			heapID, err := dw.fileWriter.globalHeapWriter.WriteToGlobalHeap(seq)
+			if err != nil {
+				return fmt.Errorf("write uint8 sequence %d to heap: %w", i, err)
 			}
 			heapIDs[i] = heapID
 		}

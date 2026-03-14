@@ -1,7 +1,9 @@
 package hdf5
 
 import (
+	"bytes"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"testing"
 
@@ -321,6 +323,121 @@ func TestVLenUint32(t *testing.T) {
 	ragged := [][]uint32{{1, 2, 3}, {4}}
 	if err := ds.Write(ragged); err != nil {
 		t.Fatalf("Write failed: %v", err)
+	}
+}
+
+// TestVLenUint8 tests uint8 variable-length byte arrays.
+func TestVLenUint8(t *testing.T) {
+	filename := "test_vlen_uint8.h5"
+	fw, err := CreateForWrite(filename, CreateTruncate)
+	if err != nil {
+		t.Fatalf("CreateForWrite failed: %v", err)
+	}
+	defer os.Remove(filename)
+	defer fw.Close()
+
+	ds, err := fw.CreateDataset("/bytes", VLenUint8, []uint64{3})
+	if err != nil {
+		t.Fatalf("CreateDataset failed: %v", err)
+	}
+
+	ragged := [][]byte{{0x01, 0x02, 0x03}, {0xFF}, {0x00, 0xAB}}
+	if err := ds.Write(ragged); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Close and reopen to verify structure.
+	if err := fw.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	f, err := Open(filename)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer f.Close()
+
+	// Verify dataset exists.
+	found := false
+	for _, child := range f.Root().Children() {
+		if child.Name() == "bytes" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("Dataset 'bytes' not found after reopen")
+	}
+
+	// Read heap IDs from file and verify stored data via subtests.
+	dataAddr := ds.dataAddress
+	heapIDData := make([]byte, 3*16) // 3 elements x 16 bytes each
+	if _, err := f.Reader().ReadAt(heapIDData, int64(dataAddr)); err != nil {
+		t.Fatalf("ReadAt failed: %v", err)
+	}
+
+	for i, expected := range ragged {
+		t.Run(fmt.Sprintf("element_%d", i), func(t *testing.T) {
+			heapAddr := binary.LittleEndian.Uint64(heapIDData[i*16 : i*16+8])
+			heapIdx := binary.LittleEndian.Uint32(heapIDData[i*16+8 : i*16+12])
+
+			ghc, err := core.ReadGlobalHeapCollection(f.Reader(), heapAddr, 8)
+			if err != nil {
+				t.Fatalf("ReadGlobalHeapCollection failed: %v", err)
+			}
+
+			obj, err := ghc.GetObject(heapIdx)
+			if err != nil {
+				t.Fatalf("GetObject(%d) failed: %v", heapIdx, err)
+			}
+
+			if !bytes.Equal(obj.Data, expected) {
+				t.Errorf("data mismatch: got %v, want %v", obj.Data, expected)
+			}
+		})
+	}
+}
+
+// TestVLenUint8Empty tests empty byte sequences.
+func TestVLenUint8Empty(t *testing.T) {
+	filename := "test_vlen_uint8_empty.h5"
+	fw, err := CreateForWrite(filename, CreateTruncate)
+	if err != nil {
+		t.Fatalf("CreateForWrite failed: %v", err)
+	}
+	defer os.Remove(filename)
+	defer fw.Close()
+
+	ds, err := fw.CreateDataset("/empty_bytes", VLenUint8, []uint64{3})
+	if err != nil {
+		t.Fatalf("CreateDataset failed: %v", err)
+	}
+
+	ragged := [][]byte{{}, {0x42}, {}}
+	if err := ds.Write(ragged); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+}
+
+// TestVLenUint8SizeMismatch tests error when data size doesn't match dimensions.
+func TestVLenUint8SizeMismatch(t *testing.T) {
+	filename := "test_vlen_uint8_mismatch.h5"
+	fw, err := CreateForWrite(filename, CreateTruncate)
+	if err != nil {
+		t.Fatalf("CreateForWrite failed: %v", err)
+	}
+	defer os.Remove(filename)
+	defer fw.Close()
+
+	ds, err := fw.CreateDataset("/bytes", VLenUint8, []uint64{3})
+	if err != nil {
+		t.Fatalf("CreateDataset failed: %v", err)
+	}
+
+	// Wrong number of elements.
+	err = ds.Write([][]byte{{0x01}, {0x02}})
+	if err == nil {
+		t.Error("Expected error for size mismatch, got nil")
 	}
 }
 
