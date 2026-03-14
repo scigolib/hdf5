@@ -1,5 +1,5 @@
 // Package testing provides test utilities for HDF5 library testing.
-package testing //nolint:revive // internal test utilities, not a public package
+package testing
 
 import "errors"
 

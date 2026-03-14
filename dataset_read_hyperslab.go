@@ -760,7 +760,7 @@ func generateChunkCoordinates(first, last []uint64) [][]uint64 {
 	// Calculate total number of chunks
 	totalChunks := 1
 	for i := 0; i < ndims; i++ {
-		totalChunks *= int(last[i] - first[i] + 1)
+		totalChunks *= int(last[i] - first[i] + 1) //nolint:gosec // G115: chunk count bounded by dataset dimensions
 	}
 
 	result := make([][]uint64, 0, totalChunks)
