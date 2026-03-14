@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.12] - 2026-03-14
+
+### Enhancement
+
+#### Add VLenUint8 datatype (Issue #30)
+
+Added `VLenUint8` (Go type: `[][]byte`) for storing variable-length byte arrays. This completes
+the VLen type family — all other numeric VLen types (Int32, Int64, Float32, Float64, Uint32,
+Uint64) were already supported. Useful for serialized binary data (protobuf, ROS messages),
+compatible with C++ `H5::VarLenType(H5::PredType::STD_U8LE)`.
+
+Requested by [@zhoujun24](https://github.com/zhoujun24).
+
+---
+
 ## [v0.13.11] - 2026-03-14
 
 ### Bug Fix
