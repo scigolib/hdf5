@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.11] - 2026-03-14
+
+### Bug Fix
+
+#### Write interoperability: attributes, SNOD sorting, B-tree keys (Issue #28, #29)
+
+Fixed 3 bugs that caused files with groups + attributes or multiple root-level datasets
+to be unreadable by h5dump, h5ls, and h5py.
+
+**Bug A: Superblock EOA too small after adding attributes**
+
+Adding an attribute to a dataset inside a group grew the V2 object header beyond the
+allocator's tracked end-of-file. The superblock EOA was not updated, causing h5dump/h5py
+to reject the file with "truncated file" or "actual len exceeds EOA" errors.
+
+Fix: after writing the modified object header, compare its new end address with the
+allocator's EOF and advance the allocator if needed. `ObjectHeaderSizeFromParsed()` now
+supports both v1 and v2 headers for future-proofing.
+
+**Bug B: B-tree v1 right key used numeric offset instead of lexicographic comparison**
+
+Per C reference (`H5Gnode.c:340-373`, `H5G__node_cmp2`), B-tree v1 group node keys are
+compared by looking up strings in the local heap and using `strcmp`. Our code set the right
+key to the numerically largest heap offset, which is not necessarily the offset of the
+lexicographically largest name. This caused h5dump/h5ls to miss entries whose names sorted
+after the right key's name.
+
+Fix: iterate all SNOD entries, resolve names from the local heap, and select the offset of
+the string that sorts last by Go `>` comparison (equivalent to `strcmp`).
+
+**Bug C: Symbol table node entries not sorted by name**
+
+Per C reference (`H5Gnode.c:573-591`, `H5G__node_insert`), the C library uses binary search
+with `strncmp` to find the insertion point, keeping entries sorted at all times. Our code
+appended entries in insertion order via `AddEntry`. When datasets were created in
+non-alphabetical order (e.g., `/uint` before `/float`), h5dump/h5ls could not find them.
+
+Fix: `sort.Slice` SNOD entries by name after each insertion in `linkToParent()`.
+
+**Validation**: 4 regression tests added. All 8 h5dump test scenarios pass. Full test suite
+green (all packages).
+
+Reported by [@vrv-bit](https://github.com/vrv-bit) in Issue #28 and Issue #29.
+
+---
+
 ## [v0.13.10] - 2026-03-06
 
 ### 🐛 Bug Fix
