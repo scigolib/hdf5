@@ -294,6 +294,21 @@ func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHea
 		return fmt.Errorf("failed to write object header: %w", err)
 	}
 
+	// 6. Update allocator if the object header grew beyond currently tracked EOF.
+	// Adding an attribute message increases the OHDR size. If the OHDR is at the
+	// end of the file, the extra bytes extend past what the allocator knows about.
+	// Without this, the superblock EOA will be too small and h5dump/h5py will
+	// reject the file ("actual len exceeds EOA").
+	newHeaderSize := core.ObjectHeaderSizeFromParsed(oh)
+	objectHeaderEnd := objectAddr + newHeaderSize
+	allocator := fw.writer.Allocator()
+	if allocator.EndOfFile() < objectHeaderEnd {
+		bytesToAdvance := objectHeaderEnd - allocator.EndOfFile()
+		if _, allocErr := allocator.Allocate(bytesToAdvance); allocErr != nil {
+			return fmt.Errorf("failed to advance allocator past grown object header: %w", allocErr)
+		}
+	}
+
 	return nil
 }
 

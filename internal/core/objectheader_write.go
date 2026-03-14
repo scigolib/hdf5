@@ -514,6 +514,31 @@ func WriteObjectHeader(w io.WriterAt, addr uint64, oh *ObjectHeader, sb *Superbl
 	return nil
 }
 
+// ObjectHeaderSizeFromParsed calculates the on-disk size of an ObjectHeader
+// (as returned by ReadObjectHeader). This is used to determine how much space
+// the header occupies after modification (e.g., adding attributes).
+// Supports both v1 and v2 object headers.
+func ObjectHeaderSizeFromParsed(oh *ObjectHeader) uint64 {
+	if oh == nil {
+		return 0
+	}
+	if oh.Version != 1 && oh.Version != 2 {
+		return 0
+	}
+	ohw := &ObjectHeaderWriter{
+		Version:  oh.Version,
+		Flags:    oh.Flags,
+		Messages: make([]MessageWriter, len(oh.Messages)),
+	}
+	for i, msg := range oh.Messages {
+		ohw.Messages[i] = MessageWriter{
+			Type: msg.Type,
+			Data: msg.Data,
+		}
+	}
+	return ohw.Size()
+}
+
 // RewriteObjectHeaderV2 rewrites an object header v2 with updated messages.
 // This handles the case where we need to modify an existing object header
 // by reading it, modifying it, and writing it back.

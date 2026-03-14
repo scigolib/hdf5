@@ -2,6 +2,7 @@ package hdf5
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/scigolib/hdf5/internal/core"
@@ -294,6 +295,8 @@ func parsePath(path string) (parent, name string) {
 //
 // Returns:
 //   - error: If linking fails
+//
+//nolint:gocognit,gocyclo,cyclop // Complex but necessary: sorted insertion + string-based B-tree key update
 func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint64) error {
 	// Get parent group metadata
 	var heapAddr, stNodeAddr, btreeAddr uint64
@@ -342,6 +345,26 @@ func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint6
 		return fmt.Errorf("add entry to symbol table: %w", err)
 	}
 
+	// Step 4b: Sort SNOD entries by name (HDF5 format requirement).
+	// The C library expects symbol table entries sorted by strcmp on the name
+	// looked up from the local heap. Without sorting, h5dump/h5ls fail when
+	// entries are added in non-alphabetical order.
+	sort.Slice(stNode.Entries, func(i, j int) bool {
+		ni, nj := stNode.Entries[i].LinkNameOffset, stNode.Entries[j].LinkNameOffset
+		var si, sj string
+		if ni == nameOffset {
+			si = childName
+		} else {
+			si, _ = heap.GetString(ni)
+		}
+		if nj == nameOffset {
+			sj = childName
+		} else {
+			sj, _ = heap.GetString(nj)
+		}
+		return si < sj
+	})
+
 	// Step 5: Write updated heap
 	if err := heap.WriteTo(fw.writer, heapAddr); err != nil {
 		return fmt.Errorf("write heap: %w", err)
@@ -353,13 +376,33 @@ func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint6
 		return fmt.Errorf("write symbol table: %w", err)
 	}
 
-	// Step 7: Update B-tree right key (key[1]) to reflect max name offset.
-	// Per HDF5 spec, B-tree v1 with N children has N+1 keys.
-	// Key[0] = 0 (left boundary), Key[N] = max name offset (right boundary).
-	// Without this, h5ls/h5dump cannot find children in the group.
+	// Step 7: Update B-tree right key (key[1]) to reflect the lexicographically
+	// largest name's local heap offset. Per HDF5 spec, B-tree v1 group nodes
+	// compare keys by looking up strings in the local heap and using strcmp.
+	// The right key must be the offset of the string that sorts LAST, not the
+	// numerically largest offset. Without this, h5dump/h5ls cannot find entries
+	// whose names sort after the right key's name.
+	//
+	// Note: heap.GetString() reads from heap.Data (on-disk snapshot). The entry
+	// we just added (at nameOffset) is only in heap.strings (not yet flushed to
+	// Data), so we use childName directly for that entry.
 	var maxNameOffset uint64
+	var maxName string
 	for _, e := range stNode.Entries {
-		if e.LinkNameOffset > maxNameOffset {
+		var entryName string
+		if e.LinkNameOffset == nameOffset {
+			// This is the entry we just added — use childName directly
+			// because heap.Data hasn't been updated yet.
+			entryName = childName
+		} else {
+			var nameErr error
+			entryName, nameErr = heap.GetString(e.LinkNameOffset)
+			if nameErr != nil {
+				continue
+			}
+		}
+		if entryName > maxName {
+			maxName = entryName
 			maxNameOffset = e.LinkNameOffset
 		}
 	}

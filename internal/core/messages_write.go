@@ -141,7 +141,7 @@ func encodeChunkedLayout(chunkDims []uint64, btreeAddress uint64, sb *Superblock
 
 	// Chunk dimensions (each 4 bytes, uint32)
 	for _, dim := range chunkDims {
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(dim))
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(dim)) //nolint:gosec // G115: chunk dims bounded by HDF5 format limits
 		offset += 4
 	}
 
@@ -252,8 +252,8 @@ func encodeDatatypeNumeric(dt *DatatypeMessage) ([]byte, error) {
 		}
 
 		properties = make([]byte, 12)
-		binary.LittleEndian.PutUint16(properties[0:2], 0)                 // bit_offset = 0
-		binary.LittleEndian.PutUint16(properties[2:4], uint16(dt.Size*8)) //nolint:gosec // G115: precision bits
+		binary.LittleEndian.PutUint16(properties[0:2], 0) // bit_offset = 0
+		binary.LittleEndian.PutUint16(properties[2:4], uint16(dt.Size*8))
 		properties[4] = epos
 		properties[5] = esize
 		properties[6] = mpos
@@ -265,7 +265,7 @@ func encodeDatatypeNumeric(dt *DatatypeMessage) ([]byte, error) {
 		//   uint16: bit_precision (total bits)
 		properties = make([]byte, 4)
 		binary.LittleEndian.PutUint16(properties[0:2], 0)                 // bit_offset = 0
-		binary.LittleEndian.PutUint16(properties[2:4], uint16(dt.Size*8)) //nolint:gosec // G115: precision bits
+		binary.LittleEndian.PutUint16(properties[2:4], uint16(dt.Size*8)) //nolint:gosec // G115: dt.Size is 1/2/4/8, max value 64 fits uint16
 	}
 
 	// Build message: header (8 bytes) + properties

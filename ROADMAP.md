@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2026-03-06 | **Current Version**: v0.13.10 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.10 RELEASED! (2026-03-06) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2026-03-14 | **Current Version**: v0.13.11 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.11 RELEASED! (2026-03-14) → v1.0.0 LTS (Q3 2026)
 
 ---
 
@@ -58,6 +58,8 @@ v0.13.8 (HOTFIX - EOA compatibility) ✅ RELEASED 2026-03-04
 v0.13.9 (HOTFIX - V2 object header checksum) ✅ RELEASED 2026-03-04
          ↓ (interoperability fix)
 v0.13.10 (BUGFIX - h5dump/h5ls/h5py interop) ✅ RELEASED 2026-03-06
+         ↓ (attribute + SNOD + B-tree key fixes)
+v0.13.11 (HOTFIX - write interop: attrs, sorting, keys) ✅ RELEASED 2026-03-14
          ↓ (maintenance continues)
 v0.13.x (maintenance phase) → Stable maintenance, bug fixes, minor enhancements
          ↓ (6-9 months production validation)
