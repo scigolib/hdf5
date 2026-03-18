@@ -47,12 +47,13 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 
 	numSymbols := sb.Endianness.Uint16(header[6:8])
 
-	// Note: Symbol table nodes have a fixed capacity (typically 32 entries for K=16).
+	// Note: Symbol table nodes have a fixed capacity of 2*K entries.
+	// Per C reference (H5Fprivate.h:200): default K=4, so capacity=8.
 	// When parsing, we don't know the original capacity if numSymbols=0.
-	// Use standard capacity (32) to allow modifications.
-	capacity := uint16(32) // Standard capacity (2*K where K=16)
+	// Use default capacity (8) matching H5F_CRT_SYM_LEAF_DEF = 4.
+	capacity := uint16(8) // Default capacity (2*K where K=4)
 	if numSymbols > capacity {
-		capacity = numSymbols // Increase if needed
+		capacity = numSymbols // Increase if needed (for files with larger K)
 	}
 
 	node := &SymbolTableNode{
@@ -153,7 +154,8 @@ func readAddressFromBytes(data []byte, size int, endianness binary.ByteOrder) ui
 }
 
 // NewSymbolTableNode creates a new empty symbol table node with the given capacity.
-// capacity is typically 2*K where K is the B-tree order (default: K=16, so capacity=32).
+// capacity is 2*K where K is GroupLeafNodeK (default: K=4, so capacity=8).
+// Per C reference (H5Fprivate.h:200): H5F_CRT_SYM_LEAF_DEF = 4.
 func NewSymbolTableNode(capacity uint16) *SymbolTableNode {
 	return &SymbolTableNode{
 		Version:    1,

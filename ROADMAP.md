@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2026-03-14 | **Current Version**: v0.13.12 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.12 RELEASED! (2026-03-14) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2026-03-18 | **Current Version**: v0.13.13 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.13 RELEASED! (2026-03-18) → v1.0.0 LTS (Q3 2026)
 
 ---
 
@@ -62,6 +62,8 @@ v0.13.10 (BUGFIX - h5dump/h5ls/h5py interop) ✅ RELEASED 2026-03-06
 v0.13.11 (HOTFIX - write interop: attrs, sorting, keys) ✅ RELEASED 2026-03-14
          ↓ (add missing VLenUint8 type)
 v0.13.12 (PATCH - add VLenUint8 datatype) ✅ RELEASED 2026-03-14
+         ↓ (SNOD split, heap expansion, chunk format fix)
+v0.13.13 (BUGFIX - SNOD/heap/chunk interop) ✅ RELEASED 2026-03-18
          ↓ (maintenance continues)
 v0.13.x (maintenance phase) → Stable maintenance, bug fixes, minor enhancements
          ↓ (6-9 months production validation)

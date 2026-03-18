@@ -111,10 +111,18 @@ func (d *Dataset) ChunkIteratorWithContext(ctx context.Context) (*ChunkIterator,
 		return nil, fmt.Errorf("failed to collect chunk coordinates: %w", err)
 	}
 
+	// Trim chunk dimensions to match dataset dimensions.
+	// Layout may store ndims+1 dimensions (extra dimension for datatype size,
+	// per H5Dchunk.c:909-913). We only expose the actual data dimensions.
+	actualChunkDims := layout.ChunkSize
+	if len(actualChunkDims) > len(dataspace.Dimensions) {
+		actualChunkDims = actualChunkDims[:len(dataspace.Dimensions)]
+	}
+
 	return &ChunkIterator{
 		dataset:     d,
 		chunkCoords: chunkCoords,
-		chunkDims:   layout.ChunkSize,
+		chunkDims:   actualChunkDims,
 		datasetDims: dataspace.Dimensions,
 		current:     0,
 		ctx:         ctx,

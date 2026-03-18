@@ -275,6 +275,25 @@ func (h *LocalHeap) Size() uint64 {
 	return 32 + h.DataSegmentSize
 }
 
+// CopyStringsFrom copies the strings buffer from another heap into this heap.
+// This is used during heap expansion: create a larger heap, copy strings from old heap.
+// Existing offsets remain valid because the strings are at the same positions.
+//
+// Parameters:
+//   - src: Source heap to copy strings from
+//
+// Returns:
+//   - error: If the source strings don't fit in this heap
+func (h *LocalHeap) CopyStringsFrom(src *LocalHeap) error {
+	if uint64(len(src.strings)) > h.DataSegmentSize {
+		return errors.New("source strings exceed new heap capacity")
+	}
+	// Replace our strings buffer with a copy of the source's.
+	h.strings = make([]byte, len(src.strings))
+	copy(h.strings, src.strings)
+	return nil
+}
+
 // PrepareForModification converts a read-mode heap to write-mode.
 // This allows adding new strings to an existing heap loaded from disk.
 //
