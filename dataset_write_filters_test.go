@@ -57,14 +57,14 @@ func TestChunkedDatasetWithShuffleGZIP(t *testing.T) {
 	file, err := CreateForWrite(tmpFile, CreateTruncate)
 	require.NoError(t, err)
 
-	ds, err := file.CreateDataset("/data", Float64, []uint64{1000},
-		WithChunkDims([]uint64{100}),
+	ds, err := file.CreateDataset("/data", Float64, []uint64{10000},
+		WithChunkDims([]uint64{1000}),
 		WithShuffle(),
 		WithGZIPCompression(9))
 	require.NoError(t, err)
 
 	// Create data with similar values (good for shuffle)
-	data := make([]float64, 1000)
+	data := make([]float64, 10000)
 	for i := range data {
 		data[i] = float64(i) * 0.01
 	}
@@ -79,11 +79,11 @@ func TestChunkedDatasetWithShuffleGZIP(t *testing.T) {
 	info, err := os.Stat(tmpFile)
 	require.NoError(t, err)
 
-	uncompressedSize := 1000 * 8 // 8KB
+	uncompressedSize := 10000 * 8 // 80KB
 	compressedSize := int(info.Size())
 
-	// Shuffle+GZIP should compress better than GZIP alone
-	// Expect at least 1.5:1 ratio for this data
+	// Shuffle+GZIP should compress better than GZIP alone.
+	// Using large dataset to make file metadata overhead negligible.
 	compressionRatio := float64(uncompressedSize) / float64(compressedSize)
 	require.Greater(t, compressionRatio, 1.5,
 		"Expected shuffle+gzip compression ratio > 1.5, got %.2f", compressionRatio)
@@ -396,15 +396,15 @@ func TestChunkedDatasetBinaryPatterns(t *testing.T) {
 	file, err := CreateForWrite(tmpFile, CreateTruncate)
 	require.NoError(t, err)
 
-	ds, err := file.CreateDataset("/data", Uint32, []uint64{1000},
-		WithChunkDims([]uint64{100}),
+	ds, err := file.CreateDataset("/data", Uint32, []uint64{10000},
+		WithChunkDims([]uint64{1000}),
 		WithShuffle(),
 		WithGZIPCompression(6),
 		WithFletcher32())
 	require.NoError(t, err)
 
-	// Create binary pattern data
-	data := make([]uint32, 1000)
+	// Create binary pattern data (larger size to make metadata overhead negligible).
+	data := make([]uint32, 10000)
 	for i := range data {
 		// Pattern with high byte similarity (good for shuffle)
 		data[i] = uint32(0xFF00_0000 | (i & 0xFF))
@@ -419,10 +419,10 @@ func TestChunkedDatasetBinaryPatterns(t *testing.T) {
 	info, err := os.Stat(tmpFile)
 	require.NoError(t, err)
 
-	uncompressedSize := 1000 * 4
+	uncompressedSize := 10000 * 4
 	compressionRatio := float64(uncompressedSize) / float64(info.Size())
 
-	// Binary pattern should compress reasonably with shuffle
+	// Binary pattern should compress reasonably with shuffle.
 	require.Greater(t, compressionRatio, 0.9,
 		"Expected compression for binary pattern, got %.2f", compressionRatio)
 
@@ -502,14 +502,14 @@ func TestChunkedDatasetIntegerSequences(t *testing.T) {
 	file, err := CreateForWrite(tmpFile, CreateTruncate)
 	require.NoError(t, err)
 
-	ds, err := file.CreateDataset("/data", Int64, []uint64{1000},
-		WithChunkDims([]uint64{100}),
+	ds, err := file.CreateDataset("/data", Int64, []uint64{10000},
+		WithChunkDims([]uint64{1000}),
 		WithShuffle(),
 		WithGZIPCompression(9))
 	require.NoError(t, err)
 
 	// Sequential integers (excellent for shuffle)
-	data := make([]int64, 1000)
+	data := make([]int64, 10000)
 	for i := range data {
 		data[i] = int64(i * 100) // Large steps
 	}
@@ -523,10 +523,10 @@ func TestChunkedDatasetIntegerSequences(t *testing.T) {
 	info, err := os.Stat(tmpFile)
 	require.NoError(t, err)
 
-	uncompressedSize := 1000 * 8
+	uncompressedSize := 10000 * 8
 	compressionRatio := float64(uncompressedSize) / float64(info.Size())
 
-	// Sequential values should compress reasonably
+	// Sequential values should compress reasonably.
 	require.Greater(t, compressionRatio, 1.5,
 		"Expected good compression for sequential data, got %.2f", compressionRatio)
 
@@ -575,14 +575,14 @@ func TestChunkedDatasetFloatingPoint(t *testing.T) {
 	file, err := CreateForWrite(tmpFile, CreateTruncate)
 	require.NoError(t, err)
 
-	ds, err := file.CreateDataset("/measurements", Float64, []uint64{1000},
-		WithChunkDims([]uint64{100}),
+	ds, err := file.CreateDataset("/measurements", Float64, []uint64{10000},
+		WithChunkDims([]uint64{1000}),
 		WithShuffle(),
 		WithGZIPCompression(6))
 	require.NoError(t, err)
 
-	// Floating-point data with small variations
-	data := make([]float64, 1000)
+	// Floating-point data with small variations.
+	data := make([]float64, 10000)
 	baseValue := 123.456
 	for i := range data {
 		data[i] = baseValue + float64(i)*0.001 // Small increments
@@ -597,10 +597,11 @@ func TestChunkedDatasetFloatingPoint(t *testing.T) {
 	info, err := os.Stat(tmpFile)
 	require.NoError(t, err)
 
-	uncompressedSize := 1000 * 8
+	uncompressedSize := 10000 * 8
 	compressionRatio := float64(uncompressedSize) / float64(info.Size())
 
-	// Floating-point with small variations may not compress as well as integers
+	// Floating-point with small variations may not compress as well as integers.
+	// Using larger dataset to make file metadata overhead negligible.
 	require.Greater(t, compressionRatio, 0.8,
 		"Expected some compression for float64 data, got %.2f", compressionRatio)
 

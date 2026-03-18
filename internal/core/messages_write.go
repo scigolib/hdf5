@@ -15,6 +15,9 @@ import (
 //   - dataAddress: File address where data is stored (for contiguous) or B-tree root (for chunked)
 //   - sb: Superblock for offset/length size encoding
 //   - chunkDims: Chunk dimensions (required for chunked layout, nil otherwise)
+//   - elementSize: Size of one element in bytes (required for chunked layout, 0 otherwise).
+//     Per C reference (H5Dchunk.c:909-913), the layout stores ndims+1 dimensions where
+//     the last dimension is the datatype element size.
 //
 // Returns:
 //   - Encoded message bytes
@@ -29,17 +32,18 @@ import (
 // Format (version 3, chunked):
 //   - Version: 1 byte (3)
 //   - Class: 1 byte (2 for chunked)
-//   - Dimensionality: 1 byte
+//   - Dimensionality: 1 byte (ndims + 1, includes datatype size dimension)
 //   - B-tree Address: offsetSize bytes
-//   - Chunk Dimensions: dimensionality * 4 bytes (uint32 each)
+//   - Chunk Dimensions: dimensionality * 4 bytes (uint32 each, last = element size)
 //
 // Reference: HDF5 spec III.D (Data Storage - Data Layout Message)
-// C Reference: H5Olayout.c - H5O__layout_encode()..
+// C Reference: H5Olayout.c - H5O__layout_encode(), H5Dchunk.c - H5D__chunk_construct().
 func EncodeLayoutMessage(
 	layoutClass DataLayoutClass,
 	dataSize, dataAddress uint64,
 	sb *Superblock,
 	chunkDims []uint64,
+	elementSize uint32,
 ) ([]byte, error) {
 	switch layoutClass {
 	case LayoutContiguous:
@@ -49,7 +53,7 @@ func EncodeLayoutMessage(
 		if len(chunkDims) == 0 {
 			return nil, fmt.Errorf("chunk dimensions required for chunked layout")
 		}
-		return encodeChunkedLayout(chunkDims, dataAddress, sb)
+		return encodeChunkedLayout(chunkDims, dataAddress, sb, elementSize)
 
 	default:
 		return nil, fmt.Errorf("unsupported layout class for writing: %d", layoutClass)
@@ -86,30 +90,37 @@ func encodeContiguousLayout(dataSize, dataAddress uint64, sb *Superblock) ([]byt
 // encodeChunkedLayout encodes chunked layout message (version 3).
 // This implements the HDF5 chunked storage layout format.
 //
+// Per C reference (H5Dchunk.c:909-913), the layout dimensionality is ndims+1,
+// where the extra dimension stores the datatype element size. This is required
+// for correct interop with h5dump, h5ls, h5py and the C library.
+//
 // Parameters:
-//   - chunkDims: Chunk dimensions
+//   - chunkDims: Chunk dimensions (N dimensions)
 //   - btreeAddress: Address of B-tree root for chunk index
 //   - sb: Superblock for encoding parameters
+//   - elementSize: Size of one datatype element in bytes (stored as last dimension)
 //
 // Format (version 3):
 //   - Version: 1 byte (3)
 //   - Class: 1 byte (2 for chunked)
-//   - Dimensionality: 1 byte
+//   - Dimensionality: 1 byte (ndims + 1, per H5Dchunk.c:913)
 //   - B-tree Address: offsetSize bytes
-//   - Chunk Dimensions: dimensionality * 4 bytes (uint32 each)
+//   - Chunk Dimensions: (ndims+1) * 4 bytes (uint32 each, last = element size)
 //
 // Reference: H5Olayout.c - H5O__layout_encode() for chunked case.
-func encodeChunkedLayout(chunkDims []uint64, btreeAddress uint64, sb *Superblock) ([]byte, error) {
+// C Reference: H5Dchunk.c:909-913 (ndims++) and H5Dchunk.c:826-835 (dim[ndims-1] = type size).
+func encodeChunkedLayout(chunkDims []uint64, btreeAddress uint64, sb *Superblock, elementSize uint32) ([]byte, error) {
 	if len(chunkDims) == 0 {
 		return nil, fmt.Errorf("chunk dimensions cannot be empty")
 	}
 
-	dimensionality := len(chunkDims)
+	// Per C reference: layout->u.chunk.ndims++ (includes datatype size dimension).
+	dimensionality := len(chunkDims) + 1
 	if dimensionality > 255 {
 		return nil, fmt.Errorf("dimensionality %d exceeds maximum 255", dimensionality)
 	}
 
-	// Validate chunk dimensions fit in uint32 (HDF5 format limitation)
+	// Validate chunk dimensions fit in uint32 (HDF5 format limitation).
 	for i, dim := range chunkDims {
 		if dim > 0xFFFFFFFF {
 			return nil, fmt.Errorf("chunk dimension %d (%d) exceeds uint32 maximum", i, dim)
@@ -117,7 +128,7 @@ func encodeChunkedLayout(chunkDims []uint64, btreeAddress uint64, sb *Superblock
 	}
 
 	// Calculate total message size
-	// Version (1) + Class (1) + Dimensionality (1) + BTreeAddress (OffsetSize) + ChunkDims (4*N)
+	// Version (1) + Class (1) + Dimensionality (1) + BTreeAddress (OffsetSize) + ChunkDims (4 * (ndims+1))
 	messageSize := 3 + int(sb.OffsetSize) + dimensionality*4
 	buf := make([]byte, messageSize)
 
@@ -131,7 +142,7 @@ func encodeChunkedLayout(chunkDims []uint64, btreeAddress uint64, sb *Superblock
 	buf[offset] = byte(LayoutChunked)
 	offset++
 
-	// Dimensionality
+	// Dimensionality (ndims + 1, per C reference)
 	buf[offset] = byte(dimensionality)
 	offset++
 
@@ -144,6 +155,9 @@ func encodeChunkedLayout(chunkDims []uint64, btreeAddress uint64, sb *Superblock
 		binary.LittleEndian.PutUint32(buf[offset:], uint32(dim)) //nolint:gosec // G115: chunk dims bounded by HDF5 format limits
 		offset += 4
 	}
+
+	// Last dimension = datatype element size (per H5Dchunk.c:826-835)
+	binary.LittleEndian.PutUint32(buf[offset:], elementSize)
 
 	return buf, nil
 }

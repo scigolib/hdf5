@@ -541,6 +541,24 @@ func getDatatypeInfo(dt Datatype, config *datasetConfig) (*datatypeInfo, error) 
 	return handler.GetInfo(config)
 }
 
+// groupLeafNodeK is the HDF5 Symbol Table Leaf Node K value.
+// Per C reference (H5Fprivate.h:200): H5F_CRT_SYM_LEAF_DEF = 4.
+// Each SNOD has capacity 2*K = 8 entries. This is stored in superblock v0
+// at bytes 16-17 and defaults to 4 for v2/v3 superblocks.
+const groupLeafNodeK = 4
+
+// snodCapacity is the maximum number of entries per SNOD (2*K).
+// Per C reference (H5Gnode.c:598): split when nsyms >= 2 * H5F_SYM_LEAF_K(f).
+const snodCapacity = 2 * groupLeafNodeK // 8
+
+// snodEntrySize is the on-disk size of each SNOD entry (for 8-byte offsets).
+// Format: offsetSize*2 + 4 (cache type) + 4 (reserved) + 16 (scratch-pad) = 40 bytes.
+const snodEntrySize = 2*8 + 4 + 4 + 16 // 40
+
+// snodTotalSize is the on-disk size of a complete SNOD (header + entries).
+// Format: 8-byte header + snodCapacity * snodEntrySize.
+const snodTotalSize = 8 + snodCapacity*snodEntrySize // 328
+
 // GroupMetadata stores metadata for a group (symbol table format).
 // Used for tracking non-root groups to enable nested dataset creation.
 type GroupMetadata struct {
@@ -940,6 +958,7 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 		dataAddress,
 		fw.file.sb,
 		nil, // No chunk dimensions for contiguous layout
+		0,   // No element size for contiguous layout
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode layout: %w", err)
@@ -1111,6 +1130,7 @@ func (fw *FileWriter) CreateCompoundDataset(name string, compoundType *core.Data
 		dataAddress,
 		fw.file.sb,
 		nil, // No chunk dimensions for contiguous layout
+		0,   // No element size for contiguous layout
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode layout: %w", err)
@@ -2701,8 +2721,9 @@ func createRootGroupStructureV2(fw *writer.FileWriter) (*rootGroupInfo, error) {
 	const offsetSize = 8
 	const lengthSize = 8
 
-	// Create local heap for root group names
-	rootHeap := structures.NewLocalHeap(256) // Initial capacity for ~10-20 names
+	// Create local heap for root group names.
+	// 4096 bytes supports ~300+ typical names.
+	rootHeap := structures.NewLocalHeap(4096)
 	rootHeapAddr, err := fw.Allocate(rootHeap.Size())
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate root heap: %w", err)
@@ -2759,17 +2780,19 @@ func createRootGroupStructureV0(fw *writer.FileWriter) (*rootGroupInfo, error) {
 	// NULL message: 4 (type+size+flags+reserved) for padding
 	objHeaderSize := uint64(16 + 20 + 4)
 
-	// B-tree node size: signature(4) + node_type(1) + node_level(1) + entries_used(2) +
-	//                   left_sibling(8) + right_sibling(8) + key+child pairs
-	// For root with 1 child: 24 + (8+8)*2 = 56 bytes (minimum)
-	btreeSize := uint64(56)
+	// B-tree node size: header(24) + (2K+1)*offsetSize keys + 2K*offsetSize children
+	// where K=16 (GroupInternalNodeK). Full size: 24 + 33*8 + 32*8 = 544 bytes.
+	// Must reserve the FULL B-tree size even though only 1 child is initially used,
+	// because WriteAt writes the complete 544-byte buffer (with zero padding).
+	const groupBTreeK = 16
+	btreeSize := uint64(8 + 2*offsetSize + (2*groupBTreeK+1)*offsetSize + 2*groupBTreeK*offsetSize)
 
-	// Symbol table node size: signature(4) + version(1) + reserved(1) + num_symbols(2) +
-	//                          entries (40 bytes each, capacity 32)
-	stNodeSize := uint64(8 + 32*40)
+	// Symbol table node size: 8-byte header + snodCapacity * 40 bytes per entry.
+	// Per C reference (H5Gpkg.h:51): H5G_NODE_SIZEOF_HDR(f) + (2*K * H5G_SIZEOF_ENTRY_FILE(f)).
+	stNodeSize := uint64(snodTotalSize)
 
-	// Local heap size: minimum ~256 bytes
-	heapSize := uint64(256)
+	// Local heap size: 4096 bytes supports ~300+ typical names.
+	heapSize := uint64(4096)
 
 	// Step 2: Calculate fixed addresses and reserve space via allocator.
 	// Superblock v0: 0x00-0x5F (96 bytes)
@@ -2808,8 +2831,8 @@ func createRootGroupStructureV0(fw *writer.FileWriter) (*rootGroupInfo, error) {
 		return nil, err
 	}
 
-	// 4. Write local heap (offset 1480, after symbol table node)
-	rootHeap := structures.NewLocalHeap(256)
+	// 4. Write local heap (after symbol table node).
+	rootHeap := structures.NewLocalHeap(4096)
 	if err := rootHeap.WriteTo(fw, rootHeapAddr); err != nil {
 		return nil, fmt.Errorf("failed to write root heap: %w", err)
 	}
@@ -2826,10 +2849,10 @@ func createRootGroupStructureV0(fw *writer.FileWriter) (*rootGroupInfo, error) {
 
 // writeSymbolTableNodeAt writes a symbol table node at the specified address.
 func writeSymbolTableNodeAt(fw *writer.FileWriter, addr uint64, offsetSize int) error {
-	rootStNode := structures.NewSymbolTableNode(32) // Standard capacity (2*K where K=16)
+	rootStNode := structures.NewSymbolTableNode(snodCapacity) // 2*K where K=4 (GroupLeafNodeK)
 
 	// Write symbol table node (empty initially)
-	if err := rootStNode.WriteAt(fw, addr, uint8(offsetSize), 32, binary.LittleEndian); err != nil { //nolint:gosec // Safe: offsetSize validated to be 8
+	if err := rootStNode.WriteAt(fw, addr, uint8(offsetSize), snodCapacity, binary.LittleEndian); err != nil { //nolint:gosec // Safe: offsetSize validated to be 8
 		return fmt.Errorf("failed to write symbol table node: %w", err)
 	}
 
@@ -2856,21 +2879,15 @@ func writeBTreeNodeAt(fw *writer.FileWriter, addr, stNodeAddr uint64, offsetSize
 // createSymbolTableNode creates and writes a symbol table node for a group.
 // Returns the address where the node was written.
 func createSymbolTableNode(fw *writer.FileWriter, offsetSize int) (uint64, error) {
-	rootStNode := structures.NewSymbolTableNode(32) // Standard capacity (2*K where K=16)
+	rootStNode := structures.NewSymbolTableNode(snodCapacity) // 2*K where K=4 (GroupLeafNodeK)
 
-	// Calculate symbol table node size
-	// Format: 8-byte header + 32 * entrySize
-	// entrySize = 2*offsetSize + 4 + 4 + 16 = 2*8 + 24 = 40 bytes
-	entrySize := 2*offsetSize + 4 + 4 + 16
-	stNodeSize := uint64(8 + 32*entrySize) //nolint:gosec // Safe: constant calculation always fits in uint64
-
-	rootStNodeAddr, err := fw.Allocate(stNodeSize)
+	rootStNodeAddr, err := fw.Allocate(snodTotalSize)
 	if err != nil {
 		return 0, fmt.Errorf("failed to allocate root symbol table node: %w", err)
 	}
 
 	// Write symbol table node (empty initially)
-	if err := rootStNode.WriteAt(fw, rootStNodeAddr, uint8(offsetSize), 32, binary.LittleEndian); err != nil { //nolint:gosec // Safe: offsetSize validated to be 8
+	if err := rootStNode.WriteAt(fw, rootStNodeAddr, uint8(offsetSize), snodCapacity, binary.LittleEndian); err != nil { //nolint:gosec // Safe: offsetSize validated to be 8
 		return 0, fmt.Errorf("failed to write root symbol table node: %w", err)
 	}
 

@@ -59,15 +59,22 @@ type ChunkKey struct {
 // It collects chunk coordinates and addresses, sorts them in row-major
 // order, and writes a single leaf node to the file.
 //
+// Per C reference (H5Dbtree.c:687-690), B-tree keys store byte offsets
+// (scaled coordinate * chunk dimension), not raw scaled indices.
+// The key also includes an extra trailing dimension for the datatype size
+// (always 0 in the coordinate, per H5Dchunk.c:913).
+//
 // Usage:
 //
-//	writer := NewChunkBTreeWriter(2) // 2D dataset
+//	writer := NewChunkBTreeWriter(2, []uint64{10, 20}, 8) // 2D dataset, chunk 10x20, float64
 //	writer.AddChunk([]uint64{0, 0}, chunkAddr1)
 //	writer.AddChunk([]uint64{0, 1}, chunkAddr2)
 //	writer.AddChunk([]uint64{1, 0}, chunkAddr3)
 //	btreeAddr, err := writer.WriteToFile(fileWriter, allocator)
 type ChunkBTreeWriter struct {
 	dimensionality int
+	chunkDims      []uint64 // Chunk dimensions for coordinate-to-byte-offset conversion.
+	elementSize    uint32   // Datatype element size (stored as trailing dimension value 0 in keys).
 	entries        []ChunkBTreeEntry
 }
 
@@ -80,14 +87,24 @@ type ChunkBTreeEntry struct {
 
 // NewChunkBTreeWriter creates new chunk B-tree writer.
 //
+// Per C reference (H5Dbtree.c:687-690), B-tree keys encode coordinates as
+// byte offsets (scaled * chunkDim), not raw scaled indices. The chunkDims
+// and elementSize parameters are required for this conversion.
+//
 // Parameters:
 //   - dimensionality: Number of dimensions in dataset (1, 2, 3, etc.)
+//   - chunkDims: Chunk dimensions for each axis (used to convert scaled coords to byte offsets)
+//   - elementSize: Datatype element size in bytes (stored as trailing 0-valued dimension)
 //
 // Returns:
-//   - ChunkBTreeWriter ready to accept chunks
-func NewChunkBTreeWriter(dimensionality int) *ChunkBTreeWriter {
+//   - ChunkBTreeWriter ready to accept chunks.
+func NewChunkBTreeWriter(dimensionality int, chunkDims []uint64, elementSize uint32) *ChunkBTreeWriter {
+	dimsCopy := make([]uint64, len(chunkDims))
+	copy(dimsCopy, chunkDims)
 	return &ChunkBTreeWriter{
 		dimensionality: dimensionality,
+		chunkDims:      dimsCopy,
+		elementSize:    elementSize,
 		entries:        make([]ChunkBTreeEntry, 0),
 	}
 }
@@ -190,7 +207,9 @@ func (w *ChunkBTreeWriter) WriteToFile(writer Writer, allocator Allocator) (uint
 	// 4. Add max key (B-tree requirement)
 	// The B-tree must have 2K+1 keys for 2K children.
 	// The last key is a sentinel "maximum" key (all dimensions = max uint64).
-	maxKey := make([]uint64, w.dimensionality)
+	// Per C reference, keys have ndims+1 dimensions (extra dimension for datatype size).
+	onDiskDims := w.dimensionality + 1
+	maxKey := make([]uint64, onDiskDims)
 	for i := range maxKey {
 		maxKey[i] = ^uint64(0) // Max value
 	}
@@ -200,7 +219,9 @@ func (w *ChunkBTreeWriter) WriteToFile(writer Writer, allocator Allocator) (uint
 	})
 
 	// 5. Serialize
-	buf := serializeChunkBTreeNode(node, w.dimensionality)
+	// Per C reference (H5Dbtree.c:687-690), keys use ndims+1 dimensions
+	// and store byte offsets (scaled * chunkDim), not raw scaled indices.
+	buf := serializeChunkBTreeNode(node, onDiskDims, w.chunkDims, w.elementSize)
 
 	// 6. Allocate space
 	addr, err := allocator.Allocate(uint64(len(buf)))
@@ -218,21 +239,32 @@ func (w *ChunkBTreeWriter) WriteToFile(writer Writer, allocator Allocator) (uint
 
 // serializeChunkBTreeNode serializes node to bytes.
 //
+// Per C reference (H5Dbtree.c:687-690), each key coordinate is stored as a
+// byte offset (scaled_index * chunk_dimension), not as a raw scaled index.
+// The key has onDiskDims coordinates, where the last coordinate corresponds
+// to the datatype size dimension and is always 0 for data keys.
+//
 // Format:
 // - Header: 4 (sig) + 1 (type) + 1 (level) + 2 (entries) + 8 (left) + 8 (right) = 24 bytes
 // - For each entry (interleaved keys and children):
-//   - Key: nbytes (4) + filter_mask (4) + coords (dim*8)
+//   - Key: nbytes (4) + filter_mask (4) + coords (onDiskDims*8)
 //   - Child: address (8 bytes)
 //
-// - Final key (sentinel): nbytes (4) + filter_mask (4) + coords (dim*8)
+// - Final key (sentinel): nbytes (4) + filter_mask (4) + coords (onDiskDims*8)
+//
+// Parameters:
+//   - node: The B-tree node to serialize
+//   - onDiskDims: Number of dimensions on disk (ndims+1, includes datatype size dimension)
+//   - chunkDims: Chunk dimensions for converting scaled coords to byte offsets
+//   - elementSize: Datatype element size (for the trailing dimension)
 //
 // Note: We use fixed 8-byte addresses (offsetSize=8) for simplicity in MVP.
 // Future versions may support variable offsetSize from superblock.
-func serializeChunkBTreeNode(node *ChunkBTreeNode, dimensionality int) []byte {
+func serializeChunkBTreeNode(node *ChunkBTreeNode, onDiskDims int, chunkDims []uint64, _ uint32) []byte {
 	// Size calculation per HDF5 spec:
-	// - keySize = 4 (nbytes) + 4 (filter_mask) + dim*8 (coords)
+	// - keySize = 4 (nbytes) + 4 (filter_mask) + onDiskDims*8 (coords as byte offsets)
 	// - Format: key0, child0, key1, child1, ..., keyN (final sentinel key)
-	keySize := 4 + 4 + dimensionality*8      // nbytes + filter_mask + coords
+	keySize := 4 + 4 + onDiskDims*8          // nbytes + filter_mask + coords
 	keysSize := len(node.Keys) * keySize     // All keys (including sentinel)
 	childrenSize := len(node.ChildAddrs) * 8 // All children (8 bytes each)
 	totalSize := 24 + keysSize + childrenSize
@@ -256,15 +288,31 @@ func serializeChunkBTreeNode(node *ChunkBTreeNode, dimensionality int) []byte {
 
 	// Write keys and children interleaved: key0, child0, key1, child1, ..., keyN
 	for i, key := range node.Keys {
-		// Write key: nbytes + filter_mask + coords
-		// For MVP, nbytes is not tracked per-chunk, use 0 as placeholder.
-		// This is OK because chunk size is known from layout message.
+		// Write key: nbytes + filter_mask + coords (as byte offsets)
 		binary.LittleEndian.PutUint32(buf[pos:], key.Nbytes)
 		pos += 4
 		binary.LittleEndian.PutUint32(buf[pos:], key.FilterMask)
 		pos += 4
-		for _, coord := range key.Coords {
-			binary.LittleEndian.PutUint64(buf[pos:], coord)
+
+		// Per C reference (H5Dbtree.c:687-690):
+		//   tmp_offset = key->scaled[u] * layout->dim[u];
+		//   UINT64ENCODE(raw, tmp_offset);
+		// Convert each scaled coordinate to byte offset by multiplying by chunk dimension.
+		// The key.Coords may already be in on-disk format (sentinel key with onDiskDims values),
+		// or in scaled format (data key with dimensionality values).
+		for j := 0; j < onDiskDims; j++ {
+			if j < len(key.Coords) {
+				coord := key.Coords[j]
+				// For the sentinel key (max values), write as-is.
+				// For data keys, convert scaled index to byte offset.
+				if coord != ^uint64(0) && j < len(chunkDims) {
+					coord *= chunkDims[j]
+				}
+				binary.LittleEndian.PutUint64(buf[pos:], coord)
+			} else {
+				// Trailing dimension (datatype size): always 0 for data keys.
+				binary.LittleEndian.PutUint64(buf[pos:], 0)
+			}
 			pos += 8
 		}
 

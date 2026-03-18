@@ -48,10 +48,14 @@ func (m *mockChunkAllocator) Allocate(size uint64) (uint64, error) {
 }
 
 // TestChunkBTreeWriter_1D tests 1D chunked dataset.
+// Per C reference (H5Dbtree.c:687-690), B-tree keys store byte offsets
+// (scaled * chunkDim), and have ndims+1 coordinates (last = datatype size, always 0).
 func TestChunkBTreeWriter_1D(t *testing.T) {
-	writer := NewChunkBTreeWriter(1)
+	chunkDims := []uint64{10}
+	elemSize := uint32(4) // int32
+	writer := NewChunkBTreeWriter(1, chunkDims, elemSize)
 
-	// Add 10 chunks
+	// Add 10 chunks (scaled indices 0..9)
 	for i := uint64(0); i < 10; i++ {
 		err := writer.AddChunk([]uint64{i}, 1000+i*100)
 		require.NoError(t, err)
@@ -84,7 +88,7 @@ func TestChunkBTreeWriter_1D(t *testing.T) {
 
 	// Parse interleaved keys and children
 	// Format: key0, child0, key1, child1, ..., key9, child9, key10 (sentinel)
-	// Key format: nbytes (4) + filterMask (4) + coord (8)
+	// Key format: nbytes (4) + filterMask (4) + coord0 (8) + coord1_elemsize (8) = 2 dims on disk
 	pos := 24
 
 	for i := 0; i < 11; i++ {
@@ -93,15 +97,24 @@ func TestChunkBTreeWriter_1D(t *testing.T) {
 		pos += 4
 		filterMask := binary.LittleEndian.Uint32(data[pos:])
 		pos += 4
-		coord := binary.LittleEndian.Uint64(data[pos:])
+
+		// First coordinate (byte offset = scaled * chunkDim)
+		coord0 := binary.LittleEndian.Uint64(data[pos:])
+		pos += 8
+		// Second coordinate (trailing datatype size dimension)
+		coord1 := binary.LittleEndian.Uint64(data[pos:])
 		pos += 8
 
 		if i < 10 {
-			require.Equal(t, uint32(0), nbytes, "chunk %d nbytes", i) // AddChunk uses 0 by default
-			require.Equal(t, uint64(i), coord, "chunk %d coordinate", i)
+			require.Equal(t, uint32(0), nbytes, "chunk %d nbytes", i)
+			// Byte offset = scaled_index * chunkDim[0] = i * 10
+			require.Equal(t, uint64(i)*chunkDims[0], coord0, "chunk %d byte offset", i)
+			// Trailing dimension always 0 for data keys
+			require.Equal(t, uint64(0), coord1, "chunk %d trailing dim", i)
 		} else {
 			// Sentinel max key
-			require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), coord, "sentinel key")
+			require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), coord0, "sentinel key coord0")
+			require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), coord1, "sentinel key coord1")
 		}
 		require.Equal(t, uint32(0), filterMask)
 
@@ -109,14 +122,17 @@ func TestChunkBTreeWriter_1D(t *testing.T) {
 		if i < 10 {
 			chunkAddr := binary.LittleEndian.Uint64(data[pos:])
 			pos += 8
-			require.Equal(t, uint64(1000+i*100), chunkAddr, "chunk %d address", i)
+			require.Equal(t, 1000+uint64(i)*100, chunkAddr, "chunk %d address", i)
 		}
 	}
 }
 
 // TestChunkBTreeWriter_2D tests 2D chunked dataset.
+// Keys have 3 on-disk dimensions (2 data + 1 trailing datatype size).
 func TestChunkBTreeWriter_2D(t *testing.T) {
-	writer := NewChunkBTreeWriter(2)
+	chunkDims := []uint64{10, 20}
+	elemSize := uint32(8) // float64
+	writer := NewChunkBTreeWriter(2, chunkDims, elemSize)
 
 	// Add chunks in non-sorted order to test sorting
 	chunks := []struct {
@@ -141,29 +157,39 @@ func TestChunkBTreeWriter_2D(t *testing.T) {
 	addr, err := writer.WriteToFile(mockWriter, mockAllocator)
 	require.NoError(t, err)
 
-	// Verify sorting by reading interleaved keys and children
-	// Format: key0, child0, key1, child1, ..., key3, child3, key4 (sentinel)
-	// Key format: nbytes (4) + filterMask (4) + coord0 (8) + coord1 (8)
+	// Verify sorting by reading interleaved keys and children.
+	// Key format: nbytes (4) + filterMask (4) + coord0 (8) + coord1 (8) + coord2_trailing (8)
+	// (3 on-disk dims: 2 data + 1 trailing datatype size)
 	data := mockWriter.ReadAt(addr)
 	pos := 24 // After header
 
-	expectedCoords := [][]uint64{
-		{0, 0}, {0, 1}, {1, 0}, {1, 1}, // Sorted in row-major order
-		{0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF}, // Sentinel
+	// Expected byte offsets: scaled * chunkDim
+	expectedByteOffsets := [][]uint64{
+		{0 * 10, 0 * 20}, {0 * 10, 1 * 20}, {1 * 10, 0 * 20}, {1 * 10, 1 * 20},
 	}
 	expectedAddrs := []uint64{1000, 1500, 2000, 2500}
 
-	for i, expected := range expectedCoords {
-		// Read key: nbytes + filterMask + coords
+	for i := 0; i < 5; i++ { // 4 entries + 1 sentinel
+		// Read key: nbytes + filterMask + 3 coords
 		pos += 4 // Skip nbytes
 		pos += 4 // Skip filter mask
 		coord0 := binary.LittleEndian.Uint64(data[pos:])
 		pos += 8
 		coord1 := binary.LittleEndian.Uint64(data[pos:])
 		pos += 8
+		coord2 := binary.LittleEndian.Uint64(data[pos:])
+		pos += 8
 
-		require.Equal(t, expected[0], coord0, "key %d coord[0]", i)
-		require.Equal(t, expected[1], coord1, "key %d coord[1]", i)
+		if i < 4 {
+			require.Equal(t, expectedByteOffsets[i][0], coord0, "key %d byte offset[0]", i)
+			require.Equal(t, expectedByteOffsets[i][1], coord1, "key %d byte offset[1]", i)
+			require.Equal(t, uint64(0), coord2, "key %d trailing dim should be 0", i)
+		} else {
+			// Sentinel
+			require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), coord0, "sentinel coord0")
+			require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), coord1, "sentinel coord1")
+			require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), coord2, "sentinel coord2")
+		}
 
 		// Read child address (except for sentinel key)
 		if i < len(expectedAddrs) {
@@ -175,8 +201,11 @@ func TestChunkBTreeWriter_2D(t *testing.T) {
 }
 
 // TestChunkBTreeWriter_3D tests 3D chunked dataset.
+// Keys have 4 on-disk dimensions (3 data + 1 trailing datatype size).
 func TestChunkBTreeWriter_3D(t *testing.T) {
-	writer := NewChunkBTreeWriter(3)
+	chunkDims := []uint64{5, 6, 5}
+	elemSize := uint32(2) // uint16
+	writer := NewChunkBTreeWriter(3, chunkDims, elemSize)
 
 	// Add 8 chunks (2x2x2 cube)
 	chunks := []struct {
@@ -214,8 +243,9 @@ func TestChunkBTreeWriter_3D(t *testing.T) {
 	entriesUsed := binary.LittleEndian.Uint16(data[6:8])
 	require.Equal(t, uint16(8), entriesUsed)
 
-	// Verify all 8 chunks are present with interleaved keys and children
-	// Key format: nbytes (4) + filterMask (4) + coord0 (8) + coord1 (8) + coord2 (8)
+	// Verify all 8 chunks are present with interleaved keys and children.
+	// Key format: nbytes (4) + filterMask (4) + coord0 (8) + coord1 (8) + coord2 (8) + coord3_trailing (8)
+	// (4 on-disk dims: 3 data + 1 trailing)
 	pos := 24
 
 	for i := 0; i < 9; i++ { // 8 chunks + 1 sentinel
@@ -227,6 +257,12 @@ func TestChunkBTreeWriter_3D(t *testing.T) {
 		pos += 8 // coord1
 		_ = binary.LittleEndian.Uint64(data[pos:])
 		pos += 8 // coord2
+		trailingDim := binary.LittleEndian.Uint64(data[pos:])
+		pos += 8 // coord3 (trailing datatype size dim)
+
+		if i < 8 {
+			require.Equal(t, uint64(0), trailingDim, "chunk %d trailing dim should be 0", i)
+		}
 
 		// Read child address (except for sentinel)
 		if i < 8 {
@@ -280,8 +316,11 @@ func TestCompareChunkCoords(t *testing.T) {
 }
 
 // TestChunkBTreeWriter_Sorting tests that chunks are sorted correctly.
+// Coordinates are stored as byte offsets on disk.
 func TestChunkBTreeWriter_Sorting(t *testing.T) {
-	writer := NewChunkBTreeWriter(2)
+	chunkDims := []uint64{10, 20}
+	elemSize := uint32(4)
+	writer := NewChunkBTreeWriter(2, chunkDims, elemSize)
 
 	// Add chunks in reverse order
 	coords := [][]uint64{
@@ -302,12 +341,13 @@ func TestChunkBTreeWriter_Sorting(t *testing.T) {
 	addr, err := writer.WriteToFile(mockWriter, mockAllocator)
 	require.NoError(t, err)
 
-	// Verify chunks are sorted in row-major order
-	// Key format: nbytes (4) + filterMask (4) + coord0 (8) + coord1 (8)
+	// Verify chunks are sorted in row-major order.
+	// Key format: nbytes (4) + filterMask (4) + coord0 (8) + coord1 (8) + coord2_trailing (8)
 	data := mockWriter.ReadAt(addr)
 	pos := 24
 
 	// Expected order: [0,0], [0,1], [0,2], [0,3], [1,0], ...
+	// On disk, coords are byte offsets: scaled * chunkDim.
 	for i := 0; i < 4; i++ {
 		for j := 0; j < 4; j++ {
 			pos += 4 // nbytes
@@ -316,19 +356,24 @@ func TestChunkBTreeWriter_Sorting(t *testing.T) {
 			pos += 8
 			coord1 := binary.LittleEndian.Uint64(data[pos:])
 			pos += 8
+			_ = binary.LittleEndian.Uint64(data[pos:])
+			pos += 8 // trailing dim
 			pos += 8 // child address
 
-			require.Equal(t, uint64(i), coord0, "chunk [%d,%d] dim0", i, j)
-			require.Equal(t, uint64(j), coord1, "chunk [%d,%d] dim1", i, j)
+			require.Equal(t, uint64(i)*chunkDims[0], coord0, "chunk [%d,%d] byte offset[0]", i, j)
+			require.Equal(t, uint64(j)*chunkDims[1], coord1, "chunk [%d,%d] byte offset[1]", i, j)
 		}
 	}
 }
 
 // TestChunkBTreeWriter_EdgeChunks tests edge and corner chunks.
+// Coordinates stored as byte offsets on disk.
 func TestChunkBTreeWriter_EdgeChunks(t *testing.T) {
-	writer := NewChunkBTreeWriter(2)
+	chunkDims := []uint64{10, 20}
+	elemSize := uint32(8)
+	writer := NewChunkBTreeWriter(2, chunkDims, elemSize)
 
-	// Add edge chunks (large coordinates)
+	// Add edge chunks (large scaled coordinates)
 	chunks := []struct {
 		coord []uint64
 		addr  uint64
@@ -350,32 +395,37 @@ func TestChunkBTreeWriter_EdgeChunks(t *testing.T) {
 	addr, err := writer.WriteToFile(mockWriter, mockAllocator)
 	require.NoError(t, err)
 
-	// Verify large coordinates are handled correctly
-	// Key format: nbytes (4) + filterMask (4) + coord0 (8) + coord1 (8)
+	// Verify large coordinates are handled correctly.
+	// Key format: nbytes (4) + filterMask (4) + coord0 (8) + coord1 (8) + coord2_trailing (8)
 	data := mockWriter.ReadAt(addr)
 	pos := 24
 
-	expectedCoords := [][]uint64{
-		{0, 0}, {0, 200}, {100, 0}, {100, 200},
+	// Expected byte offsets (scaled * chunkDim), sorted row-major
+	expectedByteOffsets := [][]uint64{
+		{0 * 10, 0 * 20}, {0 * 10, 200 * 20}, {100 * 10, 0 * 20}, {100 * 10, 200 * 20},
 	}
 
-	for i, expected := range expectedCoords {
+	for i, expected := range expectedByteOffsets {
 		pos += 4 // nbytes
 		pos += 4 // filter mask
 		coord0 := binary.LittleEndian.Uint64(data[pos:])
 		pos += 8
 		coord1 := binary.LittleEndian.Uint64(data[pos:])
 		pos += 8
+		_ = binary.LittleEndian.Uint64(data[pos:])
+		pos += 8 // trailing dim
 		pos += 8 // child address
 
-		require.Equal(t, expected[0], coord0, "chunk %d coord[0]", i)
-		require.Equal(t, expected[1], coord1, "chunk %d coord[1]", i)
+		require.Equal(t, expected[0], coord0, "chunk %d byte offset[0]", i)
+		require.Equal(t, expected[1], coord1, "chunk %d byte offset[1]", i)
 	}
 }
 
 // TestChunkBTreeWriter_SingleChunk tests B-tree with single chunk.
 func TestChunkBTreeWriter_SingleChunk(t *testing.T) {
-	writer := NewChunkBTreeWriter(1)
+	chunkDims := []uint64{100}
+	elemSize := uint32(4)
+	writer := NewChunkBTreeWriter(1, chunkDims, elemSize)
 
 	err := writer.AddChunk([]uint64{0}, 5000)
 	require.NoError(t, err)
@@ -393,14 +443,18 @@ func TestChunkBTreeWriter_SingleChunk(t *testing.T) {
 	entriesUsed := binary.LittleEndian.Uint16(data[6:8])
 	require.Equal(t, uint16(1), entriesUsed)
 
-	// Key format: nbytes (4) + filterMask (4) + coord (8)
+	// Key format: nbytes (4) + filterMask (4) + coord0 (8) + coord1_trailing (8)
+	// (2 on-disk dims: 1 data + 1 trailing)
 	pos := 24
 
 	// First key
 	pos += 4 // nbytes
 	pos += 4 // filter mask
-	coord := binary.LittleEndian.Uint64(data[pos:])
-	require.Equal(t, uint64(0), coord)
+	coord0 := binary.LittleEndian.Uint64(data[pos:])
+	require.Equal(t, uint64(0), coord0) // 0 * 100 = 0
+	pos += 8
+	coord1 := binary.LittleEndian.Uint64(data[pos:])
+	require.Equal(t, uint64(0), coord1) // trailing dim = 0
 	pos += 8
 
 	// Single child address
@@ -411,14 +465,17 @@ func TestChunkBTreeWriter_SingleChunk(t *testing.T) {
 	// Sentinel key
 	pos += 4 // nbytes
 	pos += 4 // filter mask
-	sentinel := binary.LittleEndian.Uint64(data[pos:])
-	require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), sentinel)
+	sentinel0 := binary.LittleEndian.Uint64(data[pos:])
+	require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), sentinel0)
+	pos += 8
+	sentinel1 := binary.LittleEndian.Uint64(data[pos:])
+	require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), sentinel1)
 }
 
 // TestChunkBTreeWriter_ErrorCases tests error handling.
 func TestChunkBTreeWriter_ErrorCases(t *testing.T) {
 	t.Run("empty B-tree", func(t *testing.T) {
-		writer := NewChunkBTreeWriter(1)
+		writer := NewChunkBTreeWriter(1, []uint64{10}, 4)
 
 		mockWriter := newMockChunkWriter()
 		mockAllocator := newMockChunkAllocator(1000)
@@ -429,7 +486,7 @@ func TestChunkBTreeWriter_ErrorCases(t *testing.T) {
 	})
 
 	t.Run("dimension mismatch", func(t *testing.T) {
-		writer := NewChunkBTreeWriter(2)
+		writer := NewChunkBTreeWriter(2, []uint64{10, 20}, 4)
 
 		err := writer.AddChunk([]uint64{0, 0, 0}, 1000) // 3D coord for 2D writer
 		require.Error(t, err)
@@ -438,7 +495,9 @@ func TestChunkBTreeWriter_ErrorCases(t *testing.T) {
 }
 
 // TestSerializeChunkBTreeNode tests serialization directly.
+// On disk, keys have onDiskDims dimensions (ndims+1) and store byte offsets.
 func TestSerializeChunkBTreeNode(t *testing.T) {
+	// Keys already have onDiskDims=3 coords (2 data + 1 trailing)
 	node := &ChunkBTreeNode{
 		Signature:    [4]byte{'T', 'R', 'E', 'E'},
 		NodeType:     1,
@@ -447,14 +506,18 @@ func TestSerializeChunkBTreeNode(t *testing.T) {
 		LeftSibling:  0xFFFFFFFFFFFFFFFF,
 		RightSibling: 0xFFFFFFFFFFFFFFFF,
 		Keys: []ChunkKey{
-			{Coords: []uint64{0, 0}, FilterMask: 0, Nbytes: 800},
-			{Coords: []uint64{1, 1}, FilterMask: 0, Nbytes: 800},
-			{Coords: []uint64{0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF}, FilterMask: 0, Nbytes: 0}, // Sentinel
+			{Coords: []uint64{0, 0}, FilterMask: 0, Nbytes: 800},                                                     // scaled [0,0]
+			{Coords: []uint64{1, 1}, FilterMask: 0, Nbytes: 800},                                                     // scaled [1,1]
+			{Coords: []uint64{0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF}, FilterMask: 0, Nbytes: 0}, // Sentinel (3 dims)
 		},
 		ChildAddrs: []uint64{1000, 2000},
 	}
 
-	buf := serializeChunkBTreeNode(node, 2)
+	chunkDims := []uint64{10, 20}
+	elemSize := uint32(8)
+	onDiskDims := 3 // 2 data + 1 trailing
+
+	buf := serializeChunkBTreeNode(node, onDiskDims, chunkDims, elemSize)
 
 	// Verify header
 	require.Equal(t, "TREE", string(buf[0:4]))
@@ -464,8 +527,22 @@ func TestSerializeChunkBTreeNode(t *testing.T) {
 
 	// Calculate expected size
 	// Header: 24 bytes
-	// Keys: 3 keys * (4 + 4 + 2*8) = 3 * 24 = 72 bytes
+	// Keys: 3 keys * (4 + 4 + 3*8) = 3 * 32 = 96 bytes
 	// Children: 2 * 8 = 16 bytes
-	// Total: 24 + 72 + 16 = 112 bytes
-	require.Equal(t, 112, len(buf))
+	// Total: 24 + 96 + 16 = 136 bytes
+	require.Equal(t, 136, len(buf))
+
+	// Verify first key coords are byte offsets
+	pos := 24
+	pos += 4 // nbytes
+	pos += 4 // filter mask
+	coord0 := binary.LittleEndian.Uint64(buf[pos:])
+	pos += 8
+	coord1 := binary.LittleEndian.Uint64(buf[pos:])
+	pos += 8
+	coord2 := binary.LittleEndian.Uint64(buf[pos:])
+
+	require.Equal(t, uint64(0*10), coord0, "key0 byte offset[0]")
+	require.Equal(t, uint64(0*20), coord1, "key0 byte offset[1]")
+	require.Equal(t, uint64(0), coord2, "key0 trailing dim")
 }

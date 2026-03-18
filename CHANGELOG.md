@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.13] - 2026-03-18
+
+### Bug Fix
+
+#### SNOD capacity, local heap expansion, chunk B-tree format (Issue #33, #34, #35)
+
+Fixed 3 bugs affecting groups with many children and chunked dataset interoperability.
+
+**Bug #1: SNOD capacity mismatch (Issue #35)**
+
+Superblock declares `GroupLeafNodeK = 4` (max 8 entries per SNOD), but code allocated capacity
+for 32 entries. The C library reads exactly 328 bytes per SNOD based on K=4 — entries beyond
+the 8th were invisible, causing "ran off the end of the image buffer" errors.
+
+Fix: align SNOD capacity with K=4, implement node splitting in `linkToParent()` when full.
+Groups now support arbitrarily many children via automatic SNOD splitting with B-tree expansion.
+
+Reported by [@vrv-bit](https://github.com/vrv-bit).
+
+**Bug #2: Local heap fixed at 256 bytes (Issue #33)**
+
+`NewLocalHeap(256)` had no expansion mechanism. Groups with ~20+ children or long names hit
+"local heap is full" error. The C library (`H5HL_insert`) doubles and relocates the heap.
+
+Fix: increase default to 4096 bytes, implement heap expansion with relocation in `linkToParent()`.
+
+Reported by [@zhoujun24](https://github.com/zhoujun24).
+
+**Bug #3: Chunk B-tree coordinate format + layout ndims (Issue #34)**
+
+Two problems: (1) B-tree keys stored scaled indices instead of byte offsets — C library expects
+`scaled * chunk_dim` per `H5Dbtree.c`. (2) Layout message `ndims` was missing the +1 for
+datatype size dimension per `H5Dchunk.c:909-913`. Multi-chunk datasets were unreadable.
+
+Fix: multiply coordinates by chunk dimensions on write, append element size as trailing dimension.
+
+Reported by [@zhoujun24](https://github.com/zhoujun24).
+
+**Validation**: 11 new tests covering SNOD splitting (8/9/10/20 entries), long-named children,
+v0 superblock groups, multi-chunk round-trips (1D, 2D, 1000-element). Full test suite green.
+
+---
+
 ## [v0.13.12] - 2026-03-14
 
 ### Enhancement

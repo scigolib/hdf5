@@ -73,12 +73,15 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 	}
 
 	// 7. Create chunked layout message
+	// Per C reference (H5Dchunk.c:909-913), layout stores ndims+1 dimensions
+	// where the last dimension is the datatype element size.
 	layoutData, err := core.EncodeLayoutMessage(
 		core.LayoutChunked,
 		0,            // dataSize not used for chunked
 		btreeAddress, // B-tree address (0 for now)
 		fw.file.sb,
 		config.chunkDims,
+		dtInfo.size, // element size for trailing dimension
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode chunked layout: %w", err)
@@ -237,8 +240,10 @@ func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 	elemSize := dw.dtype.Size
 
 	// 1. Create B-tree writer
+	// Per C reference (H5Dbtree.c:687-690), B-tree keys store byte offsets,
+	// so the writer needs chunk dimensions for the conversion.
 	dimensionality := len(dw.dims)
-	btreeWriter := structures.NewChunkBTreeWriter(dimensionality)
+	btreeWriter := structures.NewChunkBTreeWriter(dimensionality, dw.chunkDims, elemSize)
 
 	// 2. Process each chunk
 	totalChunks := dw.chunkCoordinator.GetTotalChunks()
