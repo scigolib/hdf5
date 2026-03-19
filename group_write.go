@@ -382,11 +382,21 @@ func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint6
 	newBTree := structures.NewBTreeNodeV1(0, groupBTreeK)
 
 	for i := 0; i < numSNODs; i++ {
-		// Left key for this child = offset of first entry in this SNOD (or 0 for first).
-		startIdx := i * snodCapacity
+		// Per C reference H5G__node_create (H5Gnode.c:306-309): initial keys are 0.
+		// Per H5G__node_cmp3 (H5Gnode.c:415): search_name <= left_key returns -1 (before).
+		// Per H5G__node_insert (H5Gnode.c:623): md_key = last entry of LEFT node.
+		//
+		// Key[0] = 0 (empty string sentinel)
+		// Key[i] for i>0 = last entry's name offset in SNOD[i-1] (the boundary between nodes)
+		// This ensures cmp3 returns 0 for names that belong in the RIGHT node.
 		var leftKey uint64
-		if startIdx < len(allEntries) {
-			leftKey = allEntries[startIdx].LinkNameOffset
+		if i > 0 {
+			// Boundary key = last entry of the previous SNOD
+			prevEnd := i * snodCapacity
+			if prevEnd > len(allEntries) {
+				prevEnd = len(allEntries)
+			}
+			leftKey = allEntries[prevEnd-1].LinkNameOffset
 		}
 		if addErr := newBTree.AddKey(leftKey, snodAddrs[i]); addErr != nil {
 			return fmt.Errorf("add B-tree key for SNOD %d: %w", i, addErr)

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.14] - 2026-03-19
+
+### Bug Fix
+
+#### B-tree key semantics for SNOD split (Issue #35 follow-up)
+
+Fixed 2 bugs in the B-tree key layout introduced by the v0.13.13 SNOD splitting implementation.
+Files created by v0.13.13 with any number of datasets were unreadable by h5dump, h5ls, and h5wasm.
+
+**Bug #1: Key[0] was first entry's name offset instead of 0**
+
+Per C reference (`H5G__node_create`, H5Gnode.c:306-309), the left key of the first child must
+always be 0 (the empty string sentinel at heap offset 0). The rewritten `linkToParent()` set it
+to the first entry's name offset, causing `H5G__node_cmp3` to return "before this child" for
+all names, making the entire group invisible.
+
+**Bug #2: Middle key was first entry of right SNOD instead of last entry of left SNOD**
+
+Per C reference (`H5G__node_insert`, H5Gnode.c:623), `md_key->offset = sn->entry[sn->nsyms-1].name_off`
+— the boundary key between two children is the last entry of the LEFT node. Our code used the
+first entry of the right node, causing `H5G__node_cmp3` to fail for names exactly matching the
+boundary (strncmp returns 0, which is <= 0, interpreted as "before this child").
+
+**Validation**: h5dump correctly reads files with 1, 2, 3, 8, 9, 10, and 20 datasets, both at
+root level and inside groups.
+
+Reported by [@vrv-bit](https://github.com/vrv-bit).
+
+---
+
 ## [v0.13.13] - 2026-03-18
 
 ### Bug Fix
