@@ -112,9 +112,11 @@ func TestChunkBTreeWriter_1D(t *testing.T) {
 			// Trailing dimension always 0 for data keys
 			require.Equal(t, uint64(0), coord1, "chunk %d trailing dim", i)
 		} else {
-			// Sentinel max key
-			require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), coord0, "sentinel key coord0")
-			require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), coord1, "sentinel key coord1")
+			// Sentinel key: next chunk position after last entry (coord+1)*chunkDim.
+			// For 10 chunks (indices 0-9) with chunkDim=10: sentinel=(9+1)*10=100.
+			// Element size dim = 0.
+			require.Equal(t, uint64(100), coord0, "sentinel key coord0") // (9+1)*10
+			require.Equal(t, uint64(0), coord1, "sentinel key coord1")   // element size dim
 		}
 		require.Equal(t, uint32(0), filterMask)
 
@@ -185,10 +187,11 @@ func TestChunkBTreeWriter_2D(t *testing.T) {
 			require.Equal(t, expectedByteOffsets[i][1], coord1, "key %d byte offset[1]", i)
 			require.Equal(t, uint64(0), coord2, "key %d trailing dim should be 0", i)
 		} else {
-			// Sentinel
-			require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), coord0, "sentinel coord0")
-			require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), coord1, "sentinel coord1")
-			require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), coord2, "sentinel coord2")
+			// Sentinel: next position after last entry {1,1} → {2,2} in scaled,
+			// byte offsets = {2*10, 2*20} = {20, 40}. Element size dim = 0.
+			require.Equal(t, uint64(20), coord0, "sentinel coord0") // (1+1)*10
+			require.Equal(t, uint64(40), coord1, "sentinel coord1") // (1+1)*20
+			require.Equal(t, uint64(0), coord2, "sentinel coord2")  // element size dim
 		}
 
 		// Read child address (except for sentinel key)
@@ -462,14 +465,14 @@ func TestChunkBTreeWriter_SingleChunk(t *testing.T) {
 	require.Equal(t, uint64(5000), chunkAddr)
 	pos += 8
 
-	// Sentinel key
+	// Sentinel key: next position after {0} → {1} in scaled, byte offset = 1*100 = 100.
 	pos += 4 // nbytes
 	pos += 4 // filter mask
 	sentinel0 := binary.LittleEndian.Uint64(data[pos:])
-	require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), sentinel0)
+	require.Equal(t, uint64(100), sentinel0) // (0+1)*100
 	pos += 8
 	sentinel1 := binary.LittleEndian.Uint64(data[pos:])
-	require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), sentinel1)
+	require.Equal(t, uint64(0), sentinel1) // element size dim
 }
 
 // TestChunkBTreeWriter_ErrorCases tests error handling.
@@ -525,12 +528,12 @@ func TestSerializeChunkBTreeNode(t *testing.T) {
 	require.Equal(t, uint8(0), buf[5])
 	require.Equal(t, uint16(2), binary.LittleEndian.Uint16(buf[6:8]))
 
-	// Calculate expected size
-	// Header: 24 bytes
-	// Keys: 3 keys * (4 + 4 + 3*8) = 3 * 32 = 96 bytes
-	// Children: 2 * 8 = 16 bytes
-	// Total: 24 + 96 + 16 = 136 bytes
-	require.Equal(t, 136, len(buf))
+	// Calculate expected size per C reference (H5B.c:1670-1678):
+	// sizeof_rkey = 4 (nbytes) + 4 (filter_mask) + onDiskDims*8 = 4+4+3*8 = 32
+	// sizeof_rnode = H5B_SIZEOF_HDR(24) + 2K*8 + (2K+1)*sizeof_rkey
+	//             = 24 + 64*8 + 65*32 = 24 + 512 + 2080 = 2616 bytes
+	// (K=32 for chunk B-trees, padded to full capacity)
+	require.Equal(t, 2616, len(buf))
 
 	// Verify first key coords are byte offsets
 	pos := 24

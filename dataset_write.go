@@ -1220,6 +1220,9 @@ type DatasetWriter struct {
 	// layoutBTreeOffset is the file offset where the B-tree address is stored
 	// in the layout message. Used to update the address after writing chunks.
 	layoutBTreeOffset uint64
+	// headerSize is the on-disk size of the V2 object header (used to recompute
+	// Jenkins checksum after patching the B-tree address in chunked datasets).
+	headerSize uint64
 
 	// For RMW scenarios (files opened with OpenForWrite)
 	objectHeader  *core.ObjectHeader         // Full object header (for attribute operations)

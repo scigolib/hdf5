@@ -21,8 +21,9 @@ func createChunkedTestFile(t *testing.T) string {
 		t.Fatalf("CreateForWrite failed: %v", err)
 	}
 
-	// Create chunked dataset: 100x100 with 10x10 chunks = 100 chunks total.
-	dw, err := fw.CreateDataset("/chunked_data", Float64, []uint64{100, 100},
+	// Create chunked dataset: 40x40 with 10x10 chunks = 16 chunks total.
+	// (Must fit in single B-tree leaf: max 2K=64 chunks with K=32.)
+	dw, err := fw.CreateDataset("/chunked_data", Float64, []uint64{40, 40},
 		WithChunkDims([]uint64{10, 10}),
 	)
 	if err != nil {
@@ -30,7 +31,7 @@ func createChunkedTestFile(t *testing.T) string {
 	}
 
 	// Write data.
-	data := make([]float64, 100*100)
+	data := make([]float64, 40*40)
 	for i := range data {
 		data[i] = float64(i)
 	}
