@@ -138,6 +138,24 @@ func (d *Dataset) ReadCompound() ([]core.CompoundValue, error) {
 	return core.ReadDatasetCompound(d.file.osFile, header, d.file.sb)
 }
 
+// ReadVLenBytes reads a variable-length dataset and returns values as [][]byte.
+// Each element in the outer slice corresponds to one dataset element; each inner
+// slice contains the raw bytes of that variable-length sequence.
+//
+// This works for any VLen datatype (VLenUint8, VLenInt32, VLenString, etc.).
+// For typed sequences the caller must interpret the returned bytes according
+// to the base element type and byte order.
+func (d *Dataset) ReadVLenBytes() ([][]byte, error) {
+	// Read object header for this dataset.
+	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	if err != nil {
+		return nil, err
+	}
+
+	// Use the variable-length dataset reader.
+	return core.ReadDatasetVLenBytes(d.file.osFile, header, d.file.sb)
+}
+
 // Info returns metadata about the dataset without reading actual values.
 func (d *Dataset) Info() (string, error) {
 	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)

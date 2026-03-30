@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.15] - 2026-03-30
+
+### Bug Fix
+
+#### VLen datatype encoding + read support (Issue #39)
+
+**Bug #1: `encodeDatatypeVlen` class/version nibbles swapped**
+
+Per C reference (`H5Odtype.c:1439`), byte 0 of datatype messages encodes
+`class (bits 0-3) | version (bits 4-7)`. Our VLen encoder wrote `version | (class << 4)`,
+producing `0x90` for VLen class=9 instead of the correct `0x09`. On readback, `0x90 & 0x0F = 0`
+was misidentified as Fixed-point integer. Additionally, ClassBitField was written at bytes 8-11
+instead of bytes 1-3. All other encode functions (numeric, string, compound, etc.) were correct.
+
+**Bug #2: No VLen read support**
+
+`Read()`, `ReadHyperslab()`, and `ReadSlice()` only supported numeric-to-float64 conversion.
+Added `ReadVLenBytes()` method on `Dataset` that dereferences global heap IDs and returns
+`[][]byte`. Supports compact, contiguous, and chunked layouts.
+
+Reported by [@zhoujun24](https://github.com/zhoujun24).
+
+---
+
 ## [v0.13.14] - 2026-03-19
 
 ### Bug Fix
