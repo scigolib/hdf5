@@ -367,7 +367,6 @@ func createShortPathTempFile(t *testing.T, name string) string {
 	return tmpFile
 }
 
-//nolint:unparam // targetPath parameter designed for reusability in future tests
 func findDataset(f *File, targetPath string) *Dataset {
 	var found *Dataset
 	f.Walk(func(p string, obj Object) {

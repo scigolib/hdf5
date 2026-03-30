@@ -170,22 +170,21 @@ func TestEncodeDatatypeVLen_String(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, data)
 
-	// Verify header: byte 0 is version (low 4) | class (high 4)
-	// Version 0, class 9 (VarLen) => 0x00 | (0x09 << 4) = 0x90
-	require.Equal(t, byte(0x90), data[0])
-
-	// Bytes 1-3 should be reserved (zeros)
-	require.Equal(t, byte(0), data[1])
-	require.Equal(t, byte(0), data[2])
-	require.Equal(t, byte(0), data[3])
+	// C Reference (H5Odtype.c:1438-1442):
+	// Bytes 0-3 = class (bits 0-3) | version (bits 4-7) | ClassBitField (bits 8-31)
+	// Class 9 (VarLen), version 0, ClassBitField 1 (string) =>
+	// uint32 LE = 0x09 | (0 << 4) | (1 << 8) = 0x00000109
+	require.Equal(t, byte(0x09), data[0]) // class=9, version=0
+	require.Equal(t, byte(0x01), data[1]) // ClassBitField bits 8-15: type=1 (string)
+	require.Equal(t, byte(0x00), data[2])
+	require.Equal(t, byte(0x00), data[3])
 
 	// Bytes 4-7: Size (16)
 	size := binary.LittleEndian.Uint32(data[4:8])
 	require.Equal(t, uint32(16), size)
 
-	// Bytes 8-11: ClassBitField (type=1 for string)
-	cbf := binary.LittleEndian.Uint32(data[8:12])
-	require.Equal(t, uint32(1), cbf)
+	// Total: 8 bytes header + 0 bytes properties = 8 bytes
+	require.Equal(t, 8, len(data))
 }
 
 // TestEncodeDatatypeVLen_Int tests encoding a variable-length integer sequence datatype.
@@ -211,22 +210,19 @@ func TestEncodeDatatypeVLen_Int(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, data)
 
-	// Total size: 8 (header) + 4 (ClassBitField) + 4 (base type props) = 16
-	require.Equal(t, 16, len(data))
+	// C Reference: bytes 0-3 = class|version|classBitField, bytes 4-7 = size, bytes 8+ = properties.
+	// Total size: 8 (header) + 4 (base type props) = 12.
+	require.Equal(t, 12, len(data))
 
-	// Verify header
-	require.Equal(t, byte(0x90), data[0]) // Version 0, class 9
+	// Verify header: class=9, version=0, classBitField=0 => byte 0 = 0x09.
+	require.Equal(t, byte(0x09), data[0])
 
-	// Verify size field
+	// Verify size field.
 	size := binary.LittleEndian.Uint32(data[4:8])
 	require.Equal(t, uint32(16), size)
 
-	// Verify ClassBitField (type=0 for sequence)
-	cbf := binary.LittleEndian.Uint32(data[8:12])
-	require.Equal(t, uint32(0), cbf)
-
-	// Verify base type properties are copied
-	require.Equal(t, baseTypeProps, data[12:16])
+	// Verify base type properties start at byte 8 (not 12).
+	require.Equal(t, baseTypeProps, data[8:12])
 }
 
 // TestEncodeDatatypeVLen_UTF8String tests encoding a vlen UTF-8 string.
@@ -246,9 +242,16 @@ func TestEncodeDatatypeVLen_UTF8String(t *testing.T) {
 	data, err := encodeDatatypeVLen(dt)
 	require.NoError(t, err)
 
-	// Verify ClassBitField encodes correctly
-	cbf := binary.LittleEndian.Uint32(data[8:12])
-	require.Equal(t, classBitField, cbf)
+	// C Reference: ClassBitField is packed into bytes 1-3 of the header uint32.
+	// class=9 | version=0<<4 | classBitField<<8 = 0x09 | (0x0101 << 8) = 0x00010109
+	// Bytes: 0x09, 0x01, 0x01, 0x00
+	require.Equal(t, byte(0x09), data[0])
+	require.Equal(t, byte(0x01), data[1]) // ClassBitField bits 0-7: type=1
+	require.Equal(t, byte(0x01), data[2]) // ClassBitField bits 8-15: charset=1 (UTF-8)
+	require.Equal(t, byte(0x00), data[3])
+
+	// Total: 8 bytes (no properties).
+	require.Equal(t, 8, len(data))
 }
 
 // --- Compound Datatype Encoding Tests ---
@@ -412,8 +415,9 @@ func TestEncodeDatatypeVLen_EmptyProperties(t *testing.T) {
 
 	data, err := encodeDatatypeVLen(dt)
 	require.NoError(t, err)
-	// Should be 12 bytes: 8 (header) + 4 (ClassBitField) + 0 (properties)
-	require.Equal(t, 12, len(data))
+	// C Reference: 8 bytes header + 0 properties = 8 bytes.
+	// ClassBitField is packed into header bytes 1-3, not a separate field.
+	require.Equal(t, 8, len(data))
 }
 
 // TestEncodeDatatypeVLen_WithBaseType tests vlen with base type properties.
@@ -433,9 +437,10 @@ func TestEncodeDatatypeVLen_WithBaseType(t *testing.T) {
 
 	data, err := encodeDatatypeVLen(dt)
 	require.NoError(t, err)
-	// Should be 24 bytes: 8 (header) + 4 (ClassBitField) + 12 (base type props)
-	require.Equal(t, 24, len(data))
+	// C Reference: 8 bytes header + 12 properties = 20 bytes.
+	// ClassBitField is packed into header bytes 1-3, not a separate field.
+	require.Equal(t, 20, len(data))
 
-	// Verify base type properties are at the end
-	require.Equal(t, baseTypeProps, data[12:24])
+	// Verify base type properties start at byte 8 (immediately after header).
+	require.Equal(t, baseTypeProps, data[8:20])
 }
