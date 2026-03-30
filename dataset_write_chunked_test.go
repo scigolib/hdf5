@@ -356,14 +356,14 @@ func TestChunkedWrite_2D_MultiChunk(t *testing.T) {
 	require.True(t, found, "dataset /matrix not found")
 }
 
-// TestChunkedWrite_LargeDataset verifies a large 1D dataset with many chunks.
-// 1000 float64 elements, chunk size 10 = 100 chunks. Tests that all chunk
-// coordinates are correctly encoded as byte offsets in the B-tree.
+// TestChunkedWrite_LargeDataset verifies a 1D dataset with many chunks.
+// 640 float64 elements, chunk size 10 = 64 chunks (max for single B-tree leaf, K=32).
+// Tests that all chunk coordinates are correctly encoded as byte offsets.
 func TestChunkedWrite_LargeDataset(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "large_chunked.h5")
 
-	n := uint64(1000)
+	n := uint64(640)
 	chunkSize := uint64(10)
 
 	// Write.

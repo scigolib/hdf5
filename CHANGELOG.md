@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.17] - 2026-03-30
+
+### Bug Fix
+
+#### Chunked dataset h5dump interoperability (Issue #39 follow-up)
+
+Fixed 3 bugs that prevented h5dump from reading chunked dataset data (both VLen and numeric).
+
+**Bug #1: OHDR checksum not recomputed after B-tree address patch**
+
+`writeChunkedData()` patched the B-tree address into the layout message but did not recompute
+the V2 object header's Jenkins checksum. h5dump rejected the header with "incorrect metadata
+checksum". Fix: recompute checksum after patching.
+
+**Bug #2: Chunk B-tree node not padded to sizeof_rnode**
+
+C library reads exactly `sizeof_rnode` bytes (2096 for K=32, 1D dataset) but we allocated only
+the bytes for actual entries (e.g., 112 for 2 chunks). h5dump read past our data into garbage.
+Per C reference (`H5B.c:1670-1678`). Fix: allocate and zero-pad to full `sizeof_rnode`.
+
+**Bug #3: Sentinel key coordinates not divisible by chunk dimensions**
+
+Sentinel key used `0xFFFFFFFFFFFFFFFF` for all coordinates. C library's `H5D__btree_decode_key`
+(`H5Dbtree.c:646`) validates `tmp_offset % layout->dim[u] == 0` — MAX_UINT64 fails this check.
+Fix: use next chunk position after last entry (always divisible by chunk dims).
+
+**Validation**: h5dump reads all chunked datasets correctly — VLen 1D/2D and plain Int32.
+
+---
+
 ## [v0.13.16] - 2026-03-30
 
 ### Bug Fix

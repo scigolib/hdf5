@@ -210,6 +210,7 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 		chunkDims:         config.chunkDims,
 		pipeline:          config.pipeline, // Filter pipeline
 		layoutBTreeOffset: layoutBTreeOffset,
+		headerSize:        headerSize,
 	}, nil
 }
 
@@ -227,7 +228,7 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 // - No compression
 // - Simple B-tree v1.
 //
-//nolint:gocognit,cyclop // Complex by nature: writing chunks + B-tree + updating layout requires multiple steps
+//nolint:gocognit,cyclop,gocyclo // Complex by nature: writing chunks + B-tree + updating layout + checksum recompute
 func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 	if !dw.isChunked {
 		return fmt.Errorf("writeChunkedData called on non-chunked dataset")
@@ -308,6 +309,23 @@ func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 		}
 		if err := dw.fileWriter.writer.WriteAtAddress(addrBuf, dw.layoutBTreeOffset); err != nil {
 			return fmt.Errorf("failed to update B-tree address in layout message: %w", err)
+		}
+
+		// Recompute V2 object header Jenkins checksum after patching the B-tree address.
+		// The checksum covers all bytes from OHDR signature through messages (excluding
+		// the 4-byte checksum itself). Without this, h5dump rejects the header with
+		// "incorrect metadata checksum after all read attempts".
+		checksumSize := uint64(4)
+		dataLen := dw.headerSize - checksumSize
+		ohdrBuf := make([]byte, dataLen)
+		if _, readErr := dw.fileWriter.writer.Reader().ReadAt(ohdrBuf, int64(dw.address)); readErr != nil { //nolint:gosec // G115: address within file bounds
+			return fmt.Errorf("failed to read object header for checksum: %w", readErr)
+		}
+		newChecksum := core.JenkinsChecksum(ohdrBuf)
+		var csumBuf [4]byte
+		binary.LittleEndian.PutUint32(csumBuf[:], newChecksum)
+		if err := dw.fileWriter.writer.WriteAtAddress(csumBuf[:], dw.address+dataLen); err != nil {
+			return fmt.Errorf("failed to write object header checksum: %w", err)
 		}
 	}
 

@@ -179,6 +179,14 @@ func (w *ChunkBTreeWriter) WriteToFile(writer Writer, allocator Allocator) (uint
 		return 0, fmt.Errorf("no chunks to write (empty B-tree)")
 	}
 
+	// Per C reference, a single B-tree leaf node holds at most 2K children (K=32 → 64).
+	// Multi-level B-trees are not yet supported.
+	const chunkBTreeK = 32
+	if len(w.entries) > 2*chunkBTreeK {
+		return 0, fmt.Errorf("too many chunks (%d) for single B-tree leaf node (max %d); multi-level chunk B-tree not yet supported",
+			len(w.entries), 2*chunkBTreeK)
+	}
+
 	// 1. Sort entries by coordinate (row-major)
 	sort.Slice(w.entries, func(i, j int) bool {
 		return compareChunkCoords(w.entries[i].Coordinate, w.entries[j].Coordinate) < 0
@@ -204,17 +212,24 @@ func (w *ChunkBTreeWriter) WriteToFile(writer Writer, allocator Allocator) (uint
 		node.ChildAddrs = append(node.ChildAddrs, entry.Address)
 	}
 
-	// 4. Add max key (B-tree requirement)
-	// The B-tree must have 2K+1 keys for 2K children.
-	// The last key is a sentinel "maximum" key (all dimensions = max uint64).
-	// Per C reference, keys have ndims+1 dimensions (extra dimension for datatype size).
+	// 4. Add sentinel key (B-tree requirement: nchildren+1 keys).
+	// Per C reference (H5Dbtree.c:646), decode_key validates:
+	//   if (0 != (tmp_offset % layout->dim[u])) → error
+	// So sentinel coords MUST be divisible by chunk dims.
+	// Use the "next chunk position" after the last entry as sentinel.
 	onDiskDims := w.dimensionality + 1
-	maxKey := make([]uint64, onDiskDims)
-	for i := range maxKey {
-		maxKey[i] = ^uint64(0) // Max value
+	sentinelCoords := make([]uint64, onDiskDims)
+	if len(w.entries) > 0 {
+		lastEntry := w.entries[len(w.entries)-1]
+		for i := 0; i < w.dimensionality && i < len(lastEntry.Coordinate); i++ {
+			// Next chunk position = last coord + 1 (in scaled units).
+			// Will be multiplied by chunkDim during serialization.
+			sentinelCoords[i] = lastEntry.Coordinate[i] + 1
+		}
+		// Last dimension (element size) stays 0.
 	}
 	node.Keys = append(node.Keys, ChunkKey{
-		Coords:     maxKey,
+		Coords:     sentinelCoords,
 		FilterMask: 0,
 	})
 
@@ -261,15 +276,19 @@ func (w *ChunkBTreeWriter) WriteToFile(writer Writer, allocator Allocator) (uint
 // Note: We use fixed 8-byte addresses (offsetSize=8) for simplicity in MVP.
 // Future versions may support variable offsetSize from superblock.
 func serializeChunkBTreeNode(node *ChunkBTreeNode, onDiskDims int, chunkDims []uint64, _ uint32) []byte {
-	// Size calculation per HDF5 spec:
-	// - keySize = 4 (nbytes) + 4 (filter_mask) + onDiskDims*8 (coords as byte offsets)
-	// - Format: key0, child0, key1, child1, ..., keyN (final sentinel key)
-	keySize := 4 + 4 + onDiskDims*8          // nbytes + filter_mask + coords
-	keysSize := len(node.Keys) * keySize     // All keys (including sentinel)
-	childrenSize := len(node.ChildAddrs) * 8 // All children (8 bytes each)
-	totalSize := 24 + keysSize + childrenSize
+	// Per C reference (H5B.c:1670-1678, H5Dbtree.c:773-776):
+	// The C library always reads sizeof_rnode bytes from disk, computed as:
+	//   sizeof_rkey = 4 (nbytes) + 4 (filter_mask) + onDiskDims*8 (coords)
+	//   sizeof_rnode = H5B_SIZEOF_HDR(24) + 2K*sizeof_addr(8) + (2K+1)*sizeof_rkey
+	// Default K for chunk B-trees = 32 (HDF5_BTREE_CHUNK_IK_DEF).
+	// The buffer MUST be exactly sizeof_rnode bytes, zero-padded for unused slots.
+	const chunkBTreeK = 32
+	const offsetSize = 8 // sizeof_addr
+	keySize := 4 + 4 + onDiskDims*8
+	twoK := 2 * chunkBTreeK
+	totalSize := 24 + twoK*offsetSize + (twoK+1)*keySize
 
-	buf := make([]byte, totalSize)
+	buf := make([]byte, totalSize) // zero-initialized — unused slots are zeros
 	pos := 0
 
 	// Header
