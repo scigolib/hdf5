@@ -236,10 +236,19 @@ func TestVLenHeapIDStorage(t *testing.T) {
 		t.Fatalf("ReadAt failed: %v", err)
 	}
 
-	// Verify heap IDs are non-zero
-	heapAddr1 := binary.LittleEndian.Uint64(heapIDData[0:8])
-	heapIdx1 := binary.LittleEndian.Uint32(heapIDData[8:12])
+	// VLen on-disk format (C ref: H5Tvlen.c:876):
+	//   Bytes 0-3:   seq_len (uint32 LE)
+	//   Bytes 4-11:  heap_address (uint64 LE)
+	//   Bytes 12-15: object_index (uint32 LE)
 
+	// Verify first heap ID.
+	seqLen1 := binary.LittleEndian.Uint32(heapIDData[0:4])
+	heapAddr1 := binary.LittleEndian.Uint64(heapIDData[4:12])
+	heapIdx1 := binary.LittleEndian.Uint32(heapIDData[12:16])
+
+	if seqLen1 != uint32(len("first")) {
+		t.Errorf("First seq_len: got %d, want %d", seqLen1, len("first"))
+	}
 	if heapAddr1 == 0 {
 		t.Error("First heap address is zero")
 	}
@@ -247,9 +256,14 @@ func TestVLenHeapIDStorage(t *testing.T) {
 		t.Error("First heap index is zero")
 	}
 
-	heapAddr2 := binary.LittleEndian.Uint64(heapIDData[16:24])
-	heapIdx2 := binary.LittleEndian.Uint32(heapIDData[24:28])
+	// Verify second heap ID.
+	seqLen2 := binary.LittleEndian.Uint32(heapIDData[16:20])
+	heapAddr2 := binary.LittleEndian.Uint64(heapIDData[20:28])
+	heapIdx2 := binary.LittleEndian.Uint32(heapIDData[28:32])
 
+	if seqLen2 != uint32(len("second")) {
+		t.Errorf("Second seq_len: got %d, want %d", seqLen2, len("second"))
+	}
 	if heapAddr2 == 0 {
 		t.Error("Second heap address is zero")
 	}
@@ -257,13 +271,13 @@ func TestVLenHeapIDStorage(t *testing.T) {
 		t.Error("Second heap index is zero")
 	}
 
-	// Verify data is in global heap
+	// Verify data is in global heap.
 	ghc, err := core.ReadGlobalHeapCollection(f.Reader(), heapAddr1, 8)
 	if err != nil {
 		t.Fatalf("ReadGlobalHeapCollection failed: %v", err)
 	}
 
-	// Check first string
+	// Check first string.
 	obj1, err := ghc.GetObject(heapIdx1)
 	if err != nil {
 		t.Fatalf("GetObject(1) failed: %v", err)
@@ -272,7 +286,7 @@ func TestVLenHeapIDStorage(t *testing.T) {
 		t.Errorf("First string mismatch: expected 'first', got '%s'", string(obj1.Data))
 	}
 
-	// Check second string
+	// Check second string.
 	obj2, err := ghc.GetObject(heapIdx2)
 	if err != nil {
 		t.Fatalf("GetObject(2) failed: %v", err)
@@ -327,6 +341,8 @@ func TestVLenUint32(t *testing.T) {
 }
 
 // TestVLenUint8 tests uint8 variable-length byte arrays.
+//
+//nolint:gocognit // Test with subtests and raw byte verification is inherently complex.
 func TestVLenUint8(t *testing.T) {
 	filename := "test_vlen_uint8.h5"
 	fw, err := CreateForWrite(filename, CreateTruncate)
@@ -378,8 +394,15 @@ func TestVLenUint8(t *testing.T) {
 
 	for i, expected := range ragged {
 		t.Run(fmt.Sprintf("element_%d", i), func(t *testing.T) {
-			heapAddr := binary.LittleEndian.Uint64(heapIDData[i*16 : i*16+8])
-			heapIdx := binary.LittleEndian.Uint32(heapIDData[i*16+8 : i*16+12])
+			// VLen on-disk format: seq_len(4) + addr(8) + idx(4) = 16 bytes.
+			base := i * 16
+			seqLen := binary.LittleEndian.Uint32(heapIDData[base : base+4])
+			heapAddr := binary.LittleEndian.Uint64(heapIDData[base+4 : base+12])
+			heapIdx := binary.LittleEndian.Uint32(heapIDData[base+12 : base+16])
+
+			if seqLen != uint32(len(expected)) {
+				t.Errorf("seq_len mismatch: got %d, want %d", seqLen, len(expected))
+			}
 
 			ghc, err := core.ReadGlobalHeapCollection(f.Reader(), heapAddr, 8)
 			if err != nil {

@@ -34,10 +34,17 @@ type globalHeapObjectBuilder struct {
 }
 
 // HeapID identifies a global heap object (collection address + object index).
-// Format: 8 bytes address + 4 bytes index (stored as 12 bytes in file, padded to 16).
+// On-disk VLen format (C ref: H5Tvlen.c:300, H5Tvlen.c:876):
+//
+//	seq_len (4 bytes) + heap_address (8 bytes) + object_index (4 bytes) = 16 bytes
+//
+// SeqLen is the number of elements in the variable-length sequence.
+// For VLen strings, SeqLen = string length in bytes (characters).
+// For VLen sequences (e.g., []int32), SeqLen = number of elements.
 type HeapID struct {
 	CollectionAddress uint64
 	ObjectIndex       uint16
+	SeqLen            uint32 // Number of elements in the VLen sequence
 }
 
 // newGlobalHeapWriter creates a new global heap writer.
@@ -210,8 +217,11 @@ func (ghw *globalHeapWriter) encodeHeapCollection() []byte {
 
 		offset += 4 // Reserved
 
-		// Free space size (remaining space minus this header)
-		freeSpaceSize := heap.freeSpace - 16
+		// Free space size: for idx=0 (free space marker), the C library's GCOL parser
+		// uses size directly as the advance amount (H5HGcache.c:358: need = obj[0].size).
+		// This differs from regular objects where need = H5HG_SIZEOF_OBJHDR + aligned_data_size.
+		// So free space size must include the 16-byte object header.
+		freeSpaceSize := heap.freeSpace
 		binary.LittleEndian.PutUint64(buf[offset:], freeSpaceSize)
 		offset += 8
 	}
@@ -221,13 +231,17 @@ func (ghw *globalHeapWriter) encodeHeapCollection() []byte {
 	return buf
 }
 
-// Encode encodes a heap ID to 16 bytes (HDF5 vlen reference format).
-// Format: 8 bytes address + 4 bytes index + 4 bytes padding.
+// Encode encodes a heap ID to 16 bytes (HDF5 vlen on-disk format).
+// Format (C ref: H5Tvlen.c:876, H5Tvlen.c:300):
+//
+//	Bytes 0-3:  seq_len (uint32 LE) — number of elements in sequence
+//	Bytes 4-11: heap_address (uint64 LE) — global heap collection address
+//	Bytes 12-15: object_index (uint32 LE) — index within the collection
 func (hid HeapID) Encode() []byte {
 	buf := make([]byte, 16)
-	binary.LittleEndian.PutUint64(buf[0:8], hid.CollectionAddress)
-	binary.LittleEndian.PutUint32(buf[8:12], uint32(hid.ObjectIndex))
-	// Bytes 12-15 are padding (already zeros)
+	binary.LittleEndian.PutUint32(buf[0:4], hid.SeqLen)
+	binary.LittleEndian.PutUint64(buf[4:12], hid.CollectionAddress)
+	binary.LittleEndian.PutUint32(buf[12:16], uint32(hid.ObjectIndex))
 	return buf
 }
 
@@ -240,7 +254,7 @@ func (ghc *globalHeapCollectionBuilder) hasSpace(objectSize uint64) bool {
 func (ghc *globalHeapCollectionBuilder) addObject(data []byte) uint16 {
 	obj := &globalHeapObjectBuilder{
 		index:    ghc.nextIndex,
-		refCount: 1, // New objects have refcount 1
+		refCount: 0, // C library writes 0 on insert (H5HG.c:324), increments via H5HG_link()
 		data:     data,
 	}
 
