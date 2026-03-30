@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.16] - 2026-03-30
+
+### Bug Fix
+
+#### VLen h5dump/h5ls full interoperability (Issue #39 follow-up)
+
+Fixed remaining VLen interoperability issues so h5dump can fully read VLen data, not just headers.
+
+**Bug #1: VLen datatype version 0 (must be >= 1)**
+
+Per C reference (`H5Odtype.c:151`), version must be >= `H5O_DTYPE_VERSION_1`. Our VLen encoder
+used version 0, causing immediate rejection by the C library's datatype decoder.
+
+**Bug #2: VLen Heap ID missing seq_len prefix**
+
+Per C reference (`H5Tvlen.c:876`), VLen disk format is `seq_len(4) + addr(8) + idx(4)`.
+Our encoder wrote `addr(8) + idx(4) + padding(4)`, causing the C library to parse our address
+bytes as the sequence length (garbage value).
+
+**Bug #3: VLen reader didn't skip seq_len**
+
+The dataset VLen reader passed all 16 bytes to `ParseGlobalHeapReference` without skipping
+the 4-byte seq_len prefix. The attribute reader (`attribute.go:367`) already did this correctly.
+
+**Bug #4: Global Heap free space object size off by 16**
+
+Per C reference (`H5HGcache.c:358`), for free space objects (idx=0), `need = obj[0].size`
+directly — the size field already includes the 16-byte object header. Our encoder subtracted
+16, leaving a gap of zero bytes that caused the C library's GCOL parser to enter an infinite
+loop (idx=0, size=0, pointer never advances).
+
+**Bug #5: Global Heap object refCount 1 instead of 0**
+
+Per C reference (`H5HG.c:324`), newly inserted objects have `nrefs = 0`. Changed for strict
+format conformance.
+
+**Validation**: h5dump displays VLen data correctly: `(1, 2, 3), (255), (0, 171)`.
+h5ls shows `variable length of native unsigned char`. Full round-trip verified.
+
+Reported by [@zhoujun24](https://github.com/zhoujun24).
+
+---
+
 ## [v0.13.15] - 2026-03-30
 
 ### Bug Fix

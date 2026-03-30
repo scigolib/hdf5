@@ -125,7 +125,12 @@ func ReadDatasetVLenBytes(r io.ReaderAt, header *ObjectHeader, sb *Superblock) (
 			return nil, fmt.Errorf("heap ID %d extends beyond data", i)
 		}
 
-		heapRef, err := ParseGlobalHeapReference(rawData[idStart:idStart+heapIDSize], offsetSize)
+		// VLen on-disk format (C ref: H5Tvlen.c:300, H5Tvlen.c:728):
+		//   Bytes 0-3:  seq_len (uint32 LE) — number of elements in sequence
+		//   Bytes 4-11: heap_address (offset_size bytes)
+		//   Bytes 12-15: object_index (4 bytes)
+		// Skip the first 4 bytes (seq_len) to get to the global heap reference.
+		heapRef, err := ParseGlobalHeapReference(rawData[idStart+4:idStart+heapIDSize], offsetSize)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse heap reference for element %d: %w", i, err)
 		}

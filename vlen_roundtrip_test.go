@@ -53,15 +53,16 @@ func TestVLenUint8_Encode_ByteCheck(t *testing.T) {
 	firstByte := readVLenDatatypeFirstByte(t, filename)
 
 	// C Reference (H5Odtype.c:1439): byte 0 = (class & 0x0F) | (version << 4).
-	// For VLen class=9, version=0: byte 0 = 0x09.
+	// For VLen class=9, version=1: byte 0 = 0x19.
+	// C ref: H5Odtype.c:151 rejects version < H5O_DTYPE_VERSION_1 (= 1).
 	class := firstByte & 0x0F
 	version := (firstByte >> 4) & 0x0F
 
 	if class != 9 {
 		t.Errorf("VLen datatype class: got %d (byte=0x%02X), want 9", class, firstByte)
 	}
-	if version != 0 {
-		t.Errorf("VLen datatype version: got %d, want 0", version)
+	if version != 1 {
+		t.Errorf("VLen datatype version: got %d, want 1", version)
 	}
 	if firstByte == 0x90 {
 		t.Error("BUG: first byte is 0x90 (class/version nibbles are SWAPPED)")

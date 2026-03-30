@@ -395,7 +395,7 @@ type vlenTypeHandler struct {
 }
 
 func (h *vlenTypeHandler) GetInfo(_ *datasetConfig) (*datatypeInfo, error) {
-	// VLen datasets always store 16-byte heap IDs (8 address + 4 index + 4 padding)
+	// VLen datasets always store 16-byte heap IDs (4 seq_len + 8 address + 4 index)
 	// Don't set baseType here - VLen is the actual type for data writing
 	return &datatypeInfo{
 		class: core.DatatypeVarLen,
@@ -453,7 +453,7 @@ func (h *vlenTypeHandler) EncodeDatatypeMessage(_ *datatypeInfo) ([]byte, error)
 
 	msg := &core.DatatypeMessage{
 		Class:         core.DatatypeVarLen,
-		Version:       0,  // Version 0 for VLen
+		Version:       1,  // Version 1 minimum for VLen (C ref: H5Odtype.c:151 rejects version < 1)
 		Size:          16, // Heap ID size
 		ClassBitField: classBitField,
 		Properties:    baseTypeMsg, // Nested base type message
@@ -1361,6 +1361,9 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 			if err != nil {
 				return fmt.Errorf("write string %d to heap: %w", i, err)
 			}
+			// For VLen strings, seq_len = string length in bytes (characters).
+			// C ref: H5Tvlen.c:876 — UINT32ENCODE(vl, seq_len) where seq_len = nchars.
+			heapID.SeqLen = uint32(len(str)) //nolint:gosec // G115: string length fits in uint32
 			heapIDs[i] = heapID
 		}
 
@@ -1382,6 +1385,7 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 			if err != nil {
 				return fmt.Errorf("write int32 sequence %d to heap: %w", i, err)
 			}
+			heapID.SeqLen = uint32(len(seq)) //nolint:gosec // G115: sequence length fits in uint32
 			heapIDs[i] = heapID
 		}
 
@@ -1401,6 +1405,7 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 			if err != nil {
 				return fmt.Errorf("write int64 sequence %d to heap: %w", i, err)
 			}
+			heapID.SeqLen = uint32(len(seq)) //nolint:gosec // G115: sequence length fits in uint32
 			heapIDs[i] = heapID
 		}
 
@@ -1420,6 +1425,7 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 			if err != nil {
 				return fmt.Errorf("write uint32 sequence %d to heap: %w", i, err)
 			}
+			heapID.SeqLen = uint32(len(seq)) //nolint:gosec // G115: sequence length fits in uint32
 			heapIDs[i] = heapID
 		}
 
@@ -1439,6 +1445,7 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 			if err != nil {
 				return fmt.Errorf("write uint64 sequence %d to heap: %w", i, err)
 			}
+			heapID.SeqLen = uint32(len(seq)) //nolint:gosec // G115: sequence length fits in uint32
 			heapIDs[i] = heapID
 		}
 
@@ -1458,6 +1465,7 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 			if err != nil {
 				return fmt.Errorf("write float32 sequence %d to heap: %w", i, err)
 			}
+			heapID.SeqLen = uint32(len(seq)) //nolint:gosec // G115: sequence length fits in uint32
 			heapIDs[i] = heapID
 		}
 
@@ -1477,6 +1485,7 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 			if err != nil {
 				return fmt.Errorf("write float64 sequence %d to heap: %w", i, err)
 			}
+			heapID.SeqLen = uint32(len(seq)) //nolint:gosec // G115: sequence length fits in uint32
 			heapIDs[i] = heapID
 		}
 
@@ -1492,6 +1501,7 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 			if err != nil {
 				return fmt.Errorf("write uint8 sequence %d to heap: %w", i, err)
 			}
+			heapID.SeqLen = uint32(len(seq)) //nolint:gosec // G115: sequence length fits in uint32
 			heapIDs[i] = heapID
 		}
 
@@ -1499,7 +1509,7 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 		return fmt.Errorf("unsupported vlen data type: %T (expected []string or [][]numeric)", data)
 	}
 
-	// Encode heap IDs to bytes (16 bytes each: 8 addr + 4 index + 4 padding)
+	// Encode heap IDs to bytes (16 bytes each: 4 seq_len + 8 addr + 4 index)
 	heapIDData := make([]byte, len(heapIDs)*16)
 	for i, hid := range heapIDs {
 		encoded := hid.Encode() // Returns 16 bytes

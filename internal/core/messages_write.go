@@ -374,7 +374,7 @@ func encodeDatatypeCompound(dt *DatatypeMessage) ([]byte, error) {
 //	Bits 4-7:  Padding type (for strings only)
 //	Bits 8-11: Character set (for strings: 0=ASCII, 1=UTF-8)
 func encodeDatatypeVLen(dt *DatatypeMessage) ([]byte, error) {
-	// Version 0 for VLen (most common).
+	// Version must be >= 1 for VLen (C ref: H5Odtype.c:151 rejects version < 1).
 	version := dt.Version
 
 	// Build message: 8-byte header + base type properties (no separate ClassBitField field).

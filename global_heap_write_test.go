@@ -2,6 +2,7 @@ package hdf5
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"testing"
 
@@ -316,34 +317,35 @@ func TestMultipleHeapCollections(t *testing.T) {
 	}
 }
 
-// TestHeapIDEncoding tests encoding heap IDs to 16-byte format.
+// TestHeapIDEncoding tests encoding heap IDs to 16-byte VLen format.
+// C ref: H5Tvlen.c:876 — format is seq_len(4) + addr(8) + idx(4) = 16 bytes.
 func TestHeapIDEncoding(t *testing.T) {
 	heapID := HeapID{
 		CollectionAddress: 0x123456789ABCDEF0,
 		ObjectIndex:       0x1234,
+		SeqLen:            42,
 	}
 
 	encoded := heapID.Encode()
 
-	// Should be 16 bytes
+	// Should be 16 bytes.
 	if len(encoded) != 16 {
 		t.Errorf("Expected 16 bytes, got %d", len(encoded))
 	}
 
-	// First 8 bytes: address (little-endian)
-	if encoded[0] != 0xF0 || encoded[7] != 0x12 {
-		t.Errorf("Address encoding incorrect: %x", encoded[0:8])
+	// First 4 bytes: seq_len (little-endian).
+	seqLen := binary.LittleEndian.Uint32(encoded[0:4])
+	if seqLen != 42 {
+		t.Errorf("SeqLen encoding incorrect: got %d, want 42", seqLen)
 	}
 
-	// Next 4 bytes: index (little-endian)
-	if encoded[8] != 0x34 || encoded[9] != 0x12 {
-		t.Errorf("Index encoding incorrect: %x", encoded[8:12])
+	// Next 8 bytes: address (little-endian).
+	if encoded[4] != 0xF0 || encoded[11] != 0x12 {
+		t.Errorf("Address encoding incorrect: %x", encoded[4:12])
 	}
 
-	// Last 4 bytes: padding (zeros)
-	for i := 12; i < 16; i++ {
-		if encoded[i] != 0 {
-			t.Errorf("Padding byte %d is not zero: %d", i, encoded[i])
-		}
+	// Last 4 bytes: index (little-endian).
+	if encoded[12] != 0x34 || encoded[13] != 0x12 {
+		t.Errorf("Index encoding incorrect: %x", encoded[12:16])
 	}
 }
