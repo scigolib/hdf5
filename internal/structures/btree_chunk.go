@@ -339,9 +339,10 @@ func (w *ChunkBTreeWriter) buildMultiLevelTree(writer Writer, allocator Allocato
 	// --- Internal levels (level 1, 2, ...) ---
 	level := uint8(1)
 	for len(children) > 1 {
-		children, _ = w.writeInternalLevel(writer, allocator, children, level, nodeSize)
-		if len(children) == 0 {
-			return 0, fmt.Errorf("failed to build internal level %d", level)
+		var err error
+		children, err = w.writeInternalLevel(writer, allocator, children, level, nodeSize)
+		if err != nil {
+			return 0, fmt.Errorf("failed to build internal level %d: %w", level, err)
 		}
 		level++
 	}
