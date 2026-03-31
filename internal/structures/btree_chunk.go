@@ -6,6 +6,11 @@ import (
 	"sort"
 )
 
+// chunkBTreeK is the B-tree "K" parameter for chunked datasets.
+// Per C reference (H5Dbtree.c), HDF5_BTREE_CHUNK_IK_DEF = 32.
+// Each node holds at most 2K = 64 children.
+const chunkBTreeK = 32
+
 // ChunkBTreeNode represents B-tree v1 node for chunk indexing.
 // Format matches HDF5 specification for raw data chunk B-tree.
 //
@@ -179,77 +184,249 @@ func (w *ChunkBTreeWriter) WriteToFile(writer Writer, allocator Allocator) (uint
 		return 0, fmt.Errorf("no chunks to write (empty B-tree)")
 	}
 
-	// Per C reference, a single B-tree leaf node holds at most 2K children (K=32 → 64).
-	// Multi-level B-trees are not yet supported.
-	const chunkBTreeK = 32
-	if len(w.entries) > 2*chunkBTreeK {
-		return 0, fmt.Errorf("too many chunks (%d) for single B-tree leaf node (max %d); multi-level chunk B-tree not yet supported",
-			len(w.entries), 2*chunkBTreeK)
-	}
-
-	// 1. Sort entries by coordinate (row-major)
+	// 1. Sort entries by coordinate (row-major).
 	sort.Slice(w.entries, func(i, j int) bool {
 		return compareChunkCoords(w.entries[i].Coordinate, w.entries[j].Coordinate) < 0
 	})
 
-	// 2. Build node
-	node := &ChunkBTreeNode{
-		Signature:    [4]byte{'T', 'R', 'E', 'E'},
-		NodeType:     1,                      // Raw Data Chunk (NOT 0 like groups!)
-		NodeLevel:    0,                      // Leaf
-		EntriesUsed:  uint16(len(w.entries)), //nolint:gosec // G115: HDF5 limits B-tree entries to uint16
-		LeftSibling:  0xFFFFFFFFFFFFFFFF,     // Undefined (no siblings)
-		RightSibling: 0xFFFFFFFFFFFFFFFF,     // Undefined (no siblings)
+	maxPerNode := 2 * chunkBTreeK // 64
+
+	// 2. If entries fit in a single leaf, write a single node (fast path).
+	if len(w.entries) <= maxPerNode {
+		return w.writeSingleLeaf(writer, allocator)
 	}
 
-	// 3. Add keys and addresses
-	for _, entry := range w.entries {
+	// 3. Multi-level: build bottom-up.
+	return w.buildMultiLevelTree(writer, allocator)
+}
+
+// writeSingleLeaf writes all entries as a single leaf node (level 0).
+// This is the original behavior for datasets with at most 64 chunks.
+func (w *ChunkBTreeWriter) writeSingleLeaf(writer Writer, allocator Allocator) (uint64, error) {
+	onDiskDims := w.dimensionality + 1
+
+	node := w.buildLeafNode(w.entries, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)
+	buf := serializeChunkBTreeNode(node, onDiskDims, w.chunkDims, w.elementSize)
+
+	addr, err := allocator.Allocate(uint64(len(buf)))
+	if err != nil {
+		return 0, fmt.Errorf("failed to allocate space for B-tree: %w", err)
+	}
+
+	if err := writer.WriteAtAddress(buf, addr); err != nil {
+		return 0, fmt.Errorf("failed to write B-tree at address %d: %w", addr, err)
+	}
+
+	return addr, nil
+}
+
+// buildLeafNode creates a ChunkBTreeNode (level 0) from the given entries
+// with specified sibling addresses.
+func (w *ChunkBTreeWriter) buildLeafNode(entries []ChunkBTreeEntry, leftSibling, rightSibling uint64) *ChunkBTreeNode {
+	onDiskDims := w.dimensionality + 1
+
+	node := &ChunkBTreeNode{
+		Signature:    [4]byte{'T', 'R', 'E', 'E'},
+		NodeType:     1,
+		NodeLevel:    0,
+		EntriesUsed:  uint16(len(entries)), //nolint:gosec // G115: HDF5 limits B-tree entries to uint16
+		LeftSibling:  leftSibling,
+		RightSibling: rightSibling,
+	}
+
+	for _, entry := range entries {
 		node.Keys = append(node.Keys, ChunkKey{
 			Coords:     entry.Coordinate,
-			FilterMask: 0, // No filters in Phase 1
+			FilterMask: 0,
 			Nbytes:     entry.Nbytes,
 		})
 		node.ChildAddrs = append(node.ChildAddrs, entry.Address)
 	}
 
-	// 4. Add sentinel key (B-tree requirement: nchildren+1 keys).
-	// Per C reference (H5Dbtree.c:646), decode_key validates:
-	//   if (0 != (tmp_offset % layout->dim[u])) → error
-	// So sentinel coords MUST be divisible by chunk dims.
-	// Use the "next chunk position" after the last entry as sentinel.
-	onDiskDims := w.dimensionality + 1
+	// Sentinel key: next chunk position after last entry.
 	sentinelCoords := make([]uint64, onDiskDims)
-	if len(w.entries) > 0 {
-		lastEntry := w.entries[len(w.entries)-1]
+	if len(entries) > 0 {
+		lastEntry := entries[len(entries)-1]
 		for i := 0; i < w.dimensionality && i < len(lastEntry.Coordinate); i++ {
-			// Next chunk position = last coord + 1 (in scaled units).
-			// Will be multiplied by chunkDim during serialization.
 			sentinelCoords[i] = lastEntry.Coordinate[i] + 1
 		}
-		// Last dimension (element size) stays 0.
 	}
 	node.Keys = append(node.Keys, ChunkKey{
 		Coords:     sentinelCoords,
 		FilterMask: 0,
 	})
 
-	// 5. Serialize
-	// Per C reference (H5Dbtree.c:687-690), keys use ndims+1 dimensions
-	// and store byte offsets (scaled * chunkDim), not raw scaled indices.
-	buf := serializeChunkBTreeNode(node, onDiskDims, w.chunkDims, w.elementSize)
+	return node
+}
 
-	// 6. Allocate space
-	addr, err := allocator.Allocate(uint64(len(buf)))
-	if err != nil {
-		return 0, fmt.Errorf("failed to allocate space for B-tree: %w", err)
+// internalChild holds address and boundary keys for a child node in an internal B-tree node.
+type internalChild struct {
+	addr     uint64   // File address of child node.
+	firstKey ChunkKey // First key of the child (left boundary).
+	lastKey  ChunkKey // Sentinel key of the child (right boundary).
+}
+
+// buildMultiLevelTree constructs a multi-level B-tree v1 bottom-up.
+//
+// Algorithm:
+//  1. Partition sorted entries into groups of at most 2K (64) entries.
+//  2. For each group, build a leaf node (level 0) with sibling links.
+//  3. Allocate addresses for all leaf nodes, then serialize and write them.
+//  4. Build internal levels (level 1, 2, ...) from child node metadata until
+//     only one root node remains.
+//  5. Return root node address.
+func (w *ChunkBTreeWriter) buildMultiLevelTree(writer Writer, allocator Allocator) (uint64, error) {
+	maxPerNode := 2 * chunkBTreeK
+	onDiskDims := w.dimensionality + 1
+
+	// --- Level 0: leaf nodes ---
+
+	// Partition entries into groups.
+	var leafGroups [][]ChunkBTreeEntry
+	for i := 0; i < len(w.entries); i += maxPerNode {
+		end := i + maxPerNode
+		if end > len(w.entries) {
+			end = len(w.entries)
+		}
+		leafGroups = append(leafGroups, w.entries[i:end])
 	}
 
-	// 7. Write to file
-	if err := writer.WriteAtAddress(buf, addr); err != nil {
-		return 0, fmt.Errorf("failed to write B-tree at address %d: %w", addr, err)
+	// Compute node size (same for all nodes regardless of level).
+	// Per C reference (H5B.c:1670-1678):
+	//   sizeof_rkey = 4 + 4 + onDiskDims*8
+	//   sizeof_rnode = 24 + 2K*8 + (2K+1)*sizeof_rkey
+	keySize := 4 + 4 + onDiskDims*8
+	nodeSize := uint64(24 + 2*chunkBTreeK*8 + (2*chunkBTreeK+1)*keySize) //nolint:gosec // G115: constant expression, no overflow risk
+
+	// Pass 1: allocate addresses for all leaf nodes.
+	leafAddrs := make([]uint64, len(leafGroups))
+	for i := range leafGroups {
+		addr, err := allocator.Allocate(nodeSize)
+		if err != nil {
+			return 0, fmt.Errorf("failed to allocate leaf node %d: %w", i, err)
+		}
+		leafAddrs[i] = addr
 	}
 
-	return addr, nil
+	// Pass 2: build, serialize and write each leaf node with correct sibling links.
+	children := make([]internalChild, len(leafGroups))
+	for i, group := range leafGroups {
+		leftSib := uint64(0xFFFFFFFFFFFFFFFF)
+		rightSib := uint64(0xFFFFFFFFFFFFFFFF)
+		if i > 0 {
+			leftSib = leafAddrs[i-1]
+		}
+		if i < len(leafGroups)-1 {
+			rightSib = leafAddrs[i+1]
+		}
+
+		node := w.buildLeafNode(group, leftSib, rightSib)
+		buf := serializeChunkBTreeNode(node, onDiskDims, w.chunkDims, w.elementSize)
+
+		if err := writer.WriteAtAddress(buf, leafAddrs[i]); err != nil {
+			return 0, fmt.Errorf("failed to write leaf node %d at address %d: %w", i, leafAddrs[i], err)
+		}
+
+		// Record child metadata for parent internal node.
+		// firstKey = first key of this leaf, lastKey = sentinel (last key).
+		children[i] = internalChild{
+			addr:     leafAddrs[i],
+			firstKey: node.Keys[0],
+			lastKey:  node.Keys[len(node.Keys)-1],
+		}
+	}
+
+	// --- Internal levels (level 1, 2, ...) ---
+	level := uint8(1)
+	for len(children) > 1 {
+		children, _ = w.writeInternalLevel(writer, allocator, children, level, nodeSize)
+		if len(children) == 0 {
+			return 0, fmt.Errorf("failed to build internal level %d", level)
+		}
+		level++
+	}
+
+	// The single remaining child is the root.
+	return children[0].addr, nil
+}
+
+// writeInternalLevel builds and writes one level of internal B-tree nodes from
+// the given child list. Returns a new (smaller) child list for the next level.
+func (w *ChunkBTreeWriter) writeInternalLevel(
+	writer Writer,
+	allocator Allocator,
+	children []internalChild,
+	level uint8,
+	nodeSize uint64,
+) ([]internalChild, error) {
+	maxPerNode := 2 * chunkBTreeK
+	onDiskDims := w.dimensionality + 1
+
+	// Partition children into groups of at most 2K.
+	var groups [][]internalChild
+	for i := 0; i < len(children); i += maxPerNode {
+		end := i + maxPerNode
+		if end > len(children) {
+			end = len(children)
+		}
+		groups = append(groups, children[i:end])
+	}
+
+	// Pass 1: allocate addresses for all internal nodes at this level.
+	nodeAddrs := make([]uint64, len(groups))
+	for i := range groups {
+		addr, err := allocator.Allocate(nodeSize)
+		if err != nil {
+			return nil, fmt.Errorf("failed to allocate internal node level %d, node %d: %w", level, i, err)
+		}
+		nodeAddrs[i] = addr
+	}
+
+	// Pass 2: build, serialize, and write each internal node.
+	result := make([]internalChild, len(groups))
+	for i, group := range groups {
+		leftSib := uint64(0xFFFFFFFFFFFFFFFF)
+		rightSib := uint64(0xFFFFFFFFFFFFFFFF)
+		if i > 0 {
+			leftSib = nodeAddrs[i-1]
+		}
+		if i < len(groups)-1 {
+			rightSib = nodeAddrs[i+1]
+		}
+
+		node := &ChunkBTreeNode{
+			Signature:    [4]byte{'T', 'R', 'E', 'E'},
+			NodeType:     1,
+			NodeLevel:    level,
+			EntriesUsed:  uint16(len(group)), //nolint:gosec // G115: HDF5 limits B-tree entries to uint16
+			LeftSibling:  leftSib,
+			RightSibling: rightSib,
+		}
+
+		// Internal node keys: key[i] = first key of child[i] (boundary key).
+		// The sentinel (last key) = sentinel of the rightmost child.
+		for _, child := range group {
+			node.Keys = append(node.Keys, child.firstKey)
+			node.ChildAddrs = append(node.ChildAddrs, child.addr)
+		}
+		// Sentinel: use the sentinel (lastKey) from the last child in this group.
+		node.Keys = append(node.Keys, group[len(group)-1].lastKey)
+
+		buf := serializeChunkBTreeNode(node, onDiskDims, w.chunkDims, w.elementSize)
+
+		if err := writer.WriteAtAddress(buf, nodeAddrs[i]); err != nil {
+			return nil, fmt.Errorf("failed to write internal node level %d, node %d at address %d: %w",
+				level, i, nodeAddrs[i], err)
+		}
+
+		result[i] = internalChild{
+			addr:     nodeAddrs[i],
+			firstKey: node.Keys[0],
+			lastKey:  node.Keys[len(node.Keys)-1],
+		}
+	}
+
+	return result, nil
 }
 
 // serializeChunkBTreeNode serializes node to bytes.
@@ -282,7 +459,6 @@ func serializeChunkBTreeNode(node *ChunkBTreeNode, onDiskDims int, chunkDims []u
 	//   sizeof_rnode = H5B_SIZEOF_HDR(24) + 2K*sizeof_addr(8) + (2K+1)*sizeof_rkey
 	// Default K for chunk B-trees = 32 (HDF5_BTREE_CHUNK_IK_DEF).
 	// The buffer MUST be exactly sizeof_rnode bytes, zero-padded for unused slots.
-	const chunkBTreeK = 32
 	const offsetSize = 8 // sizeof_addr
 	keySize := 4 + 4 + onDiskDims*8
 	twoK := 2 * chunkBTreeK

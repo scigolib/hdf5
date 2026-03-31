@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.18] - 2026-03-31
+
+### Bug Fix
+
+#### Multi-level chunk B-tree — remove 64-chunk limit (Issue #39 follow-up)
+
+v0.13.17 introduced a 64-chunk hard limit (single B-tree leaf node, K=32) that blocked users
+with large datasets. The C library handles this with multi-level B-trees, splitting full nodes
+and adding internal levels automatically.
+
+Implemented bottom-up B-tree construction: sorted entries are partitioned into leaf nodes (max 64
+each), internal nodes are built from leaf addresses with correct boundary keys and sibling links,
+recursing until a single root remains. Supports arbitrary depth (64 chunks at depth 0, 4096 at
+depth 1, 262K at depth 2).
+
+Reverted workaround chunk dimension changes in filter and iterator tests back to original values.
+
+**Validation**: h5dump reads files with 100, 200, and 1594 chunks correctly. All existing tests
+restored to original chunk sizes and passing.
+
+Reported by [@zhoujun24](https://github.com/zhoujun24).
+
+---
+
 ## [v0.13.17] - 2026-03-30
 
 ### Bug Fix

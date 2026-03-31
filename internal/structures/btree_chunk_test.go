@@ -497,6 +497,217 @@ func TestChunkBTreeWriter_ErrorCases(t *testing.T) {
 	})
 }
 
+// TestChunkBTreeWriter_MultiLevel_65Chunks tests the minimum multi-level case:
+// 65 entries require 2 leaf nodes + 1 root internal node (level 1).
+func TestChunkBTreeWriter_MultiLevel_65Chunks(t *testing.T) {
+	chunkDims := []uint64{10}
+	elemSize := uint32(4) // int32
+	writer := NewChunkBTreeWriter(1, chunkDims, elemSize)
+
+	// Add 65 chunks (scaled indices 0..64). This exceeds the 64-entry single leaf limit.
+	for i := uint64(0); i < 65; i++ {
+		err := writer.AddChunk([]uint64{i}, 1000+i*80)
+		require.NoError(t, err)
+	}
+
+	mockWriter := newMockChunkWriter()
+	mockAllocator := newMockChunkAllocator(100000)
+
+	rootAddr, err := writer.WriteToFile(mockWriter, mockAllocator)
+	require.NoError(t, err)
+
+	// Root node should be an internal node (level 1).
+	rootData := mockWriter.ReadAt(rootAddr)
+	require.NotEmpty(t, rootData)
+	require.Equal(t, "TREE", string(rootData[0:4]))
+	require.Equal(t, uint8(1), rootData[4]) // Node type = chunk
+	require.Equal(t, uint8(1), rootData[5]) // Node level = 1 (internal)
+	rootEntries := binary.LittleEndian.Uint16(rootData[6:8])
+	require.Equal(t, uint16(2), rootEntries) // 2 children (2 leaf nodes)
+
+	// Parse root's children addresses.
+	onDiskDims := 2 // 1D + trailing
+	keySize := 4 + 4 + onDiskDims*8
+	pos := 24
+
+	// key[0], child[0], key[1], child[1], key[2] (sentinel)
+	pos += keySize // skip key[0]
+	child0Addr := binary.LittleEndian.Uint64(rootData[pos:])
+	pos += 8
+	pos += keySize // skip key[1]
+	child1Addr := binary.LittleEndian.Uint64(rootData[pos:])
+
+	// Both children should be leaf nodes (level 0).
+	child0Data := mockWriter.ReadAt(child0Addr)
+	require.NotEmpty(t, child0Data)
+	require.Equal(t, "TREE", string(child0Data[0:4]))
+	require.Equal(t, uint8(0), child0Data[5]) // level 0 = leaf
+	child0Entries := binary.LittleEndian.Uint16(child0Data[6:8])
+	require.Equal(t, uint16(64), child0Entries) // First leaf: 64 entries
+
+	child1Data := mockWriter.ReadAt(child1Addr)
+	require.NotEmpty(t, child1Data)
+	require.Equal(t, "TREE", string(child1Data[0:4]))
+	require.Equal(t, uint8(0), child1Data[5]) // level 0 = leaf
+	child1Entries := binary.LittleEndian.Uint16(child1Data[6:8])
+	require.Equal(t, uint16(1), child1Entries) // Second leaf: 1 entry
+
+	// Verify sibling links: child0.right = child1, child1.left = child0.
+	child0RightSib := binary.LittleEndian.Uint64(child0Data[16:24])
+	require.Equal(t, child1Addr, child0RightSib, "child0 right sibling should point to child1")
+	child1LeftSib := binary.LittleEndian.Uint64(child1Data[8:16])
+	require.Equal(t, child0Addr, child1LeftSib, "child1 left sibling should point to child0")
+
+	// Outer siblings should be UNDEF.
+	child0LeftSib := binary.LittleEndian.Uint64(child0Data[8:16])
+	require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), child0LeftSib)
+	child1RightSib := binary.LittleEndian.Uint64(child1Data[16:24])
+	require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), child1RightSib)
+
+	// Total entries across leaves = 64 + 1 = 65.
+	require.Equal(t, uint16(65), child0Entries+child1Entries)
+}
+
+// TestChunkBTreeWriter_MultiLevel_100Chunks tests multi-level with 100 entries
+// (2 leaf nodes: 64 + 36).
+func TestChunkBTreeWriter_MultiLevel_100Chunks(t *testing.T) {
+	chunkDims := []uint64{8}
+	elemSize := uint32(4)
+	writer := NewChunkBTreeWriter(1, chunkDims, elemSize)
+
+	for i := uint64(0); i < 100; i++ {
+		err := writer.AddChunk([]uint64{i}, 2000+i*40)
+		require.NoError(t, err)
+	}
+
+	mockWriter := newMockChunkWriter()
+	mockAllocator := newMockChunkAllocator(50000)
+
+	rootAddr, err := writer.WriteToFile(mockWriter, mockAllocator)
+	require.NoError(t, err)
+
+	// Root should be internal (level 1) with 2 children.
+	rootData := mockWriter.ReadAt(rootAddr)
+	require.Equal(t, uint8(1), rootData[5]) // level 1
+	rootEntries := binary.LittleEndian.Uint16(rootData[6:8])
+	require.Equal(t, uint16(2), rootEntries)
+
+	// Parse children and verify entry distribution.
+	onDiskDims := 2
+	keySize := 4 + 4 + onDiskDims*8
+	pos := 24 + keySize // skip key[0]
+	child0Addr := binary.LittleEndian.Uint64(rootData[pos:])
+	pos += 8 + keySize // skip child[0] + key[1]
+	child1Addr := binary.LittleEndian.Uint64(rootData[pos:])
+
+	child0Entries := binary.LittleEndian.Uint16(mockWriter.ReadAt(child0Addr)[6:8])
+	child1Entries := binary.LittleEndian.Uint16(mockWriter.ReadAt(child1Addr)[6:8])
+
+	require.Equal(t, uint16(100), child0Entries+child1Entries)
+	require.Equal(t, uint16(64), child0Entries)
+	require.Equal(t, uint16(36), child1Entries)
+}
+
+// TestChunkBTreeWriter_MultiLevel_200Chunks tests multi-level with 200 entries
+// (4 leaf nodes: 64 + 64 + 64 + 8).
+func TestChunkBTreeWriter_MultiLevel_200Chunks(t *testing.T) {
+	chunkDims := []uint64{5}
+	elemSize := uint32(8)
+	writer := NewChunkBTreeWriter(1, chunkDims, elemSize)
+
+	// Add 200 entries with known addresses.
+	for i := uint64(0); i < 200; i++ {
+		err := writer.AddChunkWithSize([]uint64{i}, 3000+i*40, 40)
+		require.NoError(t, err)
+	}
+
+	mockWriter := newMockChunkWriter()
+	mockAllocator := newMockChunkAllocator(80000)
+
+	rootAddr, err := writer.WriteToFile(mockWriter, mockAllocator)
+	require.NoError(t, err)
+
+	// Root should be level 1 (internal) with 4 children (ceil(200/64) = 4).
+	rootData := mockWriter.ReadAt(rootAddr)
+	require.Equal(t, "TREE", string(rootData[0:4]))
+	require.Equal(t, uint8(1), rootData[5]) // level 1
+	rootEntries := binary.LittleEndian.Uint16(rootData[6:8])
+	require.Equal(t, uint16(4), rootEntries)
+
+	// Collect all leaf entries from all children and verify every chunk address is present.
+	onDiskDims := 2 // 1D + trailing
+	keySize := 4 + 4 + onDiskDims*8
+	pos := 24
+
+	totalLeafEntries := uint16(0)
+	for i := 0; i < int(rootEntries); i++ {
+		pos += keySize // skip key[i]
+		childAddr := binary.LittleEndian.Uint64(rootData[pos:])
+		pos += 8
+
+		childData := mockWriter.ReadAt(childAddr)
+		require.Equal(t, uint8(0), childData[5], "child %d should be leaf (level 0)", i)
+		entries := binary.LittleEndian.Uint16(childData[6:8])
+		totalLeafEntries += entries
+	}
+
+	require.Equal(t, uint16(200), totalLeafEntries, "total entries across all leaves should be 200")
+
+	// Verify that leaf nodes have correct sibling chains.
+	// Re-read children for sibling verification.
+	pos = 24
+	childAddrs := make([]uint64, rootEntries)
+	for i := 0; i < int(rootEntries); i++ {
+		pos += keySize
+		childAddrs[i] = binary.LittleEndian.Uint64(rootData[pos:])
+		pos += 8
+	}
+
+	for i, addr := range childAddrs {
+		data := mockWriter.ReadAt(addr)
+		leftSib := binary.LittleEndian.Uint64(data[8:16])
+		rightSib := binary.LittleEndian.Uint64(data[16:24])
+
+		if i == 0 {
+			require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), leftSib, "first leaf left sibling should be UNDEF")
+		} else {
+			require.Equal(t, childAddrs[i-1], leftSib, "leaf %d left sibling mismatch", i)
+		}
+
+		if i == len(childAddrs)-1 {
+			require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), rightSib, "last leaf right sibling should be UNDEF")
+		} else {
+			require.Equal(t, childAddrs[i+1], rightSib, "leaf %d right sibling mismatch", i)
+		}
+	}
+}
+
+// TestChunkBTreeWriter_MultiLevel_2D tests multi-level tree with 2D coordinates.
+func TestChunkBTreeWriter_MultiLevel_2D(t *testing.T) {
+	chunkDims := []uint64{10, 10}
+	elemSize := uint32(4)
+	writer := NewChunkBTreeWriter(2, chunkDims, elemSize)
+
+	// Create a 10x10 grid of chunks = 100 total (exceeds 64 single-leaf limit).
+	for i := uint64(0); i < 10; i++ {
+		for j := uint64(0); j < 10; j++ {
+			err := writer.AddChunk([]uint64{i, j}, 5000+(i*10+j)*400)
+			require.NoError(t, err)
+		}
+	}
+
+	mockWriter := newMockChunkWriter()
+	mockAllocator := newMockChunkAllocator(200000)
+
+	rootAddr, err := writer.WriteToFile(mockWriter, mockAllocator)
+	require.NoError(t, err)
+
+	rootData := mockWriter.ReadAt(rootAddr)
+	require.Equal(t, uint8(1), rootData[5], "root should be internal (level 1)")
+	rootEntries := binary.LittleEndian.Uint16(rootData[6:8])
+	require.Equal(t, uint16(2), rootEntries, "100 entries should produce 2 leaf nodes")
+}
+
 // TestSerializeChunkBTreeNode tests serialization directly.
 // On disk, keys have onDiskDims dimensions (ndims+1) and store byte offsets.
 func TestSerializeChunkBTreeNode(t *testing.T) {
