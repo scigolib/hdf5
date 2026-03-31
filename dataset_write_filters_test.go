@@ -16,7 +16,7 @@ func TestChunkedDatasetWithGZIP(t *testing.T) {
 	require.NoError(t, err)
 
 	ds, err := file.CreateDataset("/data", Int32, []uint64{100, 100},
-		WithChunkDims([]uint64{25, 25}), // 16 chunks (must fit in single B-tree leaf, max 64)
+		WithChunkDims([]uint64{10, 10}),
 		WithGZIPCompression(6))
 	require.NoError(t, err)
 
@@ -138,7 +138,7 @@ func TestChunkedDatasetWithAllFilters(t *testing.T) {
 	require.NoError(t, err)
 
 	ds, err := file.CreateDataset("/data", Float32, []uint64{200, 200},
-		WithChunkDims([]uint64{50, 50}), // 16 chunks (must fit in single B-tree leaf, max 64)
+		WithChunkDims([]uint64{20, 20}),
 		WithShuffle(),
 		WithGZIPCompression(6),
 		WithFletcher32())
@@ -474,7 +474,7 @@ func TestChunkedDatasetSmallChunks(t *testing.T) {
 
 	// Small chunks (10 elements each)
 	ds, err := file.CreateDataset("/data", Int32, []uint64{1000},
-		WithChunkDims([]uint64{200}), // 50 chunks (must fit in single B-tree leaf, max 64)
+		WithChunkDims([]uint64{10}),
 		WithGZIPCompression(6))
 	require.NoError(t, err)
 
@@ -541,7 +541,7 @@ func TestChunkedDataset2DWithFilters(t *testing.T) {
 	require.NoError(t, err)
 
 	ds, err := file.CreateDataset("/image", Uint8, []uint64{100, 100},
-		WithChunkDims([]uint64{25, 25}), // 16 chunks (must fit in single B-tree leaf, max 64)
+		WithChunkDims([]uint64{10, 10}),
 		WithShuffle(),
 		WithGZIPCompression(6),
 		WithFletcher32())

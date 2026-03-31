@@ -357,13 +357,13 @@ func TestChunkedWrite_2D_MultiChunk(t *testing.T) {
 }
 
 // TestChunkedWrite_LargeDataset verifies a 1D dataset with many chunks.
-// 640 float64 elements, chunk size 10 = 64 chunks (max for single B-tree leaf, K=32).
+// 1000 float64 elements, chunk size 10 = 100 chunks (exercises multi-level B-tree).
 // Tests that all chunk coordinates are correctly encoded as byte offsets.
 func TestChunkedWrite_LargeDataset(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "large_chunked.h5")
 
-	n := uint64(640)
+	n := uint64(1000)
 	chunkSize := uint64(10)
 
 	// Write.
@@ -409,4 +409,56 @@ func TestChunkedWrite_LargeDataset(t *testing.T) {
 		}
 	})
 	require.True(t, found, "dataset /large not found")
+}
+
+// TestChunkedWrite_MultiLevel_RoundTrip writes a dataset with 100 chunks
+// (exceeds 64-entry single leaf limit), reads it back, and verifies all data.
+func TestChunkedWrite_MultiLevel_RoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "multi_level_roundtrip.h5")
+
+	// 200 int32 elements with chunk size 2 = 100 chunks.
+	n := 200
+	expected := make([]int32, n)
+	for i := range expected {
+		expected[i] = int32(i * 3)
+	}
+
+	func() {
+		fw, err := CreateForWrite(filename, CreateTruncate)
+		require.NoError(t, err)
+		defer func() { _ = fw.Close() }()
+
+		ds, err := fw.CreateDataset("/data", Int32, []uint64{uint64(n)},
+			WithChunkDims([]uint64{2}))
+		require.NoError(t, err)
+
+		err = ds.Write(expected)
+		require.NoError(t, err)
+
+		// Verify 100 chunks created.
+		require.Equal(t, uint64(100), ds.chunkCoordinator.GetTotalChunks())
+
+		require.NoError(t, fw.Close())
+	}()
+
+	// Read back and verify all data.
+	f, err := Open(filename)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	var found bool
+	f.Walk(func(path string, obj Object) {
+		if ds, ok := obj.(*Dataset); ok && path == "/data" {
+			found = true
+			values, err := ds.Read()
+			require.NoError(t, err)
+			require.Len(t, values, n, "should have %d elements", n)
+
+			for i, v := range values {
+				require.InDelta(t, float64(expected[i]), v, 0.5, "element %d mismatch", i)
+			}
+		}
+	})
+	require.True(t, found, "dataset /data not found")
 }
