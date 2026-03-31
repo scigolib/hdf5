@@ -2,6 +2,7 @@ package structures
 
 import (
 	"encoding/binary"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -759,4 +760,165 @@ func TestSerializeChunkBTreeNode(t *testing.T) {
 	require.Equal(t, uint64(0*10), coord0, "key0 byte offset[0]")
 	require.Equal(t, uint64(0*20), coord1, "key0 byte offset[1]")
 	require.Equal(t, uint64(0), coord2, "key0 trailing dim")
+}
+
+// --- Error path and edge case coverage ---
+
+// failingAllocator returns error after N successful allocations.
+type failingAllocator struct {
+	remaining int
+	nextAddr  uint64
+}
+
+func (f *failingAllocator) Allocate(size uint64) (uint64, error) {
+	if f.remaining <= 0 {
+		return 0, fmt.Errorf("allocator exhausted")
+	}
+	f.remaining--
+	addr := f.nextAddr
+	f.nextAddr += size
+	return addr, nil
+}
+
+// failingWriter returns error on write.
+type failingWriter struct{}
+
+func (f *failingWriter) WriteAtAddress(_ []byte, _ uint64) error {
+	return fmt.Errorf("write failed")
+}
+
+func TestChunkBTreeWriter_SingleLeaf_AllocError(t *testing.T) {
+	writer := NewChunkBTreeWriter(1, []uint64{10}, 4)
+	_ = writer.AddChunk([]uint64{0}, 1000)
+
+	alloc := &failingAllocator{remaining: 0, nextAddr: 5000}
+	_, err := writer.WriteToFile(&failingWriter{}, alloc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "allocate")
+}
+
+func TestChunkBTreeWriter_SingleLeaf_WriteError(t *testing.T) {
+	writer := NewChunkBTreeWriter(1, []uint64{10}, 4)
+	_ = writer.AddChunk([]uint64{0}, 1000)
+
+	alloc := newMockChunkAllocator(5000)
+	_, err := writer.WriteToFile(&failingWriter{}, alloc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "write")
+}
+
+func TestChunkBTreeWriter_MultiLevel_AllocError(t *testing.T) {
+	writer := NewChunkBTreeWriter(1, []uint64{10}, 4)
+	for i := uint64(0); i < 65; i++ {
+		_ = writer.AddChunk([]uint64{i}, 1000+i)
+	}
+
+	// Fail on first leaf allocation
+	alloc := &failingAllocator{remaining: 0, nextAddr: 5000}
+	_, err := writer.WriteToFile(newMockChunkWriter(), alloc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "allocate leaf")
+}
+
+func TestChunkBTreeWriter_MultiLevel_WriteError(t *testing.T) {
+	writer := NewChunkBTreeWriter(1, []uint64{10}, 4)
+	for i := uint64(0); i < 65; i++ {
+		_ = writer.AddChunk([]uint64{i}, 1000+i)
+	}
+
+	// Allocations succeed, writes fail
+	alloc := newMockChunkAllocator(5000)
+	_, err := writer.WriteToFile(&failingWriter{}, alloc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "write leaf")
+}
+
+func TestChunkBTreeWriter_MultiLevel_InternalAllocError(t *testing.T) {
+	writer := NewChunkBTreeWriter(1, []uint64{10}, 4)
+	for i := uint64(0); i < 65; i++ {
+		_ = writer.AddChunk([]uint64{i}, 1000+i)
+	}
+
+	// 2 leaf allocs succeed, internal alloc fails
+	alloc := &failingAllocator{remaining: 2, nextAddr: 5000}
+	_, err := writer.WriteToFile(newMockChunkWriter(), alloc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "allocate internal")
+}
+
+func TestChunkBTreeWriter_MultiLevel_InternalWriteError(t *testing.T) {
+	writer := NewChunkBTreeWriter(1, []uint64{10}, 4)
+	for i := uint64(0); i < 65; i++ {
+		_ = writer.AddChunk([]uint64{i}, 1000+i)
+	}
+
+	// Writer fails after leaf writes succeed (on internal node write).
+	failAfter := &failAfterNWriter{inner: newMockChunkWriter(), remaining: 2} // 2 leaves OK, internal fails
+	alloc := newMockChunkAllocator(5000)
+	_, err := writer.WriteToFile(failAfter, alloc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "write internal")
+}
+
+// failAfterNWriter succeeds for first N writes, then fails.
+type failAfterNWriter struct {
+	inner     *mockChunkWriter
+	remaining int
+}
+
+func (f *failAfterNWriter) WriteAtAddress(data []byte, address uint64) error {
+	if f.remaining <= 0 {
+		return fmt.Errorf("write failed after limit")
+	}
+	f.remaining--
+	return f.inner.WriteAtAddress(data, address)
+}
+
+// TestChunkBTreeWriter_MultiLevel_InternalSiblingLinks verifies sibling links
+// on the internal level when there are >64 leaves (need 2+ internal nodes).
+func TestChunkBTreeWriter_MultiLevel_InternalSiblingLinks(t *testing.T) {
+	// 4160 chunks → 65 leaf nodes → 2 internal nodes + 1 root (level 2).
+	// This exercises sibling links on the internal level (level 1).
+	writer := NewChunkBTreeWriter(1, []uint64{1}, 4)
+	for i := uint64(0); i < 4160; i++ {
+		require.NoError(t, writer.AddChunk([]uint64{i}, 10000+i))
+	}
+
+	mockWriter := newMockChunkWriter()
+	alloc := newMockChunkAllocator(100000)
+
+	rootAddr, err := writer.WriteToFile(mockWriter, alloc)
+	require.NoError(t, err)
+
+	// Root should be at level 2.
+	rootBuf := mockWriter.ReadAt(rootAddr)
+	require.NotEmpty(t, rootBuf)
+	rootLevel := rootBuf[5]
+	require.Equal(t, uint8(2), rootLevel, "root should be level 2 for 4160 chunks")
+
+	rootEntries := binary.LittleEndian.Uint16(rootBuf[6:8])
+	require.Equal(t, uint16(2), rootEntries, "root should have 2 internal children")
+
+	// Check internal node sibling links.
+	// First internal child: left=UNDEF, right=second internal child addr.
+	keySize := 4 + 4 + 2*8 // onDiskDims=2 for 1D dataset
+	child0Addr := binary.LittleEndian.Uint64(rootBuf[24+keySize:])
+	child1Addr := binary.LittleEndian.Uint64(rootBuf[24+keySize+8+keySize:])
+
+	child0Buf := mockWriter.ReadAt(child0Addr)
+	child1Buf := mockWriter.ReadAt(child1Addr)
+	require.NotEmpty(t, child0Buf)
+	require.NotEmpty(t, child1Buf)
+
+	// child0: left=UNDEF, right=child1
+	child0Left := binary.LittleEndian.Uint64(child0Buf[8:16])
+	child0Right := binary.LittleEndian.Uint64(child0Buf[16:24])
+	require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), child0Left, "first internal node left should be UNDEF")
+	require.Equal(t, child1Addr, child0Right, "first internal node right should point to second")
+
+	// child1: left=child0, right=UNDEF
+	child1Left := binary.LittleEndian.Uint64(child1Buf[8:16])
+	child1Right := binary.LittleEndian.Uint64(child1Buf[16:24])
+	require.Equal(t, child0Addr, child1Left, "second internal node left should point to first")
+	require.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), child1Right, "second internal node right should be UNDEF")
 }
