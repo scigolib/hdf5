@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2026-03-31 | **Current Version**: v0.13.18 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.18 RELEASED! (2026-03-31) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2026-04-05 | **Current Version**: v0.13.19 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.19 RELEASED! (2026-04-05) → v1.0.0 LTS (Q3 2026)
 
 ---
 
@@ -74,6 +74,8 @@ v0.13.16 (BUGFIX - VLen h5dump interop + GCOL fix) ✅ RELEASED 2026-03-30
 v0.13.17 (BUGFIX - chunked B-tree h5dump interop) ✅ RELEASED 2026-03-30
          ↓ (multi-level B-tree)
 v0.13.18 (BUGFIX - multi-level chunk B-tree) ✅ RELEASED 2026-03-31
+         ↓ (OHDR continuation + VLen string attrs)
+v0.13.19 (BUGFIX - OHDR continuation + []string attrs) ✅ RELEASED 2026-04-05
          ↓ (maintenance continues)
 v0.13.x (maintenance phase) → Stable maintenance, bug fixes, minor enhancements
          ↓ (6-9 months production validation)

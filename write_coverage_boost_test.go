@@ -1447,22 +1447,47 @@ func TestWriteCov_CreateCompoundDataset_ChunkedError(t *testing.T) {
 }
 
 // TestWriteCov_WriteAttribute_StringSlice tests writing string slice attribute.
-// String slices are not supported as attribute values (only scalar strings).
+// String slices ([]string) are supported via variable-length string encoding (Global Heap).
 func TestWriteCov_WriteAttribute_StringSlice(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "attr_string_slice.h5")
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
 	require.NoError(t, err)
-	defer func() { _ = fw.Close() }()
 
 	ds, err := fw.CreateDataset("/data", Float64, []uint64{5})
 	require.NoError(t, err)
 
-	// String slices are not supported - should error.
+	// String slices are now supported (Issue #46).
 	err = ds.WriteAttribute("labels", []string{"foo", "bar"})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported")
+	require.NoError(t, err)
+
+	err = fw.Close()
+	require.NoError(t, err)
+
+	// Verify round-trip.
+	f, err := Open(filename)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	var foundDS *Dataset
+	f.Walk(func(path string, obj Object) {
+		if d, ok := obj.(*Dataset); ok && path == "/data" {
+			foundDS = d
+		}
+	})
+	require.NotNil(t, foundDS)
+
+	attrs, attrErr := foundDS.Attributes()
+	require.NoError(t, attrErr)
+	require.Len(t, attrs, 1)
+
+	val, readErr := attrs[0].ReadValue()
+	require.NoError(t, readErr)
+
+	got, ok := val.([]string)
+	require.True(t, ok, "expected []string, got %T", val)
+	require.Equal(t, []string{"foo", "bar"}, got)
 }
 
 // TestWriteCov_WriteAttribute_SliceValues tests writing various slice types as attributes.

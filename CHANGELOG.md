@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [v0.13.19] - 2026-04-05
+
+### Enhancement
+
+#### Variable-length string attribute support (Issue #46)
+
+Added `[]string` support in `WriteAttribute()` for both groups and datasets. Strings are stored
+via Global Heap (same format as VLen string datasets). h5dump displays them as
+`H5T_VARIABLE` / `STRPAD H5T_STR_NULLTERM`.
+
+```go
+group.WriteAttribute("topics", []string{"camera_front", "camera_back", "lidar"})
+```
+
+Reported by [@zhoujun24](https://github.com/zhoujun24).
 
 ### Bug Fix
 

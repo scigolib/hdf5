@@ -54,6 +54,7 @@ type GroupWriter struct {
 //   - Scalars: int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64
 //   - Arrays: []int32, []float64, etc. (1D arrays only)
 //   - Strings: string (fixed-length, converted to byte array)
+//   - String arrays: []string (variable-length strings via Global Heap)
 //
 // Parameters:
 //   - name: Attribute name (ASCII, no null bytes)
@@ -68,9 +69,9 @@ type GroupWriter struct {
 //	group.WriteAttribute("MATLAB_class", "double")
 //	group.WriteAttribute("MATLAB_complex", uint8(1))
 //	group.WriteAttribute("description", "Temperature measurements")
+//	group.WriteAttribute("topics", []string{"camera", "lidar", "imu"})
 //
 // Limitations:
-//   - No variable-length strings
 //   - No compound types
 //   - Attributes cannot be modified after creation (write-once)
 //   - No attribute deletion

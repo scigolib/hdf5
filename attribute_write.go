@@ -30,6 +30,7 @@ const (
 //   - Scalars: int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64
 //   - Arrays: []int32, []float64, etc. (1D arrays only)
 //   - Strings: string (fixed-length, converted to byte array)
+//   - String arrays: []string (variable-length strings via Global Heap)
 //
 // Parameters:
 //   - name: Attribute name (ASCII, no null bytes)
@@ -44,9 +45,9 @@ const (
 //	ds.WriteAttribute("units", "Celsius")
 //	ds.WriteAttribute("sensor_id", int32(42))
 //	ds.WriteAttribute("calibration", []float64{1.0, 0.0})
+//	ds.WriteAttribute("topics", []string{"camera", "lidar", "imu"})
 //
 // Limitations:
-//   - No variable-length strings
 //   - No compound types
 //   - Attributes cannot be modified after creation (write-once)
 //   - No attribute deletion
@@ -256,15 +257,10 @@ func writeAttribute(fw *FileWriter, objectAddr uint64, name string, value interf
 // This prevents corruption of adjacent structures when attributes are added.
 func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
-	// 1. Infer datatype and encode attribute.
-	datatype, dataspace, err := inferDatatypeFromValue(value)
+	// 1. Infer datatype and encode attribute (handles []string via Global Heap).
+	datatype, dataspace, data, err := inferAndEncodeAttributeValue(fw, value)
 	if err != nil {
-		return fmt.Errorf("failed to infer datatype: %w", err)
-	}
-
-	data, err := encodeAttributeValue(value)
-	if err != nil {
-		return fmt.Errorf("failed to encode value: %w", err)
+		return fmt.Errorf("failed to infer/encode attribute: %w", err)
 	}
 
 	attr := &core.Attribute{
@@ -486,15 +482,10 @@ func writeDenseAttributeWithInfo(fw *FileWriter, _ uint64, _ *core.ObjectHeader,
 		return fmt.Errorf("failed to load B-tree: %w", err)
 	}
 
-	// Prepare new attribute
-	datatype, dataspace, err := inferDatatypeFromValue(value)
+	// Prepare new attribute (handles []string via Global Heap).
+	datatype, dataspace, data, err := inferAndEncodeAttributeValue(fw, value)
 	if err != nil {
-		return fmt.Errorf("failed to infer datatype: %w", err)
-	}
-
-	data, err := encodeAttributeValue(value)
-	if err != nil {
-		return fmt.Errorf("failed to encode value: %w", err)
+		return fmt.Errorf("failed to infer/encode attribute: %w", err)
 	}
 
 	attr := &core.Attribute{
@@ -744,7 +735,7 @@ func deleteDenseAttributeImpl(fw *FileWriter, attrInfo *core.AttributeInfoMessag
 //
 // Reference: H5Adense.c - H5A__dense_insert().
 //
-//nolint:gocognit,gocyclo,cyclop // Complex RMW logic with multiple verification steps
+//nolint:gocyclo,cyclop // Complex RMW logic with multiple verification steps
 func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
 	// Step 1: Find Attribute Info Message
@@ -779,15 +770,10 @@ func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 		return fmt.Errorf("failed to load B-tree: %w", err)
 	}
 
-	// Step 4: Prepare new attribute
-	datatype, dataspace, err := inferDatatypeFromValue(value)
+	// Step 4: Prepare new attribute (handles []string via Global Heap).
+	datatype, dataspace, data, err := inferAndEncodeAttributeValue(fw, value)
 	if err != nil {
-		return fmt.Errorf("failed to infer datatype: %w", err)
-	}
-
-	data, err := encodeAttributeValue(value)
-	if err != nil {
-		return fmt.Errorf("failed to encode value: %w", err)
+		return fmt.Errorf("failed to infer/encode attribute: %w", err)
 	}
 
 	attr := &core.Attribute{
@@ -891,15 +877,10 @@ func transitionToDenseAttributes(fw *FileWriter, objectAddr uint64, _ *core.Obje
 		}
 	}
 
-	// 2. Infer datatype and encode new attribute
-	datatype, dataspace, err := inferDatatypeFromValue(value)
+	// 2. Infer datatype and encode new attribute (handles []string via Global Heap).
+	datatype, dataspace, data, err := inferAndEncodeAttributeValue(fw, value)
 	if err != nil {
-		return fmt.Errorf("failed to infer datatype: %w", err)
-	}
-
-	data, err := encodeAttributeValue(value)
-	if err != nil {
-		return fmt.Errorf("failed to encode value: %w", err)
+		return fmt.Errorf("failed to infer/encode attribute: %w", err)
 	}
 
 	newAttr := &core.Attribute{
@@ -1040,6 +1021,110 @@ func transitionToDenseAttributes(fw *FileWriter, objectAddr uint64, _ *core.Obje
 	return nil
 }
 
+// inferAndEncodeAttributeValue infers the HDF5 datatype and encodes the value for attribute storage.
+// For []string values, this uses the Global Heap via prepareVLenStringAttribute.
+// For all other types, it delegates to inferDatatypeFromValue + encodeAttributeValue.
+func inferAndEncodeAttributeValue(fw *FileWriter, value interface{}) (*core.DatatypeMessage, *core.DataspaceMessage, []byte, error) {
+	// Handle []string specially — requires Global Heap I/O.
+	if strs, ok := value.([]string); ok {
+		if len(strs) == 0 {
+			return nil, nil, nil, fmt.Errorf("cannot write empty []string attribute (no elements)")
+		}
+		return prepareVLenStringAttribute(fw, strs)
+	}
+
+	// Generic path for scalars and numeric slices.
+	datatype, dataspace, err := inferDatatypeFromValue(value)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	data, err := encodeAttributeValue(value)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return datatype, dataspace, data, nil
+}
+
+// ensureGlobalHeapWriter lazily initializes the global heap writer on a FileWriter.
+// This is needed because OpenForWrite() does not initialize it (only CreateForWrite does).
+func ensureGlobalHeapWriter(fw *FileWriter) {
+	if fw.globalHeapWriter == nil {
+		fw.globalHeapWriter = newGlobalHeapWriter(fw)
+	}
+}
+
+// prepareVLenStringAttribute writes []string values to the Global Heap and returns
+// the HDF5 datatype, dataspace, and encoded heap ID data suitable for attribute storage.
+//
+// Each string is null-terminated and written to the Global Heap. The attribute data
+// consists of 16-byte heap IDs: seq_len(4) + heap_address(8) + object_index(4).
+//
+// The VLen string datatype is class=9, version=1, size=16 with a nested base type
+// of class=3 (String), version=1, size=1 (character).
+//
+// C Reference: H5Tvlen.c:876 (seq_len encoding), H5Odtype.c:1352-1365 (VLen datatype).
+func prepareVLenStringAttribute(fw *FileWriter, strings []string) (*core.DatatypeMessage, *core.DataspaceMessage, []byte, error) {
+	ensureGlobalHeapWriter(fw)
+
+	// 1. Write each string to global heap and collect heap IDs.
+	heapIDs := make([]HeapID, len(strings))
+	for i, str := range strings {
+		// Write null-terminated string to global heap (same as VLen dataset writing).
+		heapID, err := fw.globalHeapWriter.WriteToGlobalHeap([]byte(str))
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("write string %d to global heap: %w", i, err)
+		}
+		// SeqLen = string length in bytes (characters, not including null terminator).
+		// C ref: H5Tvlen.c:876 — UINT32ENCODE(vl, seq_len) where seq_len = nchars.
+		heapID.SeqLen = uint32(len(str)) //nolint:gosec // G115: string length fits in uint32
+		heapIDs[i] = heapID
+	}
+
+	// 2. Flush the global heap to ensure addresses are finalized before attribute encoding.
+	if err := fw.globalHeapWriter.Flush(); err != nil {
+		return nil, nil, nil, fmt.Errorf("flush global heap: %w", err)
+	}
+
+	// 3. Encode heap IDs as attribute data (16 bytes per element).
+	data := make([]byte, len(strings)*16)
+	for i, hid := range heapIDs {
+		copy(data[i*16:], hid.Encode())
+	}
+
+	// 4. Build the VLen string datatype.
+	// Base type: DatatypeString, version=1, size=1, ClassBitField=0x00 (ASCII, null-pad).
+	baseMsg := &core.DatatypeMessage{
+		Class:         core.DatatypeString,
+		Version:       1,
+		Size:          1,    // Character size
+		ClassBitField: 0x00, // ASCII, null-pad
+	}
+	baseTypeMsg, err := core.EncodeDatatypeMessage(baseMsg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("encode base type message: %w", err)
+	}
+
+	// Outer type: DatatypeVarLen, version=1, size=16 (heap ID size).
+	// ClassBitField: type=1 (string) in bits 0-3, padding=0 in bits 4-7, charset=0 (ASCII) in bits 8-11.
+	dt := &core.DatatypeMessage{
+		Class:         core.DatatypeVarLen,
+		Version:       1,
+		Size:          16,
+		ClassBitField: 0x01, // Type=1 (string), padding=0, charset=0 (ASCII)
+		Properties:    baseTypeMsg,
+	}
+
+	// 5. Build the dataspace.
+	ds := &core.DataspaceMessage{
+		Dimensions: []uint64{uint64(len(strings))},
+		MaxDims:    nil,
+	}
+
+	return dt, ds, data, nil
+}
+
 // inferDatatypeFromValue infers HDF5 datatype and dimensions from a Go value.
 // Returns datatype message, dataspace message, and error.
 func inferDatatypeFromValue(value interface{}) (*core.DatatypeMessage, *core.DataspaceMessage, error) {
@@ -1172,6 +1257,9 @@ func inferString(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage
 }
 
 // inferSlice infers datatype for slices (1D arrays).
+//
+// Note: []string is NOT handled here because it requires Global Heap I/O.
+// Use prepareVLenStringAttribute() instead for []string values.
 func inferSlice(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage, error) {
 	if v.Len() == 0 {
 		return nil, nil, fmt.Errorf("cannot infer datatype from empty slice")
