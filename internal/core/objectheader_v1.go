@@ -81,7 +81,10 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 			return nil, "", 0, utils.WrapError("continuation block parse failed", err)
 		}
 
-		// Add messages from continuation
+		// Mark and add messages from continuation.
+		for _, cm := range contMessages {
+			cm.FromContinuation = true
+		}
 		messages = append(messages, contMessages...)
 		if contName != "" && name == "" {
 			name = contName

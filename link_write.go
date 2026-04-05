@@ -304,6 +304,9 @@ func (fw *FileWriter) CreateSoftLink(linkPath, targetPath string) error {
 		},
 	}
 
+	// Pre-allocate with padding for future attributes.
+	linkOHW.PadToSize(core.MinOHDRAllocSize)
+
 	// Calculate object header size
 	headerSize, err := calculateObjectHeaderSize(linkOHW)
 	if err != nil {
@@ -491,6 +494,9 @@ func (fw *FileWriter) CreateExternalLink(linkPath, fileName, objectPath string) 
 			},
 		},
 	}
+
+	// Pre-allocate with padding for future attributes.
+	linkOHW.PadToSize(core.MinOHDRAllocSize)
 
 	// Calculate object header size
 	headerSize, err := calculateObjectHeaderSize(linkOHW)

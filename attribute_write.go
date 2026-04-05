@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"strings"
 	"unsafe"
 
 	"github.com/scigolib/hdf5/internal/core"
@@ -31,6 +30,7 @@ const (
 //   - Scalars: int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64
 //   - Arrays: []int32, []float64, etc. (1D arrays only)
 //   - Strings: string (fixed-length, converted to byte array)
+//   - String arrays: []string (variable-length strings via Global Heap)
 //
 // Parameters:
 //   - name: Attribute name (ASCII, no null bytes)
@@ -45,9 +45,9 @@ const (
 //	ds.WriteAttribute("units", "Celsius")
 //	ds.WriteAttribute("sensor_id", int32(42))
 //	ds.WriteAttribute("calibration", []float64{1.0, 0.0})
+//	ds.WriteAttribute("topics", []string{"camera", "lidar", "imu"})
 //
 // Limitations:
-//   - No variable-length strings
 //   - No compound types
 //   - Attributes cannot be modified after creation (write-once)
 //   - No attribute deletion
@@ -213,17 +213,24 @@ func writeAttribute(fw *FileWriter, objectAddr uint64, name string, value interf
 		return fmt.Errorf("failed to read object header: %w", err)
 	}
 
-	// Count existing attributes
+	// Count existing compact attributes (main OHDR only, not from continuations).
 	compactCount := 0
+	continuationAttrCount := 0
 	hasDenseStorage := false
 	for _, msg := range oh.Messages {
 		if msg.Type == core.MsgAttribute {
-			compactCount++
+			if msg.FromContinuation {
+				continuationAttrCount++
+			} else {
+				compactCount++
+			}
 		}
 		if msg.Type == core.MsgAttributeInfo {
 			hasDenseStorage = true
 		}
 	}
+	// Total compact attributes includes both main and continuation.
+	totalCompactCount := compactCount + continuationAttrCount
 
 	// Determine storage strategy
 	if hasDenseStorage {
@@ -231,28 +238,29 @@ func writeAttribute(fw *FileWriter, objectAddr uint64, name string, value interf
 		return writeDenseAttribute(fw, objectAddr, oh, name, value, sb)
 	}
 
-	if compactCount < MaxCompactAttributes {
-		// Still compact → add compact attribute
+	if totalCompactCount < MaxCompactAttributes {
+		// Still compact -> add compact attribute.
 		return writeCompactAttribute(fw, objectAddr, oh, name, value, sb)
 	}
 
-	// Transition needed → migrate to dense
+	// Transition needed -> migrate to dense.
 	return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
 }
 
 // writeCompactAttribute writes attribute to object header (compact storage).
-// This is the Phase 1 code, extracted into separate function.
+//
+// Implements OHDR bounds checking and continuation chunks (OCHK) per H5Oalloc.c:
+//   - If the modified OHDR fits within the original allocation, rewrite in place.
+//   - If it overflows, move the new attribute to a continuation chunk (OCHK)
+//     and add a small continuation message (type 0x0010) to the main OHDR.
+//
+// This prevents corruption of adjacent structures when attributes are added.
 func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
-	// 1. Infer datatype and encode attribute
-	datatype, dataspace, err := inferDatatypeFromValue(value)
+	// 1. Infer datatype and encode attribute (handles []string via Global Heap).
+	datatype, dataspace, data, err := inferAndEncodeAttributeValue(fw, value)
 	if err != nil {
-		return fmt.Errorf("failed to infer datatype: %w", err)
-	}
-
-	data, err := encodeAttributeValue(value)
-	if err != nil {
-		return fmt.Errorf("failed to encode value: %w", err)
+		return fmt.Errorf("failed to infer/encode attribute: %w", err)
 	}
 
 	attr := &core.Attribute{
@@ -262,9 +270,7 @@ func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHea
 		Data:      data,
 	}
 
-	// 2. Check if attribute exists (for upsert semantics)
-	// If exists → modify (replace data)
-	// If not exists → create (add new message)
+	// 2. Check if attribute exists (for upsert semantics).
 	existingIndex := -1
 	for i, msg := range oh.Messages {
 		if msg.Type == core.MsgAttribute {
@@ -276,29 +282,49 @@ func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHea
 		}
 	}
 
-	// 3. Encode attribute message
+	// 3. Encode attribute message.
 	attrMsg, err := core.EncodeAttributeFromStruct(attr, sb)
 	if err != nil {
 		return fmt.Errorf("failed to encode attribute message: %w", err)
 	}
 
-	// 4. Upsert logic: modify if exists, add if not exists
-	err = upsertAttributeMessage(fw, objectAddr, oh, existingIndex, attrMsg, name, value, sb)
-	if err != nil {
-		return err
+	// 4. Upsert: replace if exists.
+	if existingIndex >= 0 {
+		oh.Messages[existingIndex].Data = attrMsg
+		return writeOHDRWithBoundsCheck(fw, objectAddr, oh, sb)
 	}
 
-	// 5. Write updated header back to disk
-	err = core.WriteObjectHeader(fw.writer, objectAddr, oh, sb)
-	if err != nil {
+	// 5. Remove null padding messages and continuation-sourced messages.
+	// Null messages (type 0) are used as padding and can be safely removed.
+	// Messages from OCHK continuation blocks should not be rewritten into the main OHDR.
+	oh.Messages = filterMainChunkMessages(oh.Messages)
+
+	// 6. Add new attribute message.
+	if err := core.AddMessageToObjectHeader(oh, core.MsgAttribute, attrMsg); err != nil {
+		return fmt.Errorf("failed to add message to header: %w", err)
+	}
+
+	// 7. Bounds check: does the modified OHDR fit in its allocation?
+	allocSize := fw.lookupHeaderAllocSize(objectAddr)
+	newSize := core.ObjectHeaderSizeFromParsed(oh)
+
+	if allocSize > 0 && newSize > allocSize {
+		// Overflow: the new attribute doesn't fit. Use a continuation chunk.
+		return writeAttributeViaContinuation(fw, objectAddr, oh, attrMsg, name, value, sb, allocSize)
+	}
+
+	// Fits in allocation (or allocation unknown for legacy files).
+	return writeOHDRWithBoundsCheck(fw, objectAddr, oh, sb)
+}
+
+// writeOHDRWithBoundsCheck writes the object header back to disk and updates the
+// allocator EOF if necessary.
+func writeOHDRWithBoundsCheck(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader, sb *core.Superblock) error {
+	if err := core.WriteObjectHeader(fw.writer, objectAddr, oh, sb); err != nil {
 		return fmt.Errorf("failed to write object header: %w", err)
 	}
 
-	// 6. Update allocator if the object header grew beyond currently tracked EOF.
-	// Adding an attribute message increases the OHDR size. If the OHDR is at the
-	// end of the file, the extra bytes extend past what the allocator knows about.
-	// Without this, the superblock EOA will be too small and h5dump/h5py will
-	// reject the file ("actual len exceeds EOA").
+	// Update allocator if the object header grew beyond currently tracked EOF.
 	newHeaderSize := core.ObjectHeaderSizeFromParsed(oh)
 	objectHeaderEnd := objectAddr + newHeaderSize
 	allocator := fw.writer.Allocator()
@@ -312,29 +338,75 @@ func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHea
 	return nil
 }
 
-// upsertAttributeMessage handles the upsert logic for attribute messages in compact storage.
-// If attribute exists (existingIndex >= 0), it replaces the message data.
-// If attribute doesn't exist (existingIndex < 0), it adds a new message.
-// If object header is full, it triggers transition to dense storage.
-func upsertAttributeMessage(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
-	existingIndex int, attrMsg []byte, name string, value interface{}, sb *core.Superblock) error {
-	if existingIndex >= 0 {
-		// Attribute exists → Replace (upsert semantics)
-		oh.Messages[existingIndex].Data = attrMsg
-		return nil
-	}
+// writeAttributeViaContinuation handles the case where an attribute doesn't fit
+// in the OHDR's original allocation. It:
+//  1. Removes the last message (the attribute that caused overflow) from oh.Messages.
+//  2. Writes the attribute in a new OCHK continuation block.
+//  3. Adds a continuation message (type 0x0010) to the main OHDR pointing to the OCHK.
+//  4. Rewrites the main OHDR (which now has the small continuation message instead
+//     of the large attribute message, so it should fit).
+//
+// If even the continuation message doesn't fit, fall back to dense storage transition.
+func writeAttributeViaContinuation(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
+	attrMsg []byte, name string, value interface{}, sb *core.Superblock, allocSize uint64) error {
+	// Remove the last message (the attribute we just added that caused overflow).
+	lastIdx := len(oh.Messages) - 1
+	oh.Messages = oh.Messages[:lastIdx]
 
-	// Attribute doesn't exist → Add new message
-	err := core.AddMessageToObjectHeader(oh, core.MsgAttribute, attrMsg)
+	// Write the attribute to an OCHK continuation block.
+	ochkMessages := []core.MessageWriter{
+		{Type: core.MsgAttribute, Data: attrMsg},
+	}
+	ochkSize := core.ContinuationChunkSizeV2(ochkMessages)
+
+	allocator := fw.writer.Allocator()
+	ochkAddr, err := allocator.Allocate(ochkSize)
 	if err != nil {
-		// If object header is full, transition to dense storage
-		if strings.Contains(err.Error(), "object header full") {
-			return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
-		}
-		return fmt.Errorf("failed to add message to header: %w", err)
+		return fmt.Errorf("failed to allocate OCHK continuation block: %w", err)
 	}
 
-	return nil
+	if _, err := core.WriteContinuationChunkV2(fw.writer, ochkAddr, ochkMessages); err != nil {
+		return fmt.Errorf("failed to write OCHK continuation block: %w", err)
+	}
+
+	// Add a continuation message (type 0x0010) to the main OHDR.
+	contMsgData := core.EncodeContinuationMessage(ochkAddr, ochkSize, sb)
+	if err := core.AddMessageToObjectHeader(oh, core.MsgContinuation, contMsgData); err != nil {
+		return fmt.Errorf("failed to add continuation message: %w", err)
+	}
+
+	// Check if the OHDR with continuation message fits.
+	newSize := core.ObjectHeaderSizeFromParsed(oh)
+	if newSize > allocSize {
+		// Even the continuation message doesn't fit -- fall back to dense.
+		// Remove the continuation message we just added.
+		oh.Messages = oh.Messages[:len(oh.Messages)-1]
+		return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
+	}
+
+	// Rewrite the main OHDR (now with continuation message instead of attribute).
+	return writeOHDRWithBoundsCheck(fw, objectAddr, oh, sb)
+}
+
+// filterMainChunkMessages removes null padding messages and messages that
+// originated from OCHK continuation blocks. This ensures that when rewriting
+// the main OHDR, we only include messages that belong in the main chunk.
+// Continuation messages (type 0x0010) that point to OCHK blocks are kept,
+// as they must remain in the main OHDR to link to the continuation chunks.
+func filterMainChunkMessages(messages []*core.HeaderMessage) []*core.HeaderMessage {
+	result := make([]*core.HeaderMessage, 0, len(messages))
+	for _, msg := range messages {
+		// Skip null padding messages.
+		if msg.Type == core.MsgNil {
+			continue
+		}
+		// Skip messages that came from OCHK continuation blocks.
+		if msg.FromContinuation {
+			continue
+		}
+		result = append(result, msg)
+	}
+	return result
 }
 
 // writeAttributeWithCachedHeader writes attribute using cached object header (for OpenDataset scenarios).
@@ -360,21 +432,30 @@ func writeAttributeWithCachedHeader(fw *FileWriter, objectAddr uint64, oh *core.
 		return writeDenseAttributeWithInfo(fw, objectAddr, oh, denseAttrInfo, name, value, sb)
 	}
 
-	// No dense storage yet - count compact attributes to determine strategy
+	// No dense storage yet - re-read OHDR to get accurate message count
+	// (the cached oh may be stale after previous transitions).
+	reader := fw.writer.Reader()
+	freshOH, readErr := core.ReadObjectHeader(reader, objectAddr, sb)
+	if readErr != nil {
+		return fmt.Errorf("failed to re-read object header: %w", readErr)
+	}
+
 	compactCount := 0
-	for _, msg := range oh.Messages {
+	for _, msg := range freshOH.Messages {
 		if msg.Type == core.MsgAttribute {
 			compactCount++
+		}
+		if msg.Type == core.MsgAttributeInfo {
+			// Dense storage was set up by a previous transition -- use it directly.
+			return writeDenseAttribute(fw, objectAddr, freshOH, name, value, sb)
 		}
 	}
 
 	if compactCount < MaxCompactAttributes {
-		// Still compact → add compact attribute
-		return writeCompactAttribute(fw, objectAddr, oh, name, value, sb)
+		return writeCompactAttribute(fw, objectAddr, freshOH, name, value, sb)
 	}
 
-	// Need to transition to dense storage (8th attribute)
-	return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
+	return transitionToDenseAttributes(fw, objectAddr, freshOH, name, value, sb)
 }
 
 // writeDenseAttributeWithInfo writes or modifies attribute in existing dense storage.
@@ -401,15 +482,10 @@ func writeDenseAttributeWithInfo(fw *FileWriter, _ uint64, _ *core.ObjectHeader,
 		return fmt.Errorf("failed to load B-tree: %w", err)
 	}
 
-	// Prepare new attribute
-	datatype, dataspace, err := inferDatatypeFromValue(value)
+	// Prepare new attribute (handles []string via Global Heap).
+	datatype, dataspace, data, err := inferAndEncodeAttributeValue(fw, value)
 	if err != nil {
-		return fmt.Errorf("failed to infer datatype: %w", err)
-	}
-
-	data, err := encodeAttributeValue(value)
-	if err != nil {
-		return fmt.Errorf("failed to encode value: %w", err)
+		return fmt.Errorf("failed to infer/encode attribute: %w", err)
 	}
 
 	attr := &core.Attribute{
@@ -659,7 +735,7 @@ func deleteDenseAttributeImpl(fw *FileWriter, attrInfo *core.AttributeInfoMessag
 //
 // Reference: H5Adense.c - H5A__dense_insert().
 //
-//nolint:gocognit,gocyclo,cyclop // Complex RMW logic with multiple verification steps
+//nolint:gocyclo,cyclop // Complex RMW logic with multiple verification steps
 func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
 	// Step 1: Find Attribute Info Message
@@ -694,15 +770,10 @@ func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 		return fmt.Errorf("failed to load B-tree: %w", err)
 	}
 
-	// Step 4: Prepare new attribute
-	datatype, dataspace, err := inferDatatypeFromValue(value)
+	// Step 4: Prepare new attribute (handles []string via Global Heap).
+	datatype, dataspace, data, err := inferAndEncodeAttributeValue(fw, value)
 	if err != nil {
-		return fmt.Errorf("failed to infer datatype: %w", err)
-	}
-
-	data, err := encodeAttributeValue(value)
-	if err != nil {
-		return fmt.Errorf("failed to encode value: %w", err)
+		return fmt.Errorf("failed to infer/encode attribute: %w", err)
 	}
 
 	attr := &core.Attribute{
@@ -784,30 +855,32 @@ func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 //
 // Reference: H5Aint.c - H5A__dense_create().
 //
-//nolint:gocognit,gocyclo,cyclop // Complex but necessary business logic for compact→dense transition
-func transitionToDenseAttributes(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
+//nolint:gocognit,gocyclo,cyclop,funlen // Complex but necessary business logic for compact-to-dense transition
+func transitionToDenseAttributes(fw *FileWriter, objectAddr uint64, _ *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
-	// 1. Read all existing compact attributes
+	// 1. Re-read the OHDR from disk to get ALL messages, including continuation-sourced ones.
+	// This is necessary because the caller may have filtered out continuation messages.
+	reader := fw.writer.Reader()
+	oh, err := core.ReadObjectHeader(reader, objectAddr, sb)
+	if err != nil {
+		return fmt.Errorf("failed to re-read object header for dense transition: %w", err)
+	}
+
 	var compactAttrs []*core.Attribute
 	for _, msg := range oh.Messages {
 		if msg.Type == core.MsgAttribute {
-			attr, err := core.ParseAttributeMessage(msg.Data, sb.Endianness)
-			if err != nil {
-				return fmt.Errorf("failed to parse existing attribute: %w", err)
+			attr, readErr := core.ParseAttributeMessage(msg.Data, sb.Endianness)
+			if readErr != nil {
+				return fmt.Errorf("failed to parse existing attribute: %w", readErr)
 			}
 			compactAttrs = append(compactAttrs, attr)
 		}
 	}
 
-	// 2. Infer datatype and encode new attribute
-	datatype, dataspace, err := inferDatatypeFromValue(value)
+	// 2. Infer datatype and encode new attribute (handles []string via Global Heap).
+	datatype, dataspace, data, err := inferAndEncodeAttributeValue(fw, value)
 	if err != nil {
-		return fmt.Errorf("failed to infer datatype: %w", err)
-	}
-
-	data, err := encodeAttributeValue(value)
-	if err != nil {
-		return fmt.Errorf("failed to encode value: %w", err)
+		return fmt.Errorf("failed to infer/encode attribute: %w", err)
 	}
 
 	newAttr := &core.Attribute{
@@ -820,26 +893,51 @@ func transitionToDenseAttributes(fw *FileWriter, objectAddr uint64, oh *core.Obj
 	// 3. Create DenseAttributeWriter
 	daw := writer.NewDenseAttributeWriter(objectAddr)
 
-	// 4. Add all existing attributes
+	// 4. Add all existing attributes, replacing any that match the new attribute name
+	// (upsert semantics: if the new attribute already exists in compact storage, replace it).
+	replaced := false
 	for _, attr := range compactAttrs {
-		err = daw.AddAttribute(attr, sb)
-		if err != nil {
-			return fmt.Errorf("failed to add existing attribute: %w", err)
+		if attr.Name == name {
+			// Replace existing attribute with the new value.
+			err = daw.AddAttribute(newAttr, sb)
+			if err != nil {
+				return fmt.Errorf("failed to add replaced attribute: %w", err)
+			}
+			replaced = true
+		} else {
+			err = daw.AddAttribute(attr, sb)
+			if err != nil {
+				return fmt.Errorf("failed to add existing attribute: %w", err)
+			}
 		}
 	}
 
-	// 5. Add new attribute
-	err = daw.AddAttribute(newAttr, sb)
-	if err != nil {
-		return fmt.Errorf("failed to add new attribute: %w", err)
+	// 5. Add new attribute (only if it wasn't already replacing an existing one).
+	if !replaced {
+		err = daw.AddAttribute(newAttr, sb)
+		if err != nil {
+			return fmt.Errorf("failed to add new attribute: %w", err)
+		}
 	}
 
-	// 6. Remove compact attributes from object header
+	// 6. Remove compact attributes, continuation messages, null padding, and
+	// continuation-sourced messages from the object header.
+	// All attributes are now in dense storage, so we only keep structural messages.
 	var newMessages []*core.HeaderMessage
 	for _, msg := range oh.Messages {
-		if msg.Type != core.MsgAttribute {
-			newMessages = append(newMessages, msg)
+		if msg.Type == core.MsgAttribute {
+			continue // Migrated to dense.
 		}
+		if msg.Type == core.MsgContinuation {
+			continue // OCHK blocks are no longer needed.
+		}
+		if msg.Type == core.MsgNil {
+			continue // Remove padding.
+		}
+		if msg.FromContinuation {
+			continue // Came from an OCHK block.
+		}
+		newMessages = append(newMessages, msg)
 	}
 	oh.Messages = newMessages
 
@@ -921,6 +1019,110 @@ func transitionToDenseAttributes(fw *FileWriter, objectAddr uint64, oh *core.Obj
 	}
 
 	return nil
+}
+
+// inferAndEncodeAttributeValue infers the HDF5 datatype and encodes the value for attribute storage.
+// For []string values, this uses the Global Heap via prepareVLenStringAttribute.
+// For all other types, it delegates to inferDatatypeFromValue + encodeAttributeValue.
+func inferAndEncodeAttributeValue(fw *FileWriter, value interface{}) (*core.DatatypeMessage, *core.DataspaceMessage, []byte, error) {
+	// Handle []string specially — requires Global Heap I/O.
+	if strs, ok := value.([]string); ok {
+		if len(strs) == 0 {
+			return nil, nil, nil, fmt.Errorf("cannot write empty []string attribute (no elements)")
+		}
+		return prepareVLenStringAttribute(fw, strs)
+	}
+
+	// Generic path for scalars and numeric slices.
+	datatype, dataspace, err := inferDatatypeFromValue(value)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	data, err := encodeAttributeValue(value)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return datatype, dataspace, data, nil
+}
+
+// ensureGlobalHeapWriter lazily initializes the global heap writer on a FileWriter.
+// This is needed because OpenForWrite() does not initialize it (only CreateForWrite does).
+func ensureGlobalHeapWriter(fw *FileWriter) {
+	if fw.globalHeapWriter == nil {
+		fw.globalHeapWriter = newGlobalHeapWriter(fw)
+	}
+}
+
+// prepareVLenStringAttribute writes []string values to the Global Heap and returns
+// the HDF5 datatype, dataspace, and encoded heap ID data suitable for attribute storage.
+//
+// Each string is null-terminated and written to the Global Heap. The attribute data
+// consists of 16-byte heap IDs: seq_len(4) + heap_address(8) + object_index(4).
+//
+// The VLen string datatype is class=9, version=1, size=16 with a nested base type
+// of class=3 (String), version=1, size=1 (character).
+//
+// C Reference: H5Tvlen.c:876 (seq_len encoding), H5Odtype.c:1352-1365 (VLen datatype).
+func prepareVLenStringAttribute(fw *FileWriter, strings []string) (*core.DatatypeMessage, *core.DataspaceMessage, []byte, error) {
+	ensureGlobalHeapWriter(fw)
+
+	// 1. Write each string to global heap and collect heap IDs.
+	heapIDs := make([]HeapID, len(strings))
+	for i, str := range strings {
+		// Write null-terminated string to global heap (same as VLen dataset writing).
+		heapID, err := fw.globalHeapWriter.WriteToGlobalHeap([]byte(str))
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("write string %d to global heap: %w", i, err)
+		}
+		// SeqLen = string length in bytes (characters, not including null terminator).
+		// C ref: H5Tvlen.c:876 — UINT32ENCODE(vl, seq_len) where seq_len = nchars.
+		heapID.SeqLen = uint32(len(str)) //nolint:gosec // G115: string length fits in uint32
+		heapIDs[i] = heapID
+	}
+
+	// 2. Flush the global heap to ensure addresses are finalized before attribute encoding.
+	if err := fw.globalHeapWriter.Flush(); err != nil {
+		return nil, nil, nil, fmt.Errorf("flush global heap: %w", err)
+	}
+
+	// 3. Encode heap IDs as attribute data (16 bytes per element).
+	data := make([]byte, len(strings)*16)
+	for i, hid := range heapIDs {
+		copy(data[i*16:], hid.Encode())
+	}
+
+	// 4. Build the VLen string datatype.
+	// Base type: DatatypeString, version=1, size=1, ClassBitField=0x00 (ASCII, null-pad).
+	baseMsg := &core.DatatypeMessage{
+		Class:         core.DatatypeString,
+		Version:       1,
+		Size:          1,    // Character size
+		ClassBitField: 0x00, // ASCII, null-pad
+	}
+	baseTypeMsg, err := core.EncodeDatatypeMessage(baseMsg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("encode base type message: %w", err)
+	}
+
+	// Outer type: DatatypeVarLen, version=1, size=16 (heap ID size).
+	// ClassBitField: type=1 (string) in bits 0-3, padding=0 in bits 4-7, charset=0 (ASCII) in bits 8-11.
+	dt := &core.DatatypeMessage{
+		Class:         core.DatatypeVarLen,
+		Version:       1,
+		Size:          16,
+		ClassBitField: 0x01, // Type=1 (string), padding=0, charset=0 (ASCII)
+		Properties:    baseTypeMsg,
+	}
+
+	// 5. Build the dataspace.
+	ds := &core.DataspaceMessage{
+		Dimensions: []uint64{uint64(len(strings))},
+		MaxDims:    nil,
+	}
+
+	return dt, ds, data, nil
 }
 
 // inferDatatypeFromValue infers HDF5 datatype and dimensions from a Go value.
@@ -1055,6 +1257,9 @@ func inferString(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage
 }
 
 // inferSlice infers datatype for slices (1D arrays).
+//
+// Note: []string is NOT handled here because it requires Global Heap I/O.
+// Use prepareVLenStringAttribute() instead for []string values.
 func inferSlice(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage, error) {
 	if v.Len() == 0 {
 		return nil, nil, fmt.Errorf("cannot infer datatype from empty slice")

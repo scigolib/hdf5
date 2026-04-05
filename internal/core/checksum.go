@@ -45,8 +45,12 @@ func jenkinsLookup3(data []byte, initval uint32) uint32 {
 	c := a
 
 	// Process 12-byte chunks.
+	// CRITICAL: The C reference uses "while (length > 12)" (strictly greater),
+	// so when exactly 12 bytes remain, they are handled by the switch/final below,
+	// NOT by the mix loop. Using ">=" here would produce wrong checksums for
+	// inputs whose length is a multiple of 12.
 	i := 0
-	for i+12 <= length {
+	for i+12 < length {
 		a += uint32(data[i]) | uint32(data[i+1])<<8 | uint32(data[i+2])<<16 | uint32(data[i+3])<<24
 		b += uint32(data[i+4]) | uint32(data[i+5])<<8 | uint32(data[i+6])<<16 | uint32(data[i+7])<<24
 		c += uint32(data[i+8]) | uint32(data[i+9])<<8 | uint32(data[i+10])<<16 | uint32(data[i+11])<<24
@@ -74,9 +78,14 @@ func jenkinsLookup3(data []byte, initval uint32) uint32 {
 		i += 12
 	}
 
-	// Handle remaining bytes (0-11 bytes).
+	// Handle remaining bytes (0-12 bytes).
+	// When length is a multiple of 12, remaining is 12 (not 0), matching the C code's
+	// "while (length > 12)" loop condition.
 	remaining := length - i
 	switch remaining {
+	case 12:
+		c += uint32(data[i+11]) << 24
+		fallthrough
 	case 11:
 		c += uint32(data[i+10]) << 16
 		fallthrough

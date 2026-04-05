@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.13.19] - 2026-04-05
+
+### Enhancement
+
+#### Variable-length string attribute support (Issue #46)
+
+Added `[]string` support in `WriteAttribute()` for both groups and datasets. Strings are stored
+via Global Heap (same format as VLen string datasets). h5dump displays them as
+`H5T_VARIABLE` / `STRPAD H5T_STR_NULLTERM`.
+
+```go
+group.WriteAttribute("topics", []string{"camera_front", "camera_back", "lidar"})
+```
+
+Reported by [@zhoujun24](https://github.com/zhoujun24).
+
+### Bug Fix
+
+#### OHDR continuation messages + Jenkins checksum fix (Issue #45)
+
+**Bug #1: Object Header overwrites adjacent structures**
+
+Writing attributes to a group after creating child groups corrupted the file. The OHDR grew
+beyond its original allocation and overwrote the adjacent Local Heap. Per C reference
+(`H5Oalloc.c`), implemented three-tier defense:
+1. Pre-allocate OHDR with 256-byte padding (covers ~7 compact attributes)
+2. Bounds check before rewrite — if overflow, use continuation chunk
+3. OCHK continuation blocks (type 0x0010) for messages that don't fit
+
+**Bug #2: Jenkins lookup3 checksum off-by-one (latent since v0.13.5)**
+
+The Go port of Jenkins lookup3 used `i+12 <= length` (greater-or-equal) instead of the C
+reference's `while (length > 12)` (strictly greater). When data length was a multiple of 12,
+the last 12 bytes went through `mix` instead of `final`, producing wrong checksums. Added
+`case 12` to the switch. This bug was latent — only manifested with OHDR padding because
+padded headers hit exact multiples of 12.
+
+Reported by [@zhoujun24](https://github.com/zhoujun24).
+
+---
+
 ## [v0.13.18] - 2026-03-31
 
 ### Bug Fix
