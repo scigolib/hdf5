@@ -157,7 +157,8 @@ func TestFullWriteWorkflow_BinaryStructure(t *testing.T) {
 	require.Contains(t, string(data), "SNOD", "symbol table node")
 
 	// File size should be reasonable (not huge)
-	require.Less(t, len(data), 10*1024, "file size should be < 10KB for this small file")
+	// OHDR padding (256 bytes per object) increases file size slightly.
+	require.Less(t, len(data), 12*1024, "file size should be < 12KB for this small file")
 }
 
 // TestFullWriteWorkflow_ErrorCases tests error handling.

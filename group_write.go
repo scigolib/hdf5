@@ -210,13 +210,6 @@ func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 		return nil, err
 	}
 
-	// Store group metadata for nested dataset linking
-	fw.groups[path] = &GroupMetadata{
-		heapAddr:   heapAddr,
-		stNodeAddr: stNodeAddr,
-		btreeAddr:  btreeAddr,
-	}
-
 	// Create object header for the group
 	// Message 1: Symbol Table Message (type 0x11)
 	stMsg := core.EncodeSymbolTableMessage(btreeAddr, heapAddr, int(fw.file.sb.OffsetSize), int(fw.file.sb.LengthSize))
@@ -229,7 +222,9 @@ func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 		},
 	}
 
-	// Calculate object header size using the writer's own method
+	// Pre-allocate OHDR with padding to accommodate future attributes.
+	// This prevents corruption when attributes are added later.
+	ohw.PadToSize(core.MinOHDRAllocSize)
 	headerSize := ohw.Size()
 
 	headerAddr, err := fw.writer.Allocate(headerSize)
@@ -245,6 +240,15 @@ func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 
 	if writtenSize != headerSize {
 		return nil, fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
+	}
+
+	// Store group metadata for nested dataset linking
+	fw.groups[path] = &GroupMetadata{
+		heapAddr:      heapAddr,
+		stNodeAddr:    stNodeAddr,
+		btreeAddr:     btreeAddr,
+		headerAddr:    headerAddr,
+		headerAllocSz: headerSize,
 	}
 
 	// Link to parent group

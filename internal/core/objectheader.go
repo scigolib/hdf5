@@ -40,6 +40,11 @@ type HeaderMessage struct {
 	Type   MessageType
 	Offset uint64
 	Data   []byte
+
+	// FromContinuation is true if this message was read from an OCHK
+	// continuation block rather than the main OHDR chunk. Used by the
+	// write path to avoid rewriting continuation messages into the main header.
+	FromContinuation bool
 }
 
 // MessageType identifies the type of message in an object header.
@@ -176,7 +181,7 @@ func determineObjectType(messages []*HeaderMessage) ObjectType {
 	return ObjectTypeUnknown
 }
 
-func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, _ *Superblock, isBE bool) ([]*HeaderMessage, string, error) {
+func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock, isBE bool) ([]*HeaderMessage, string, error) {
 	var messages []*HeaderMessage
 	var name string
 
@@ -288,6 +293,120 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, _ *Superblock,
 		if _, err := r.ReadAt(data, int64(current+msgHeaderSize)); err != nil {
 			utils.ReleaseBuffer(data)
 			return nil, "", utils.WrapError("message data read failed", err)
+		}
+
+		if msgType == MsgName && len(data) > 1 {
+			name = string(data[1:])
+		}
+
+		messages = append(messages, &HeaderMessage{
+			Type:   msgType,
+			Offset: current,
+			Data:   data,
+		})
+
+		current += msgHeaderSize + uint64(msgSize)
+	}
+
+	// Follow continuation messages (type 0x0010) to OCHK blocks.
+	// V2 OCHK format: "OCHK"(4) + messages + Jenkins checksum(4).
+	// We reuse the V1 continuation infrastructure for parsing the continuation
+	// message data (address + size), but V2 OCHK blocks have a different layout.
+	if sb != nil {
+		continuations := findContinuations(messages, sb)
+		for len(continuations) > 0 {
+			cont := continuations[0]
+			continuations = continuations[1:]
+
+			contMessages, contName, err := parseV2ContinuationBlock(r, cont.Address, cont.Size, flags, isBE)
+			if err != nil {
+				return nil, "", utils.WrapError("V2 continuation block parse failed", err)
+			}
+
+			// Mark continuation messages so the write path can exclude them.
+			for _, cm := range contMessages {
+				cm.FromContinuation = true
+			}
+			messages = append(messages, contMessages...)
+			if contName != "" && name == "" {
+				name = contName
+			}
+
+			// Check for chained continuations inside the OCHK block.
+			if sb != nil {
+				newConts := findContinuations(contMessages, sb)
+				continuations = append(continuations, newConts...)
+			}
+		}
+	}
+
+	return messages, name, nil
+}
+
+// parseV2ContinuationBlock parses messages from a V2 OCHK continuation block.
+//
+// OCHK format (per H5Opkg.h):
+//   - "OCHK" signature (4 bytes)
+//   - Messages (same format as main OHDR v2)
+//   - Jenkins lookup3 checksum (4 bytes)
+func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags uint8, isBE bool) ([]*HeaderMessage, string, error) {
+	if blockSize < 8 {
+		return nil, "", fmt.Errorf("OCHK block too small: %d bytes (minimum 8)", blockSize)
+	}
+
+	// Read signature.
+	sigBuf := utils.GetBuffer(4)
+	defer utils.ReleaseBuffer(sigBuf)
+
+	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
+	if _, err := r.ReadAt(sigBuf, int64(blockAddr)); err != nil {
+		return nil, "", utils.WrapError("OCHK signature read failed", err)
+	}
+	if string(sigBuf) != "OCHK" {
+		return nil, "", fmt.Errorf("invalid OCHK signature: % x", sigBuf)
+	}
+
+	// Messages start after "OCHK" (4 bytes) and end before checksum (4 bytes).
+	msgStart := blockAddr + 4
+	msgEnd := blockAddr + blockSize - 4
+
+	// Determine message header size (same as main OHDR).
+	msgHeaderSize := uint64(4)
+	if flags&0x04 != 0 {
+		msgHeaderSize = 6
+	}
+
+	var messages []*HeaderMessage
+	var name string
+	current := msgStart
+
+	for current < msgEnd {
+		headerBuf := utils.GetBuffer(6)
+		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
+		if _, err := r.ReadAt(headerBuf, int64(current)); err != nil {
+			utils.ReleaseBuffer(headerBuf)
+			return nil, "", utils.WrapError("OCHK message header read failed", err)
+		}
+
+		msgType := MessageType(headerBuf[0])
+		var msgSize uint16
+		if isBE {
+			msgSize = binary.BigEndian.Uint16(headerBuf[1:3])
+		} else {
+			msgSize = binary.LittleEndian.Uint16(headerBuf[1:3])
+		}
+		utils.ReleaseBuffer(headerBuf)
+
+		if msgSize == 0 {
+			current += msgHeaderSize
+			continue
+		}
+
+		data := utils.GetBuffer(int(msgSize))
+		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
+		if _, err := r.ReadAt(data, int64(current+msgHeaderSize)); err != nil {
+			utils.ReleaseBuffer(data)
+			return nil, "", utils.WrapError("OCHK message data read failed", err)
 		}
 
 		if msgType == MsgName && len(data) > 1 {

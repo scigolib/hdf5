@@ -8,8 +8,10 @@ import (
 
 // TestJenkinsChecksum tests the Jenkins lookup3 checksum implementation.
 //
-// These test vectors verify that our implementation produces consistent results.
-// The actual values will be verified against h5dump compatibility tests.
+// These test vectors are verified against the C reference implementation
+// (H5_checksum_lookup3 in H5checksum.c). The C code uses "while (length > 12)"
+// for the main loop, meaning exactly-12-byte remainders go through the
+// switch/final path, not the mix loop.
 func TestJenkinsChecksum(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -24,35 +26,35 @@ func TestJenkinsChecksum(t *testing.T) {
 		{
 			name:     "Single byte",
 			data:     []byte{0x00},
-			expected: 0x8ba9414b, // Our implementation
+			expected: 0x8ba9414b,
 		},
 		{
 			name:     "Two bytes",
 			data:     []byte{0x00, 0x01},
-			expected: 0xdf0d39c9, // Our implementation
+			expected: 0xdf0d39c9,
 		},
 		{
 			name:     "Three bytes",
 			data:     []byte{0x00, 0x01, 0x02},
-			expected: 0x6b12f277, // Our implementation
+			expected: 0x6b12f277,
 		},
 		{
 			name:     "Four bytes",
 			data:     []byte{0x00, 0x01, 0x02, 0x03},
-			expected: 0xe4cf1d42, // Our implementation
+			expected: 0xe4cf1d42,
 		},
 		{
-			name:     "12 bytes (exact chunk)",
+			name:     "12 bytes (exact chunk boundary)",
 			data:     []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b},
-			expected: 0xa62c3dcb, // Our implementation
+			expected: 0x5e4aa593, // C reference: case 12 + final, not mix loop
 		},
 		{
 			name:     "13 bytes (chunk + 1)",
 			data:     []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c},
-			expected: 0xbc9d6816, // Our implementation
+			expected: 0xbc9d6816,
 		},
 		{
-			name: "Superblock V2 format signature",
+			name: "Superblock V2 format signature (12 bytes)",
 			data: []byte{
 				0x89, 0x48, 0x44, 0x46, // HDF5 magic
 				0x0d, 0x0a, 0x1a, 0x0a, // Continuation
@@ -61,17 +63,17 @@ func TestJenkinsChecksum(t *testing.T) {
 				0x08, // Size of lengths
 				0x00, // Flags
 			},
-			expected: 0xe8a6c5b4, // Our implementation
+			expected: 0x76bb2afa, // C reference: case 12 + final
 		},
 		{
 			name:     "HDF5 string",
 			data:     []byte("HDF5"),
-			expected: 0xf99dfa17, // Our implementation
+			expected: 0xf99dfa17,
 		},
 		{
 			name:     "Longer string",
 			data:     []byte("The quick brown fox jumps over the lazy dog"),
-			expected: 0x64a2cd46, // Our implementation
+			expected: 0x64a2cd46,
 		},
 	}
 

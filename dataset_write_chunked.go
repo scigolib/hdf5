@@ -126,6 +126,9 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 		})
 	}
 
+	// Pre-allocate OHDR with padding for future attributes.
+	ohw.PadToSize(core.MinOHDRAllocSize)
+
 	// Calculate header size
 	headerSize, err := calculateObjectHeaderSize(ohw)
 	if err != nil {

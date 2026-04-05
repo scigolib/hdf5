@@ -64,6 +64,48 @@ func NewMinimalRootGroupHeader() *ObjectHeaderWriter {
 	}
 }
 
+// MinOHDRAllocSize is the minimum allocation size for object headers.
+// This provides padding for future attribute additions without needing
+// continuation chunks. 256 bytes accommodates ~7 compact attributes.
+//
+// Reference: H5Ocreate.c uses H5O_CRT_ATTR_MIN_DENSE_DEF (8) as the threshold
+// for dense storage; we pre-allocate enough for that many compact attributes.
+const MinOHDRAllocSize = 256
+
+// PadToSize ensures the object header will be written with at least minSize bytes.
+// If the current size is already >= minSize, this is a no-op.
+// Padding is achieved by adding a Null message (type 0x0000) with enough data.
+//
+// This must be called BEFORE WriteTo, as it modifies the Messages list.
+func (ohw *ObjectHeaderWriter) PadToSize(minSize uint64) {
+	currentSize := ohw.Size()
+	if currentSize >= minSize {
+		return
+	}
+
+	// We need to add padding. A null message has overhead: Type(1)+Size(2)+Flags(1) = 4 bytes (v2).
+	// For v1: Type(2)+Size(2)+Flags(1)+Reserved(3) = 8 bytes, then 8-byte aligned.
+	needed := minSize - currentSize
+	var msgOverhead uint64
+	if ohw.Version == 1 {
+		msgOverhead = 8 // v1 message header
+	} else {
+		msgOverhead = 4 // v2 message header
+	}
+
+	if needed <= msgOverhead {
+		// Not enough room for even a null message header.
+		// Increase needed to at least cover the overhead.
+		needed = msgOverhead + 1
+	}
+
+	paddingDataSize := needed - msgOverhead
+	ohw.Messages = append(ohw.Messages, MessageWriter{
+		Type: MsgNil,
+		Data: make([]byte, paddingDataSize),
+	})
+}
+
 // Size calculates the total size of the object header in bytes.
 // This is used for pre-allocation before writing.
 //
@@ -397,8 +439,9 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 	return headerSize, nil
 }
 
-// AddMessageToObjectHeader adds a message to an object header.
-// For MVP (v0.11.1-beta): Only supports object header v2 without continuation blocks.
+// AddMessageToObjectHeader adds a message to an object header in memory.
+// The caller is responsible for checking whether the modified header fits
+// within its original allocation and, if not, using a continuation chunk.
 //
 // Parameters:
 //   - oh: Object header to modify
@@ -406,12 +449,7 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 //   - msgData: Encoded message bytes
 //
 // Returns:
-//   - error: Non-nil if header full or add fails
-//
-// Limitations:
-//   - No continuation blocks (returns error if header would overflow)
-//   - Only object header v2 supported
-//   - No message flags (always 0)
+//   - error: Non-nil if add fails
 //
 // Reference: H5O.c - H5O_msg_append().
 func AddMessageToObjectHeader(oh *ObjectHeader, msgType MessageType, msgData []byte) error {
@@ -423,31 +461,7 @@ func AddMessageToObjectHeader(oh *ObjectHeader, msgType MessageType, msgData []b
 		return fmt.Errorf("only object header version 2 is supported for modification, got version %d", oh.Version)
 	}
 
-	// For MVP: We don't support continuation blocks
-	// Calculate the space needed for the new message
-	// Message format in v2: Type(1) + Size(2) + Flags(1) + Data(variable)
-	messageHeaderSize := 4 // Type(1) + Size(2) + Flags(1)
-	totalMessageSize := messageHeaderSize + len(msgData)
-
-	// For MVP: We check if adding this message would exceed a reasonable header size
-	// HDF5 typically limits object header chunk 0 to 255 bytes (1-byte size encoding)
-	// We'll check the total size of all messages
-	currentMessagesSize := 0
-	for _, msg := range oh.Messages {
-		currentMessagesSize += 4 + len(msg.Data)
-	}
-
-	newTotalSize := currentMessagesSize + totalMessageSize
-
-	// For MVP: Limit to 255 bytes (max size for 1-byte chunk size encoding)
-	// In practice, headers with continuation blocks can be larger,
-	// but we're not implementing that yet
-	if newTotalSize > 255 {
-		return fmt.Errorf("object header full (current: %d bytes, new message: %d bytes, max: 255 bytes); continuation blocks not yet supported",
-			currentMessagesSize, totalMessageSize)
-	}
-
-	// Create new message
+	// Create new message.
 	newMessage := &HeaderMessage{
 		Type:   msgType,
 		Offset: 0, // Will be calculated during write
@@ -455,7 +469,7 @@ func AddMessageToObjectHeader(oh *ObjectHeader, msgType MessageType, msgData []b
 	}
 	copy(newMessage.Data, msgData)
 
-	// Add to messages list
+	// Add to messages list.
 	oh.Messages = append(oh.Messages, newMessage)
 
 	return nil
@@ -539,14 +553,126 @@ func ObjectHeaderSizeFromParsed(oh *ObjectHeader) uint64 {
 	return ohw.Size()
 }
 
+// EncodeContinuationMessage creates a continuation message (type 0x0010) that points
+// to an OCHK block at the given address with the given size.
+//
+// Continuation message format (H5Ocont.c):
+//   - Address of continuation block (OffsetSize bytes)
+//   - Size of continuation block (LengthSize bytes)
+//
+// Parameters:
+//   - ochkAddr: Address of the OCHK continuation block
+//   - ochkSize: Total size of the OCHK block (including "OCHK" signature and checksum)
+//   - sb: Superblock (provides OffsetSize and LengthSize)
+//
+// Returns:
+//   - []byte: Encoded continuation message data
+func EncodeContinuationMessage(ochkAddr, ochkSize uint64, sb *Superblock) []byte {
+	data := make([]byte, sb.OffsetSize+sb.LengthSize)
+	offset := 0
+
+	// Encode address (OffsetSize bytes, little-endian).
+	switch sb.OffsetSize {
+	case 2:
+		binary.LittleEndian.PutUint16(data[offset:], uint16(ochkAddr)) //nolint:gosec // G115: validated by caller
+	case 4:
+		binary.LittleEndian.PutUint32(data[offset:], uint32(ochkAddr)) //nolint:gosec // G115: validated by caller
+	case 8:
+		binary.LittleEndian.PutUint64(data[offset:], ochkAddr)
+	default:
+		data[offset] = byte(ochkAddr) //nolint:gosec // G115: validated by caller
+	}
+	offset += int(sb.OffsetSize)
+
+	// Encode size (LengthSize bytes, little-endian).
+	switch sb.LengthSize {
+	case 2:
+		binary.LittleEndian.PutUint16(data[offset:], uint16(ochkSize)) //nolint:gosec // G115: validated by caller
+	case 4:
+		binary.LittleEndian.PutUint32(data[offset:], uint32(ochkSize)) //nolint:gosec // G115: validated by caller
+	case 8:
+		binary.LittleEndian.PutUint64(data[offset:], ochkSize)
+	default:
+		data[offset] = byte(ochkSize) //nolint:gosec // G115: validated by caller
+	}
+
+	return data
+}
+
+// WriteContinuationChunkV2 writes a V2 OCHK continuation block containing the given messages.
+//
+// OCHK block format (per H5Opkg.h and H5Ocache.c):
+//   - "OCHK" signature (4 bytes)
+//   - Messages (same format as main OHDR: type(1) + size(2) + flags(1) + data)
+//   - Jenkins lookup3 checksum (4 bytes) over "OCHK" + messages
+//
+// Parameters:
+//   - w: Writer to write the OCHK block
+//   - address: File address where the OCHK block will be written
+//   - messages: Messages to include in the continuation chunk
+//
+// Returns:
+//   - uint64: Total size of the OCHK block written
+//   - error: Non-nil if write fails
+func WriteContinuationChunkV2(w io.WriterAt, address uint64, messages []MessageWriter) (uint64, error) {
+	// Calculate messages data size.
+	var messageDataSize uint64
+	for _, msg := range messages {
+		messageDataSize += 1 + 2 + 1 + uint64(len(msg.Data)) // Type(1) + Size(2) + Flags(1) + Data
+	}
+
+	// OCHK total size: "OCHK"(4) + messages + checksum(4).
+	totalSize := 4 + messageDataSize + 4
+	buf := make([]byte, totalSize)
+	offset := 0
+
+	// Signature "OCHK".
+	copy(buf[offset:offset+4], "OCHK")
+	offset += 4
+
+	// Write messages.
+	for _, msg := range messages {
+		buf[offset] = uint8(msg.Type) //nolint:gosec // Safe: message type is limited enum
+		offset++
+		binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(msg.Data))) //nolint:gosec // Safe: message size validated
+		offset += 2
+		buf[offset] = 0 // Message flags
+		offset++
+		copy(buf[offset:offset+len(msg.Data)], msg.Data)
+		offset += len(msg.Data)
+	}
+
+	// Jenkins lookup3 checksum over "OCHK" + messages.
+	checksum := JenkinsChecksum(buf[:offset])
+	binary.LittleEndian.PutUint32(buf[offset:offset+4], checksum)
+
+	// Write to file.
+	n, err := w.WriteAt(buf, int64(address)) //nolint:gosec // Safe: address within file bounds
+	if err != nil {
+		return 0, fmt.Errorf("failed to write OCHK continuation block at address %d: %w", address, err)
+	}
+	if n != len(buf) {
+		return 0, fmt.Errorf("incomplete OCHK write: wrote %d bytes, expected %d", n, len(buf))
+	}
+
+	return totalSize, nil
+}
+
+// ContinuationChunkSizeV2 calculates the on-disk size of an OCHK continuation block
+// for the given messages, without writing anything.
+//
+// Returns: "OCHK"(4) + sum(Type(1)+Size(2)+Flags(1)+Data) + Checksum(4).
+func ContinuationChunkSizeV2(messages []MessageWriter) uint64 {
+	var messageDataSize uint64
+	for _, msg := range messages {
+		messageDataSize += 1 + 2 + 1 + uint64(len(msg.Data))
+	}
+	return 4 + messageDataSize + 4
+}
+
 // RewriteObjectHeaderV2 rewrites an object header v2 with updated messages.
 // This handles the case where we need to modify an existing object header
 // by reading it, modifying it, and writing it back.
-//
-// For MVP (v0.11.1-beta):
-//   - Only supports v2 headers without continuation blocks
-//   - Overwrites header at original location if size permits
-//   - Returns error if new header doesn't fit in original space
 //
 // Parameters:
 //   - w: Writer with WriteAt capability
@@ -557,11 +683,6 @@ func ObjectHeaderSizeFromParsed(oh *ObjectHeader) uint64 {
 //
 // Returns:
 //   - error: Non-nil if operation fails
-//
-// Note: This is a simplified version for MVP. Full implementation would:
-//   - Support continuation blocks
-//   - Handle header relocation if needed
-//   - Support v1 headers
 func RewriteObjectHeaderV2(w io.WriterAt, r io.ReaderAt, addr uint64, sb *Superblock, newMessages []*HeaderMessage) error {
 	// Read existing object header
 	oh, err := ReadObjectHeader(r, addr, sb)

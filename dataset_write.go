@@ -562,9 +562,11 @@ const snodTotalSize = 8 + snodCapacity*snodEntrySize // 328
 // GroupMetadata stores metadata for a group (symbol table format).
 // Used for tracking non-root groups to enable nested dataset creation.
 type GroupMetadata struct {
-	heapAddr   uint64 // Local heap address (stores link names)
-	stNodeAddr uint64 // Symbol table node address (stores entries)
-	btreeAddr  uint64 // B-tree address (indexes symbol table)
+	heapAddr      uint64 // Local heap address (stores link names)
+	stNodeAddr    uint64 // Symbol table node address (stores entries)
+	btreeAddr     uint64 // B-tree address (indexes symbol table)
+	headerAddr    uint64 // Object header address (for attribute writing)
+	headerAllocSz uint64 // Original allocation size of the object header
 }
 
 // FileWriter represents an HDF5 file opened for writing.
@@ -576,10 +578,11 @@ type FileWriter struct {
 	config   *FileWriteConfig // Configuration for write operations
 
 	// Root group metadata for linking objects
-	rootGroupAddr  uint64 // Address of root group object header
-	rootBTreeAddr  uint64 // Address of root group B-tree
-	rootHeapAddr   uint64 // Address of root group local heap
-	rootStNodeAddr uint64 // Address of root group symbol table node
+	rootGroupAddr     uint64 // Address of root group object header
+	rootBTreeAddr     uint64 // Address of root group B-tree
+	rootHeapAddr      uint64 // Address of root group local heap
+	rootStNodeAddr    uint64 // Address of root group symbol table node
+	rootHeaderAllocSz uint64 // Original allocation size of root group object header
 
 	// Group metadata tracking (supports nested groups)
 	// Maps group path → metadata (heap, symbol table, B-tree addresses)
@@ -594,6 +597,23 @@ type FileWriter struct {
 	lazyRebalancingConfig        *structures.LazyRebalancingConfig
 	incrementalRebalancingConfig *structures.IncrementalRebalancingConfig
 	smartRebalancingConfig       *SmartRebalancingConfig
+}
+
+// lookupHeaderAllocSize returns the original allocation size for an object header
+// at the given address. Returns 0 if not tracked (e.g., for legacy files opened
+// with OpenForWrite, where we don't know the original allocation).
+func (fw *FileWriter) lookupHeaderAllocSize(objectAddr uint64) uint64 {
+	// Check root group.
+	if objectAddr == fw.rootGroupAddr {
+		return fw.rootHeaderAllocSz
+	}
+	// Check non-root groups.
+	for _, meta := range fw.groups {
+		if meta.headerAddr == objectAddr {
+			return meta.headerAllocSz
+		}
+	}
+	return 0
 }
 
 // Superblock version constants for file creation.
@@ -791,14 +811,15 @@ func CreateForWrite(filename string, mode CreateMode, opts ...interface{}) (*Fil
 	}
 
 	fileWriter := &FileWriter{
-		file:           fileObj,
-		writer:         fw,
-		filename:       filename,
-		config:         cfg, // Store configuration
-		rootGroupAddr:  rootInfo.groupAddr,
-		rootBTreeAddr:  rootInfo.btreeAddr,
-		rootHeapAddr:   rootInfo.heapAddr,
-		rootStNodeAddr: rootInfo.stNodeAddr,
+		file:              fileObj,
+		writer:            fw,
+		filename:          filename,
+		config:            cfg, // Store configuration
+		rootGroupAddr:     rootInfo.groupAddr,
+		rootBTreeAddr:     rootInfo.btreeAddr,
+		rootHeapAddr:      rootInfo.heapAddr,
+		rootStNodeAddr:    rootInfo.stNodeAddr,
+		rootHeaderAllocSz: rootInfo.groupSize,
 		// Initialize groups map for tracking nested groups
 		groups: make(map[string]*GroupMetadata),
 		// Copy rebalancing configs from tempFW
@@ -975,8 +996,10 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 		},
 	}
 
-	// Allocate space for object header
-	// We need to calculate size first
+	// Pre-allocate OHDR with padding for future attributes.
+	ohw.PadToSize(core.MinOHDRAllocSize)
+
+	// Calculate size and allocate.
 	headerSize, err := calculateObjectHeaderSize(ohw)
 	if err != nil {
 		return nil, fmt.Errorf("failed to calculate header size: %w", err)
@@ -1146,6 +1169,9 @@ func (fw *FileWriter) CreateCompoundDataset(name string, compoundType *core.Data
 			{Type: core.MsgDataLayout, Data: layoutData},
 		},
 	}
+
+	// Pre-allocate OHDR with padding for future attributes.
+	ohw.PadToSize(core.MinOHDRAllocSize)
 
 	// Calculate object header size for pre-allocation
 	headerSize, err := calculateObjectHeaderSize(ohw)
@@ -2974,6 +3000,9 @@ func writeRootGroupHeader(fw *writer.FileWriter, btreeAddr, heapAddr uint64, off
 		},
 		RefCount: 1, // Always 1 for new files
 	}
+
+	// Pre-allocate with padding for future attributes.
+	rootGroupHeader.PadToSize(core.MinOHDRAllocSize)
 
 	// Calculate root group object header size
 	rootGroupSize := rootGroupHeader.Size()
