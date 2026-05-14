@@ -22,16 +22,92 @@ import (
 	"testing"
 )
 
+type fixedTypeCase struct {
+	name  string
+	dtype Datatype
+	write any
+	want  []float64
+}
+
+// lenOfSlice extracts the element count from any of the typed slices the
+// fixed-point round-trip covers. Pulled out so the main test body stays
+// under the linter's cognitive-complexity ceiling.
+func lenOfSlice(v any) uint64 {
+	switch s := v.(type) {
+	case []int8:
+		return uint64(len(s))
+	case []int16:
+		return uint64(len(s))
+	case []int32:
+		return uint64(len(s))
+	case []int64:
+		return uint64(len(s))
+	case []uint8:
+		return uint64(len(s))
+	case []uint16:
+		return uint64(len(s))
+	case []uint32:
+		return uint64(len(s))
+	case []uint64:
+		return uint64(len(s))
+	}
+	return 0
+}
+
+func writeFixedTypeFixture(t *testing.T, filename string, cases []fixedTypeCase) {
+	t.Helper()
+	fw, err := CreateForWrite(filename, CreateTruncate)
+	if err != nil {
+		t.Fatalf("CreateForWrite: %v", err)
+	}
+	for _, c := range cases {
+		ds, err := fw.CreateDataset("/"+c.name, c.dtype, []uint64{lenOfSlice(c.write)})
+		if err != nil {
+			t.Fatalf("%s: CreateDataset: %v", c.name, err)
+		}
+		if err := ds.Write(c.write); err != nil {
+			t.Fatalf("%s: Write: %v", c.name, err)
+		}
+	}
+	if err := fw.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+}
+
+func readAndCheckCase(t *testing.T, f *File, c fixedTypeCase) {
+	t.Helper()
+	var obj Object
+	f.Walk(func(path string, o Object) {
+		if path == "/"+c.name {
+			obj = o
+		}
+	})
+	if obj == nil {
+		t.Fatalf("dataset %q not found", c.name)
+	}
+	ds, isDS := obj.(*Dataset)
+	if !isDS {
+		t.Fatalf("/%s is not a dataset", c.name)
+	}
+	got, err := ds.Read()
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(got) != len(c.want) {
+		t.Fatalf("len = %d, want %d", len(got), len(c.want))
+	}
+	for i, w := range c.want {
+		if got[i] != w {
+			t.Errorf("[%d] = %v, want %v", i, got[i], w)
+		}
+	}
+}
+
 func TestDatasetRead_AllFixedTypes_RoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "fixed_types_roundtrip.h5")
 
-	cases := []struct {
-		name  string
-		dtype Datatype
-		write any
-		want  []float64
-	}{
+	cases := []fixedTypeCase{
 		{"int8", Int8, []int8{-128, -1, 0, 1, 127}, []float64{-128, -1, 0, 1, 127}},
 		{"int16", Int16, []int16{-32768, -1, 0, 1, 32767}, []float64{-32768, -1, 0, 1, 32767}},
 		{"int32", Int32, []int32{-1 << 30, -1, 0, 1, (1 << 30) - 1}, []float64{-1 << 30, -1, 0, 1, (1 << 30) - 1}},
@@ -44,44 +120,8 @@ func TestDatasetRead_AllFixedTypes_RoundTrip(t *testing.T) {
 		{"uint64", Uint64, []uint64{0, 1, 1 << 40, (1 << 53) - 1}, []float64{0, 1, 1 << 40, (1 << 53) - 1}},
 	}
 
-	// Write phase.
-	fw, err := CreateForWrite(filename, CreateTruncate)
-	if err != nil {
-		t.Fatalf("CreateForWrite: %v", err)
-	}
-	for _, c := range cases {
-		var dims []uint64
-		switch v := c.write.(type) {
-		case []int8:
-			dims = []uint64{uint64(len(v))}
-		case []int16:
-			dims = []uint64{uint64(len(v))}
-		case []int32:
-			dims = []uint64{uint64(len(v))}
-		case []int64:
-			dims = []uint64{uint64(len(v))}
-		case []uint8:
-			dims = []uint64{uint64(len(v))}
-		case []uint16:
-			dims = []uint64{uint64(len(v))}
-		case []uint32:
-			dims = []uint64{uint64(len(v))}
-		case []uint64:
-			dims = []uint64{uint64(len(v))}
-		}
-		ds, err := fw.CreateDataset("/"+c.name, c.dtype, dims)
-		if err != nil {
-			t.Fatalf("%s: CreateDataset: %v", c.name, err)
-		}
-		if err := ds.Write(c.write); err != nil {
-			t.Fatalf("%s: Write: %v", c.name, err)
-		}
-	}
-	if err := fw.Close(); err != nil {
-		t.Fatalf("Close writer: %v", err)
-	}
+	writeFixedTypeFixture(t, filename, cases)
 
-	// Read phase.
 	f, err := Open(filename)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -90,31 +130,7 @@ func TestDatasetRead_AllFixedTypes_RoundTrip(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			var obj Object
-			f.Walk(func(path string, o Object) {
-				if path == "/"+c.name {
-					obj = o
-				}
-			})
-			if obj == nil {
-				t.Fatalf("dataset %q not found", c.name)
-			}
-			ds, isDS := obj.(*Dataset)
-			if !isDS {
-				t.Fatalf("/%s is not a dataset", c.name)
-			}
-			got, err := ds.Read()
-			if err != nil {
-				t.Fatalf("Read: %v", err)
-			}
-			if len(got) != len(c.want) {
-				t.Fatalf("len = %d, want %d", len(got), len(c.want))
-			}
-			for i, w := range c.want {
-				if got[i] != w {
-					t.Errorf("[%d] = %v, want %v", i, got[i], w)
-				}
-			}
+			readAndCheckCase(t, f, c)
 		})
 	}
 

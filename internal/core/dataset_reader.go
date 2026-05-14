@@ -150,6 +150,7 @@ func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uin
 			}
 			if signed {
 				for i := uint64(0); i < numElements; i++ {
+					//nolint:gosec // G115: spec-mandated uint8→int8 reinterpretation
 					result[i] = float64(int8(rawData[i]))
 				}
 			} else {
@@ -197,7 +198,7 @@ func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uin
 			} else {
 				for i := uint64(0); i < numElements; i++ {
 					// uint64 above 2^53 loses precision in float64; this
-					// matches the existing int64 path's behaviour and is
+					// matches the existing int64 path's behavior and is
 					// what the public Read API (returning []float64) can
 					// represent.
 					result[i] = float64(byteOrder.Uint64(rawData[i*8 : i*8+8]))
