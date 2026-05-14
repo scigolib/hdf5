@@ -24,6 +24,13 @@ const (
 	FilterLZF         FilterID = 32000 // LZF compression (PyTables/h5py).
 )
 
+// Human-readable filter labels. Extracted as constants so goconst doesn't
+// flag the string-literal duplication across source + helper tests.
+const (
+	filterGZIPName = "GZIP"
+	filterSZIPName = "SZIP"
+)
+
 // FilterPipelineMessage represents the filter pipeline for a dataset.
 type FilterPipelineMessage struct {
 	Version    uint8
@@ -423,7 +430,7 @@ func lzfDecompress(input []byte) ([]byte, error) {
 func filterName(id FilterID) string {
 	switch id {
 	case FilterDeflate:
-		return "GZIP"
+		return filterGZIPName
 	case FilterShuffle:
 		return "Shuffle"
 	case FilterFletcher:
@@ -433,7 +440,7 @@ func filterName(id FilterID) string {
 	case FilterLZF:
 		return "LZF"
 	case FilterSZIP:
-		return "SZIP"
+		return filterSZIPName
 	case FilterNBit:
 		return "N-bit"
 	case FilterScaleOffset:

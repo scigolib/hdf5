@@ -16,6 +16,14 @@ const (
 	DataspaceNull   DataspaceType = 2 // Null (no data).
 )
 
+// Textual labels for the DataspaceMessage.String() method. Extracted as
+// constants so goconst doesn't flag the string-literal duplication across
+// the source + helper tests.
+const (
+	dataspaceScalarStr = "scalar"
+	dataspaceNullStr   = "null"
+)
+
 // DataspaceMessage represents HDF5 dataspace message.
 type DataspaceMessage struct {
 	Version    uint8
@@ -149,9 +157,9 @@ func (ds *DataspaceMessage) TotalElements() uint64 {
 func (ds *DataspaceMessage) String() string {
 	switch ds.Type {
 	case DataspaceScalar:
-		return "scalar"
+		return dataspaceScalarStr
 	case DataspaceNull:
-		return "null"
+		return dataspaceNullStr
 	case DataspaceSimple:
 		switch len(ds.Dimensions) {
 		case 1:
@@ -162,7 +170,7 @@ func (ds *DataspaceMessage) String() string {
 			return fmt.Sprintf("%dD array %v", len(ds.Dimensions), ds.Dimensions)
 		}
 	default:
-		return "unknown"
+		return layoutUnknown
 	}
 }
 
