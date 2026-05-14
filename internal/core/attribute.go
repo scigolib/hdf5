@@ -860,7 +860,14 @@ func parseHeapID(heapID [7]byte, header *fractalHeapHeaderRaw) (offset, length u
 func readHeapObject(r io.ReaderAt, blockAddr, offset, length uint64, sb *Superblock, header *fractalHeapHeaderRaw) ([]byte, error) {
 	// Read direct block header to determine object data start
 	// Header size: 4 (sig) + 1 (ver) + offsetSize (heap addr) + heapOffsetSize (block offset)
+	// + 4 (checksum, ONLY if ChecksumDirBlocks flag is set in the heap header).
+	// Files written by netCDF-4 / hdf5 1.10+ commonly turn this on; missing the
+	// checksum bytes shifts every subsequent object read 4 bytes earlier and
+	// returns garbage from the trailing checksum of the previous object.
 	headerSize := 4 + 1 + int(sb.OffsetSize) + int(header.HeapOffsetSize)
+	if header.ChecksumDirBlocks {
+		headerSize += 4
+	}
 	headerBuf := make([]byte, headerSize+16) // Extra bytes for safety
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	n, err := r.ReadAt(headerBuf, int64(blockAddr))
@@ -897,10 +904,24 @@ func readHeapObject(r io.ReaderAt, blockAddr, offset, length uint64, sb *Superbl
 	}
 	relativeOffset := offset - blockOffset
 
-	// Now we're at the start of managed objects data
-	// Read the object at the relative offset within this block
-	//nolint:gosec // G115: headerOffset bounded by header size specification
-	objectAddr := blockAddr + uint64(headerOffset) + relativeOffset
+	// When ChecksumDirBlocks is set, the heap-address-space origin sits at
+	// the START of the FHDB block (so heap-id offset 21 maps to FHDB byte
+	// 21 — the first byte AFTER header + checksum). When the flag is
+	// clear, the origin sits at the start of the managed-object area
+	// (so heap-id offset 0 maps to the byte right after the header).
+	//
+	// We collapse these two conventions by using the raw relative offset
+	// when checksum is present (header bytes are part of the heap address
+	// space), and adding headerOffset otherwise. The first branch is what
+	// netCDF-4 / hdf5 1.10.x emit; the second matches scigolib's writer
+	// fixtures and pre-1.10 files.
+	var objectAddr uint64
+	if header.ChecksumDirBlocks {
+		objectAddr = blockAddr + relativeOffset
+	} else {
+		//nolint:gosec // G115: headerOffset bounded by header size specification
+		objectAddr = blockAddr + uint64(headerOffset) + relativeOffset
+	}
 	objectData := make([]byte, length)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface

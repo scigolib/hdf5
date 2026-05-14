@@ -54,19 +54,24 @@ func (lim *LinkInfoMessage) HasCreationOrderIndex() bool {
 	return (lim.Flags & LinkInfoIndexCreationOrder) != 0
 }
 
+// haddrUndef is HDF5's "address is unset" sentinel — all bits 1, used by
+// every offset field in the format to mean "no such object" when 0 is a
+// valid address.
+const haddrUndef = ^uint64(0)
+
 // HasFractalHeap returns true if fractal heap address is set.
 func (lim *LinkInfoMessage) HasFractalHeap() bool {
-	return lim.FractalHeapAddress != 0
+	return lim.FractalHeapAddress != 0 && lim.FractalHeapAddress != haddrUndef
 }
 
 // HasNameBTree returns true if name B-tree address is set.
 func (lim *LinkInfoMessage) HasNameBTree() bool {
-	return lim.NameBTreeAddress != 0
+	return lim.NameBTreeAddress != 0 && lim.NameBTreeAddress != haddrUndef
 }
 
 // HasCreationOrderBTree returns true if creation order B-tree address is set.
 func (lim *LinkInfoMessage) HasCreationOrderBTree() bool {
-	return lim.CreationOrderBTreeAddress != 0
+	return lim.CreationOrderBTreeAddress != 0 && lim.CreationOrderBTreeAddress != haddrUndef
 }
 
 // ParseLinkInfoMessage parses Link Info message from header message data.

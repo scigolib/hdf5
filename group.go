@@ -285,6 +285,58 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 			}
 		}
 
+		// Dense link storage (HDF5 1.8+): when a group has too many links to
+		// store inline as Link messages, the names are kept in a v2 B-tree
+		// addressed by name hash and the link message bodies in a fractal
+		// heap. The OHDR carries a Link Info message (type 0x0002) holding
+		// both addresses. This is the layout MET Norway's NORDRAD NetCDF-4
+		// output uses for the root group.
+		if !hasLinkMessages {
+			for _, msg := range header.Messages {
+				if msg.Type != core.MsgLinkInfo {
+					continue
+				}
+				linkInfo, err := core.ParseLinkInfoMessage(msg.Data, sb)
+				if err != nil {
+					return nil, utils.WrapError("link info parse failed", err)
+				}
+				if !linkInfo.HasFractalHeap() || !linkInfo.HasNameBTree() {
+					continue
+				}
+				heapObjects, err := core.ReadDenseHeapObjects(file.osFile,
+					linkInfo.NameBTreeAddress,
+					linkInfo.FractalHeapAddress,
+					sb,
+				)
+				if err != nil {
+					return nil, utils.WrapError("dense link read failed", err)
+				}
+				for _, raw := range heapObjects {
+					linkMsg, err := structures.ParseLinkMessage(raw, sb)
+					if err != nil {
+						// Skip individual malformed records rather than
+						// failing the whole group — matches the compact-
+						// link branch's tolerance below.
+						continue
+					}
+					if linkMsg.IsSoftLink() {
+						// Soft links deferred — see compact-link branch.
+						continue
+					}
+					if !linkMsg.IsHardLink() {
+						continue
+					}
+					child, err := loadObject(file, linkMsg.ObjectAddress, linkMsg.Name)
+					if err != nil {
+						continue
+					}
+					group.children = append(group.children, child)
+				}
+				hasLinkMessages = true
+				break
+			}
+		}
+
 		// Fallback to symbol table if no link messages found (older format).
 		if !hasLinkMessages {
 			// First check for Symbol Table message in object header
