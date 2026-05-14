@@ -85,17 +85,41 @@ data, err := ds.Read()  // Returns []float64
 
 **Precision Note**: When converting int64 to float64, integers larger than 2^53 (9,007,199,254,740,992) may lose precision due to float64's mantissa limitations.
 
-#### Unsigned Integers
-
-**Status**: Partially supported (converted to signed)
+#### 8-bit Signed Integer
 
 **HDF5 Types**:
-- `H5T_STD_U32LE`, `H5T_STD_U32BE`
-- `H5T_STD_U64LE`, `H5T_STD_U64BE`
+- `H5T_STD_I8LE` (little-endian)
+- `H5T_STD_I8BE` (big-endian)
+- `H5T_NATIVE_INT8` (platform-native)
 
-**Go Conversion**: Read as native unsigned integers (uint8/uint16/uint32/uint64).
+**Go Type**: `int8`
 
-**Note**: All unsigned types (Uint8, Uint16, Uint32, Uint64) are fully supported for both reading and writing.
+**Range**: -128 to 127
+
+#### 16-bit Signed Integer
+
+**HDF5 Types**:
+- `H5T_STD_I16LE` (little-endian)
+- `H5T_STD_I16BE` (big-endian)
+- `H5T_NATIVE_INT16` (platform-native)
+
+**Go Type**: `int16`
+
+**Range**: -32,768 to 32,767
+
+#### Unsigned Integers
+
+**Status**: Fully supported (all widths)
+
+**HDF5 Types**:
+- `H5T_STD_U8LE/BE` (uint8)
+- `H5T_STD_U16LE/BE` (uint16)
+- `H5T_STD_U32LE/BE` (uint32)
+- `H5T_STD_U64LE/BE` (uint64)
+
+**Go Conversion**: Read as native unsigned integers, converted to float64 by `Dataset.Read()`.
+
+**Precision Note**: uint64 values above 2^53 (9,007,199,254,740,992) may lose precision when converted to float64.
 
 ### Floating-Point Types
 
@@ -145,10 +169,18 @@ data, err := ds.Read()  // Returns []float64 (native)
 
 | HDF5 Type | Size | Go Read Type | Conversion |
 |-----------|------|--------------|------------|
+| H5T_STD_I8LE/BE | 1 byte | float64 | int8 → float64 |
+| H5T_STD_I16LE/BE | 2 bytes | float64 | int16 → float64 |
 | H5T_STD_I32LE/BE | 4 bytes | float64 | int32 → float64 |
 | H5T_STD_I64LE/BE | 8 bytes | float64 | int64 → float64 |
+| H5T_STD_U8LE/BE | 1 byte | float64 | uint8 → float64 |
+| H5T_STD_U16LE/BE | 2 bytes | float64 | uint16 → float64 |
+| H5T_STD_U32LE/BE | 4 bytes | float64 | uint32 → float64 |
+| H5T_STD_U64LE/BE | 8 bytes | float64 | uint64 → float64 * |
 | H5T_IEEE_F32LE/BE | 4 bytes | float64 | float32 → float64 |
 | H5T_IEEE_F64LE/BE | 8 bytes | float64 | No conversion |
+
+\* uint64 values above 2^53 may lose precision in float64.
 
 ---
 

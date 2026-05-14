@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Enhancement
+
+#### Full fixed-point integer read support (PR #48)
+
+`Dataset.Read()` now correctly decodes all 8 native fixed-point types: int8, int16, int32,
+int64, uint8, uint16, uint32, uint64. Previously only int32 and int64 were supported — other
+widths returned "unsupported datatype", and uint32/uint64 values with the high bit set silently
+wrapped to negative through signed reinterpretation.
+
+The sign flag is now read from bit 3 of the HDF5 class bit field (per spec III.A.1.b), matching
+the C reference implementation (`H5Odtype.c`).
+
+Contributed by [@rhaist](https://github.com/rhaist).
+
+---
+
 ## [v0.13.19] - 2026-04-05
 
 ### Enhancement
