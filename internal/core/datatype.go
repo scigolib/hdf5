@@ -180,6 +180,20 @@ func (dt *DatatypeMessage) IsInt64() bool {
 	return dt.Class == DatatypeFixed && dt.Size == 8
 }
 
+// IsFixedPoint reports whether the datatype is an integer (signed or
+// unsigned, any width). Use [DatatypeMessage.IsSignedFixedPoint] to
+// distinguish signedness; use [DatatypeMessage.Size] for width.
+func (dt *DatatypeMessage) IsFixedPoint() bool {
+	return dt.Class == DatatypeFixed
+}
+
+// IsSignedFixedPoint reports whether a fixed-point datatype is signed
+// (two's-complement). Per HDF5 spec III.A.1.b the sign bit lives at bit 3
+// of the class bit field. Undefined for non-fixed-point types.
+func (dt *DatatypeMessage) IsSignedFixedPoint() bool {
+	return dt.Class == DatatypeFixed && dt.ClassBitField&0x08 != 0
+}
+
 // IsString checks if datatype is a string type.
 func (dt *DatatypeMessage) IsString() bool {
 	return dt.Class == DatatypeString

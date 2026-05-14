@@ -7,6 +7,11 @@ import (
 	"io"
 )
 
+// HDF5 filter label for DEFLATE / GZIP compression. Extracted as a
+// constant so goconst doesn't flag the duplicate string across source +
+// helper tests.
+const filterDeflateName = "deflate"
+
 // GZIPFilter implements GZIP compression (FilterID = 1).
 // This filter uses the DEFLATE compression algorithm to reduce data size.
 // In HDF5, this filter is named "deflate" following zlib terminology.
@@ -44,7 +49,7 @@ func (f *GZIPFilter) ID() FilterID {
 // Name returns the HDF5 filter name.
 // HDF5 uses "deflate" (the underlying algorithm) rather than "gzip".
 func (f *GZIPFilter) Name() string {
-	return "deflate"
+	return filterDeflateName
 }
 
 // Apply compresses data using GZIP/DEFLATE algorithm.

@@ -2,6 +2,11 @@ package writer
 
 import "fmt"
 
+// HDF5 filter label for the byte-shuffle filter. Extracted as a constant
+// so goconst doesn't flag the duplicate string across source + helper
+// tests.
+const filterShuffleName = "shuffle"
+
 // ShuffleFilter implements byte shuffle (FilterID = 2).
 //
 // The shuffle filter reorders bytes in the data to improve compression ratios
@@ -47,7 +52,7 @@ func (f *ShuffleFilter) ID() FilterID {
 
 // Name returns the HDF5 filter name.
 func (f *ShuffleFilter) Name() string {
-	return "shuffle"
+	return filterShuffleName
 }
 
 // Apply performs byte shuffle on the data.
