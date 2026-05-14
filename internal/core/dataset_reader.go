@@ -136,30 +136,75 @@ func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uin
 			result[i] = float64(math.Float32frombits(bits))
 		}
 
-	case datatype.IsInt32():
-		// 32-bit signed integer.
-		for i := uint64(0); i < numElements; i++ {
-			offset := i * 4
-			if offset+4 > uint64(len(rawData)) {
-				return nil, errors.New("data truncated (int32)")
+	case datatype.IsFixedPoint():
+		// Fixed-point integer of any width (1/2/4/8 bytes), signed or
+		// unsigned. The HDF5 spec encodes width in datatype.Size and
+		// signedness in bit 3 of ClassBitField. The branching is on
+		// Size first because the byte read is the same regardless of
+		// signedness; signedness only changes the reinterpretation.
+		signed := datatype.IsSignedFixedPoint()
+		switch datatype.Size {
+		case 1:
+			if numElements > uint64(len(rawData)) {
+				return nil, errors.New("data truncated (1-byte int)")
 			}
-
-			//nolint:gosec // G115: HDF5 binary format requires uint32 to int32 conversion
-			val := int32(byteOrder.Uint32(rawData[offset : offset+4]))
-			result[i] = float64(val)
-		}
-
-	case datatype.IsInt64():
-		// 64-bit signed integer.
-		for i := uint64(0); i < numElements; i++ {
-			offset := i * 8
-			if offset+8 > uint64(len(rawData)) {
-				return nil, errors.New("data truncated (int64)")
+			if signed {
+				for i := uint64(0); i < numElements; i++ {
+					result[i] = float64(int8(rawData[i]))
+				}
+			} else {
+				for i := uint64(0); i < numElements; i++ {
+					result[i] = float64(rawData[i])
+				}
 			}
-
-			//nolint:gosec // G115: HDF5 binary format requires uint64 to int64 conversion
-			val := int64(byteOrder.Uint64(rawData[offset : offset+8]))
-			result[i] = float64(val)
+		case 2:
+			if numElements*2 > uint64(len(rawData)) {
+				return nil, errors.New("data truncated (2-byte int)")
+			}
+			if signed {
+				for i := uint64(0); i < numElements; i++ {
+					//nolint:gosec // G115: spec-mandated uint16→int16 reinterpretation
+					result[i] = float64(int16(byteOrder.Uint16(rawData[i*2 : i*2+2])))
+				}
+			} else {
+				for i := uint64(0); i < numElements; i++ {
+					result[i] = float64(byteOrder.Uint16(rawData[i*2 : i*2+2]))
+				}
+			}
+		case 4:
+			if numElements*4 > uint64(len(rawData)) {
+				return nil, errors.New("data truncated (4-byte int)")
+			}
+			if signed {
+				for i := uint64(0); i < numElements; i++ {
+					//nolint:gosec // G115: spec-mandated uint32→int32 reinterpretation
+					result[i] = float64(int32(byteOrder.Uint32(rawData[i*4 : i*4+4])))
+				}
+			} else {
+				for i := uint64(0); i < numElements; i++ {
+					result[i] = float64(byteOrder.Uint32(rawData[i*4 : i*4+4]))
+				}
+			}
+		case 8:
+			if numElements*8 > uint64(len(rawData)) {
+				return nil, errors.New("data truncated (8-byte int)")
+			}
+			if signed {
+				for i := uint64(0); i < numElements; i++ {
+					//nolint:gosec // G115: spec-mandated uint64→int64 reinterpretation
+					result[i] = float64(int64(byteOrder.Uint64(rawData[i*8 : i*8+8])))
+				}
+			} else {
+				for i := uint64(0); i < numElements; i++ {
+					// uint64 above 2^53 loses precision in float64; this
+					// matches the existing int64 path's behaviour and is
+					// what the public Read API (returning []float64) can
+					// represent.
+					result[i] = float64(byteOrder.Uint64(rawData[i*8 : i*8+8]))
+				}
+			}
+		default:
+			return nil, fmt.Errorf("unsupported fixed-point width %d bytes", datatype.Size)
 		}
 
 	default:
