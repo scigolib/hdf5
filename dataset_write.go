@@ -2199,21 +2199,49 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 
 	// Step 3: Extract root group information from existing file
 	rootGroupAddr := f.sb.RootGroup
-	rootBTreeAddr := f.sb.RootBTreeAddr // v0 only
-	rootHeapAddr := f.sb.RootHeapAddr   // v0 only
-	rootStNodeAddr := uint64(0)         // Will need to extract if needed
+	rootBTreeAddr := f.sb.RootBTreeAddr // v0: cached in superblock
+	rootHeapAddr := f.sb.RootHeapAddr   // v0: cached in superblock
+	rootStNodeAddr := uint64(0)
+	rootHeaderAllocSz := uint64(0)
+
+	// For v2/v3 superblocks the B-tree and local-heap addresses are NOT
+	// stored in the superblock — they live inside the root group's object
+	// header Symbol Table message. Read them the same way the read path
+	// does (see group.go:292-298).
+	reader := fw.Reader()
+	rootOH, ohErr := core.ReadObjectHeader(reader, rootGroupAddr, f.sb)
+	if ohErr != nil {
+		_ = fw.Close()
+		_ = f.Close()
+		return nil, fmt.Errorf("failed to read root group object header: %w", ohErr)
+	}
+	rootHeaderAllocSz = core.ObjectHeaderSizeFromParsed(rootOH)
+
+	if rootBTreeAddr == 0 || rootHeapAddr == 0 {
+		for _, msg := range rootOH.Messages {
+			if msg.Type == core.MsgSymbolTable && len(msg.Data) >= 2*int(f.sb.OffsetSize) {
+				rootBTreeAddr = f.sb.Endianness.Uint64(msg.Data[0:8])
+				rootHeapAddr = f.sb.Endianness.Uint64(msg.Data[8:16])
+				break
+			}
+		}
+	}
 
 	// Step 4: Create FileWriter with loaded structures
 	fileWriter := &FileWriter{
-		file:           f,
-		writer:         fw,
-		filename:       filename,
-		config:         cfg, // Store configuration
-		rootGroupAddr:  rootGroupAddr,
-		rootBTreeAddr:  rootBTreeAddr,
-		rootHeapAddr:   rootHeapAddr,
-		rootStNodeAddr: rootStNodeAddr,
+		file:              f,
+		writer:            fw,
+		filename:          filename,
+		config:            cfg,
+		rootGroupAddr:     rootGroupAddr,
+		rootBTreeAddr:     rootBTreeAddr,
+		rootHeapAddr:      rootHeapAddr,
+		rootStNodeAddr:    rootStNodeAddr,
+		rootHeaderAllocSz: rootHeaderAllocSz,
+		groups:            make(map[string]*GroupMetadata),
 	}
+
+	fileWriter.globalHeapWriter = newGlobalHeapWriter(fileWriter)
 
 	return fileWriter, nil
 }
