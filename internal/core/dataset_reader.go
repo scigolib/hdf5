@@ -106,6 +106,15 @@ func ReadDatasetFloat64(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]
 	return convertToFloat64(rawData, datatype, totalElements)
 }
 
+// ConvertToFloat64 converts raw element bytes to a float64 slice based on
+// the datatype. Exported so the hyperslab reader shares the exact same
+// datatype coverage as the whole-dataset Read() path (notably fixed-point
+// integers of every width/sign — int16, uint8, …), instead of maintaining
+// a second, narrower converter that silently rejected those types.
+func ConvertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uint64) ([]float64, error) {
+	return convertToFloat64(rawData, datatype, numElements)
+}
+
 // convertToFloat64 converts raw bytes to float64 array based on datatype.
 func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uint64) ([]float64, error) {
 	result := make([]float64, numElements)

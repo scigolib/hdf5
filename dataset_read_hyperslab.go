@@ -1,9 +1,7 @@
 package hdf5
 
 import (
-	"encoding/binary"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/scigolib/hdf5/internal/core"
@@ -491,7 +489,7 @@ func (d *Dataset) readContiguousOptimized(
 			return nil, fmt.Errorf("failed to read 1D contiguous data: %w", err)
 		}
 
-		return convertToFloat64(rawData, datatype, outputElements)
+		return core.ConvertToFloat64(rawData, datatype, outputElements)
 	}
 
 	// Multi-dimensional contiguous case
@@ -511,7 +509,7 @@ func (d *Dataset) readContiguousOptimized(
 		return nil, fmt.Errorf("failed to read contiguous data: %w", err)
 	}
 
-	return convertToFloat64(outputData, datatype, outputElements)
+	return core.ConvertToFloat64(outputData, datatype, outputElements)
 }
 
 // readContiguousRowByRow reads selections row-by-row for non-contiguous patterns.
@@ -578,7 +576,7 @@ func (d *Dataset) readContiguousRowByRow(
 		elementSize, &outputIdx,
 	)
 
-	return convertToFloat64(outputData, datatype, outputElements)
+	return core.ConvertToFloat64(outputData, datatype, outputElements)
 }
 
 // readContiguous2DOptimized handles 2D contiguous datasets with row-by-row reading.
@@ -635,7 +633,7 @@ func (d *Dataset) readContiguous2DOptimized(
 		}
 	}
 
-	return convertToFloat64(outputData, datatype, outputElements)
+	return core.ConvertToFloat64(outputData, datatype, outputElements)
 }
 
 // readHyperslabChunked reads hyperslab from chunked layout dataset.
@@ -697,14 +695,18 @@ func (d *Dataset) readHyperslabChunked(
 
 	// Allocate output buffer
 	outputData := make([]byte, outputElements*elementSize)
-	outputIdx := uint64(0)
 
-	// Read each overlapping chunk and extract relevant data
+	// Read each overlapping chunk and extract relevant data. Each element
+	// is placed at the output offset computed from its coordinates (see
+	// extractChunkPortionRecursive), NOT a running counter — the chunks are
+	// visited in chunk-grid order, which is not the selection's row-major
+	// order whenever a chunk is narrower than the selection, and a missing
+	// sparse chunk would otherwise shift every later element.
 	for _, chunkCoord := range overlappingChunks {
 		err := d.extractFromChunk(
 			chunkCoord, chunkIndex, chunkDims, dims,
 			selection, datatype, filterPipeline,
-			outputData, &outputIdx,
+			outputData,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract from chunk %v: %w", chunkCoord, err)
@@ -712,7 +714,7 @@ func (d *Dataset) readHyperslabChunked(
 	}
 
 	// Convert bytes to float64
-	return convertToFloat64(outputData, datatype, outputElements)
+	return core.ConvertToFloat64(outputData, datatype, outputElements)
 }
 
 // chunkIndexEntry stores chunk location information.
@@ -812,7 +814,6 @@ func (d *Dataset) extractFromChunk(
 	datatype *core.DatatypeMessage,
 	filterPipeline *core.FilterPipelineMessage,
 	outputData []byte,
-	outputIdx *uint64,
 ) error {
 	// Look up chunk address
 	key := chunkCoordsToKey(chunkCoord)
@@ -846,7 +847,7 @@ func (d *Dataset) extractFromChunk(
 	extractChunkPortion(
 		chunkData, chunkCoord, chunkDims, datasetDims,
 		selection, elementSize,
-		outputData, outputIdx,
+		outputData,
 	)
 
 	return nil
@@ -862,7 +863,6 @@ func extractChunkPortion(
 	selection *HyperslabSelection,
 	elementSize uint64,
 	outputData []byte,
-	outputIdx *uint64,
 ) {
 	ndims := len(chunkCoord)
 
@@ -884,8 +884,32 @@ func extractChunkPortion(
 	extractChunkPortionRecursive(
 		chunkData, chunkStart, chunkEnd, chunkDims,
 		selection, coords, 0,
-		elementSize, outputData, outputIdx,
+		elementSize, outputData,
 	)
+}
+
+// selectionOutputIndex returns the row-major position of a dataset
+// coordinate within the hyperslab selection's output buffer. This decouples
+// an element's output slot from the order chunks happen to be visited, so a
+// selection that spans multiple chunks (or skips a missing sparse chunk)
+// still lands every element in its correct place. The per-dimension output
+// extent is Count*Block; for the common stride=1, block=1 ReadSlice this is
+// simply coord-start.
+func selectionOutputIndex(coords []uint64, sel *HyperslabSelection) uint64 {
+	idx := uint64(0)
+	stride := uint64(1)
+	for i := len(coords) - 1; i >= 0; i-- {
+		rel := coords[i] - sel.Start[i]
+		var pos uint64
+		if sel.Stride[i] <= 1 {
+			pos = rel
+		} else {
+			pos = (rel/sel.Stride[i])*sel.Block[i] + rel%sel.Stride[i]
+		}
+		idx += pos * stride
+		stride *= sel.Count[i] * sel.Block[i]
+	}
+	return idx
 }
 
 // extractChunkPortionRecursive recursively extracts elements from chunk.
@@ -900,7 +924,6 @@ func extractChunkPortionRecursive(
 	dim int,
 	elementSize uint64,
 	outputData []byte,
-	outputIdx *uint64,
 ) {
 	ndims := len(coords)
 
@@ -927,15 +950,17 @@ func extractChunkPortionRecursive(
 			chunkStride *= chunkDims[i]
 		}
 
-		// Copy element from chunk to output
+		// Copy element from chunk to its coordinate-derived output slot.
+		// Using the row-major position within the selection (not a running
+		// counter) keeps the output correct regardless of chunk visitation
+		// order or missing sparse chunks.
 		srcOffset := chunkOffset * elementSize
-		dstOffset := (*outputIdx) * elementSize
+		dstOffset := selectionOutputIndex(coords, selection) * elementSize
 
 		if srcOffset+elementSize <= uint64(len(chunkData)) &&
 			dstOffset+elementSize <= uint64(len(outputData)) {
 			copy(outputData[dstOffset:dstOffset+elementSize],
 				chunkData[srcOffset:srcOffset+elementSize])
-			(*outputIdx)++
 		}
 
 		return
@@ -956,7 +981,7 @@ func extractChunkPortionRecursive(
 			extractChunkPortionRecursive(
 				chunkData, chunkStart, chunkEnd, chunkDims,
 				selection, coords, dim+1,
-				elementSize, outputData, outputIdx,
+				elementSize, outputData,
 			)
 		}
 	}
@@ -1003,7 +1028,7 @@ func extractHyperslabFromRawData(
 
 	// Convert bytes to float64 (matching existing Read() behavior)
 	// Future: support other types based on datatype
-	return convertToFloat64(outputData, datatype, outputElements)
+	return core.ConvertToFloat64(outputData, datatype, outputElements)
 }
 
 // extractHyperslabRecursive recursively iterates through hyperslab selection dimensions.
@@ -1079,80 +1104,7 @@ func calculateLinearOffset(coords, dims []uint64) uint64 {
 	return offset
 }
 
-// convertToFloat64 is a wrapper around core's private convertToFloat64 function.
-// This converts raw bytes to float64 array based on datatype.
-// For MVP, we only support float64 output (matching existing Read() method).
-func convertToFloat64(rawData []byte, datatype *core.DatatypeMessage, numElements uint64) ([]float64, error) {
-	byteOrder := datatype.GetByteOrder()
-
-	switch {
-	case datatype.IsFloat64():
-		return convertBytesToFloat64Direct(rawData, byteOrder, numElements)
-	case datatype.IsFloat32():
-		return convertBytesToFloat32AsFloat64(rawData, byteOrder, numElements)
-	case datatype.IsInt32():
-		return convertBytesToInt32AsFloat64(rawData, byteOrder, numElements)
-	case datatype.IsInt64():
-		return convertBytesToInt64AsFloat64(rawData, byteOrder, numElements)
-	default:
-		return nil, fmt.Errorf("unsupported datatype for conversion to float64")
-	}
-}
-
-// convertBytesToFloat64Direct converts IEEE 754 double precision bytes to float64.
-func convertBytesToFloat64Direct(rawData []byte, byteOrder binary.ByteOrder, numElements uint64) ([]float64, error) {
-	result := make([]float64, numElements)
-	for i := uint64(0); i < numElements; i++ {
-		offset := i * 8
-		if offset+8 > uint64(len(rawData)) {
-			return nil, fmt.Errorf("data truncated (float64)")
-		}
-		bits := byteOrder.Uint64(rawData[offset : offset+8])
-		result[i] = math.Float64frombits(bits)
-	}
-	return result, nil
-}
-
-// convertBytesToFloat32AsFloat64 converts IEEE 754 single precision bytes to float64.
-func convertBytesToFloat32AsFloat64(rawData []byte, byteOrder binary.ByteOrder, numElements uint64) ([]float64, error) {
-	result := make([]float64, numElements)
-	for i := uint64(0); i < numElements; i++ {
-		offset := i * 4
-		if offset+4 > uint64(len(rawData)) {
-			return nil, fmt.Errorf("data truncated (float32)")
-		}
-		bits := byteOrder.Uint32(rawData[offset : offset+4])
-		result[i] = float64(math.Float32frombits(bits))
-	}
-	return result, nil
-}
-
-// convertBytesToInt32AsFloat64 converts 32-bit signed integer bytes to float64.
-func convertBytesToInt32AsFloat64(rawData []byte, byteOrder binary.ByteOrder, numElements uint64) ([]float64, error) {
-	result := make([]float64, numElements)
-	for i := uint64(0); i < numElements; i++ {
-		offset := i * 4
-		if offset+4 > uint64(len(rawData)) {
-			return nil, fmt.Errorf("data truncated (int32)")
-		}
-		//nolint:gosec // G115: HDF5 binary format requires uint32 to int32 conversion
-		val := int32(byteOrder.Uint32(rawData[offset : offset+4]))
-		result[i] = float64(val)
-	}
-	return result, nil
-}
-
-// convertBytesToInt64AsFloat64 converts 64-bit signed integer bytes to float64.
-func convertBytesToInt64AsFloat64(rawData []byte, byteOrder binary.ByteOrder, numElements uint64) ([]float64, error) {
-	result := make([]float64, numElements)
-	for i := uint64(0); i < numElements; i++ {
-		offset := i * 8
-		if offset+8 > uint64(len(rawData)) {
-			return nil, fmt.Errorf("data truncated (int64)")
-		}
-		//nolint:gosec // G115: HDF5 binary format requires uint64 to int64 conversion
-		val := int64(byteOrder.Uint64(rawData[offset : offset+8]))
-		result[i] = float64(val)
-	}
-	return result, nil
-}
+// (datatype conversion is delegated to core.ConvertToFloat64 — see the
+// chunked/contiguous readers above — so the hyperslab path supports exactly
+// the same datatypes as the whole-dataset Read(), including fixed-point
+// integers of every width and sign.)
