@@ -180,6 +180,29 @@ func TestConvertToFloat64(t *testing.T) {
 	}
 }
 
+// TestConvertToFloat64Exported covers the exported ConvertToFloat64
+// wrapper (the hyperslab reader's single entry point into this converter),
+// confirming it routes through to the same logic — including fixed-point
+// int16, the width the wrapper was introduced to make ReadSlice support.
+func TestConvertToFloat64Exported(t *testing.T) {
+	// Signed 16-bit little-endian: -5, then 300.
+	rawData := []byte{0xFB, 0xFF, 0x2C, 0x01}
+	dt := &DatatypeMessage{
+		Class:         DatatypeFixed,
+		Size:          2,
+		ClassBitField: 0x08, // bit 3 set = signed; bit 0 clear = little-endian
+	}
+
+	got, err := ConvertToFloat64(rawData, dt, 2)
+	require.NoError(t, err)
+	require.Equal(t, []float64{-5, 300}, got)
+
+	// Matches the unexported implementation exactly.
+	want, err := convertToFloat64(rawData, dt, 2)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
 // TestConvertToStrings tests pure function convertToStrings.
 func TestConvertToStrings(t *testing.T) {
 	tests := []struct {
