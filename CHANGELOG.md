@@ -7,7 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [v0.13.20] - 2026-06-15
+
+### Bug Fix
+
+#### Chunked ReadSlice/ReadHyperslab ordering fix (Issue #52)
+
+`ReadSlice` and `ReadHyperslab` on chunked datasets returned scrambled data when the selection
+spanned multiple chunks in a non-final dimension. Elements were placed in chunk-visitation order
+instead of the selection's row-major order — on a real (4400×3800) DEFLATE dataset, **49% of
+cells** were wrong.
+
+The fix replaces the running output counter with coordinate-based placement: each element is
+written to its row-major position within the selection, regardless of chunk visit order or
+missing sparse chunks.
+
+Additionally, the hyperslab path now supports all fixed-point integer widths (int8, uint8,
+int16, uint16, int32, uint32, int64, uint64) by delegating to the same converter that
+whole-dataset `Read()` uses, eliminating a narrower duplicate that only handled 4 types.
+
+Contributed by [@rhaist](https://github.com/rhaist).
+
+#### OpenForWrite panic on CreateGroup (Issue #50)
+
+`CreateGroup` panicked with `assignment to entry in nil map` on files opened via `OpenForWrite`.
+Full audit revealed **4 missing initializations** compared to `CreateForWrite`:
+
+1. **`groups` map** (nil) — any `CreateGroup`/link operation panicked
+2. **`globalHeapWriter`** (nil) — variable-length string dataset writes would panic
+3. **`rootBTreeAddr`/`rootHeapAddr`** (zero for v2/v3) — B-tree/heap addresses are not stored
+   in v2/v3 superblocks, must be read from root group's Symbol Table message
+4. **`rootHeaderAllocSz`** (zero) — attribute bounds checking was degraded
+
+Reported by [@vrv-bit](https://github.com/vrv-bit).
 
 ### Enhancement
 
