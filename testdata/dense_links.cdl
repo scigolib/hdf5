@@ -1,0 +1,26 @@
+netcdf dense_links {
+dimensions:
+  x = 3 ;
+variables:
+  int v00(x) ;
+  int v01(x) ;
+  int v02(x) ;
+  int v03(x) ;
+  int v04(x) ;
+  int v05(x) ;
+  int v06(x) ;
+  int v07(x) ;
+  int v08(x) ;
+  int v09(x) ;
+  int v10(x) ;
+  int v11(x) ;
+  int v12(x) ;
+  int v13(x) ;
+  int v14(x) ;
+  int v15(x) ;
+data:
+  v00 = 0, 1, 2 ; v01 = 1, 2, 3 ; v02 = 2, 3, 4 ; v03 = 3, 4, 5 ;
+  v04 = 4, 5, 6 ; v05 = 5, 6, 7 ; v06 = 6, 7, 8 ; v07 = 7, 8, 9 ;
+  v08 = 8, 9, 10 ; v09 = 9, 10, 11 ; v10 = 10, 11, 12 ; v11 = 11, 12, 13 ;
+  v12 = 12, 13, 14 ; v13 = 13, 14, 15 ; v14 = 14, 15, 16 ; v15 = 15, 16, 17 ;
+}
