@@ -478,7 +478,7 @@ func (g *Group) loadChildren() error {
 
 	var entries []structures.BTreeEntry
 	switch btreeSig {
-	case "TREE":
+	case "TREE": //nolint:goconst // HDF5 B-tree signature used across multiple packages
 		// v1 B-tree format (used in v0 files and some v1 files).
 		entries, err = structures.ReadGroupBTreeEntries(g.file.osFile, btreeAddr, g.file.sb)
 	case "BTRE":
