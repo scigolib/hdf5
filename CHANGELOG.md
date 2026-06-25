@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.14.0] - 2026-06-25
+
+### New Feature
+
+#### Object Deletion Support (Issue #51, PR #57)
+
+Full object deletion following the HDF5 C reference implementation (`H5Ldelete`, `H5O_delete`,
+`H5MF_xfree`). Supports deleting datasets, groups, and attributes from existing files.
+
+```go
+fw, _ := hdf5.OpenForWrite("data.h5", hdf5.OpenReadWrite)
+
+// Delete a dataset (unlink + cascade: frees OHDR, contiguous/chunked data)
+fw.Delete("/old_dataset")
+
+// Delete an attribute from a group
+group.DeleteAttribute("deprecated_attr")
+
+fw.Close()
+```
+
+**What happens on delete**:
+- Object is unlinked from parent group (SNOD entry removed, B-tree updated)
+- Reference count decremented; if nlink reaches 0, cascade delete frees:
+  - Object header space
+  - Contiguous data blocks
+  - Chunked data (walks chunk B-tree index, frees each chunk)
+  - Group structures (B-tree, local heap, symbol table nodes)
+- Freed space is tracked by the allocator for reuse by future allocations
+- File does not shrink (matching C library behavior; use `h5repack` for compaction)
+
+**New allocator capabilities**: `Free()` with best-fit reuse, adjacent block coalescing,
+end-of-file shrink optimization.
+
+Requested by [@vrv-bit](https://github.com/vrv-bit).
+
+#### Dense Link Storage Enumeration (PR #55)
+
+Groups using fractal-heap + v2 B-tree "dense link" storage (HDF5 1.8+) are now fully readable.
+Previously, groups past the compact-link threshold (typically 8 links) showed **zero children** —
+`Children()` and `Walk()` silently missed everything.
+
+This is the layout every **NetCDF-4** producer emits for groups with more than ~8 entries
+(e.g., MET Norway NORDRAD radar-nowcast files). The library can now enumerate all datasets
+in those files.
+
+Also fixes two bugs in `readHeapObject`:
+1. Direct block header size didn't account for the 4-byte checksum when `ChecksumDirBlocks` is set
+2. Managed-area address origin depends on `ChecksumDirBlocks` flag (C library vs scigolib convention)
+
+And fixes `HasFractalHeap()`/`HasNameBTree()` to treat `HADDR_UNDEF` (`0xFFFFFFFFFFFFFFFF`) as unset.
+
+Contributed by [@rhaist](https://github.com/rhaist).
+
+#### Dense Link Fixture + Test (PR #56)
+
+Added `testdata/dense_links.h5` (NetCDF-4 file with 16 datasets in a dense-link root group)
+and `TestDenseLinks_RootGroup` covering `ReadDenseHeapObjects` and the `ChecksumDirBlocks`
+direct-block branch.
+
+Contributed by [@rhaist](https://github.com/rhaist).
+
+---
+
 ## [v0.13.20] - 2026-06-15
 
 ### Bug Fix
