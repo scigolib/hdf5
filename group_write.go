@@ -81,6 +81,29 @@ func (g *GroupWriter) WriteAttribute(name string, value interface{}) error {
 	return writeAttribute(g.file, g.headerAddr, name, value)
 }
 
+// DeleteAttribute removes an attribute by name from this group.
+//
+// This method supports both compact and dense attribute storage:
+//   - Compact storage (0-7 attributes): Removes message from object header
+//   - Dense storage (8+ attributes): Removes from B-tree and fractal heap
+//
+// Parameters:
+//   - name: Attribute name to delete
+//
+// Returns:
+//   - error: If attribute not found or deletion fails
+//
+// Example:
+//
+//	group, _ := fw.CreateGroup("/mygroup")
+//	group.WriteAttribute("temp", int32(42))
+//	group.DeleteAttribute("temp") // Remove attribute
+//
+// Reference: H5Adelete.c - H5A__delete().
+func (g *GroupWriter) DeleteAttribute(name string) error {
+	return deleteAttribute(g.file, g.headerAddr, name)
+}
+
 // Path returns the full path of this group.
 //
 // This can be used to display the group's location in the file hierarchy
@@ -489,7 +512,7 @@ func (fw *FileWriter) readGroupBTree(btreeAddr uint64) (*structures.BTreeNodeV1,
 	}
 
 	sig := string(header[0:4])
-	if sig != "TREE" {
+	if sig != "TREE" { //nolint:goconst // HDF5 B-tree signature used across multiple packages
 		return nil, nil, fmt.Errorf("invalid B-tree signature: %q", sig)
 	}
 
@@ -815,6 +838,163 @@ func (fw *FileWriter) resolveObjectAddress(path string) (uint64, error) {
 	}
 
 	return 0, fmt.Errorf("object not found: %s", path)
+}
+
+// unlinkFromParent removes a named child entry from its parent group's symbol table.
+// This is the reverse of linkToParent. It reads the parent's B-tree + SNODs, finds
+// the named entry, removes it, and rewrites the B-tree + SNODs.
+//
+// Parameters:
+//   - parentPath: Path to parent group ("" or "/" for root)
+//   - childName: Name of the child object to unlink
+//
+// Returns:
+//   - uint64: The ObjectAddress of the removed entry (for cascade delete)
+//   - error: If unlinking fails or child not found
+//
+// Reference: H5Gobj.c - H5G_obj_remove(), H5Gnode.c - H5G__node_remove().
+//
+//nolint:gocognit,gocyclo,cyclop,funlen,nestif // Complex but necessary: mirror of linkToParent with entry removal
+func (fw *FileWriter) unlinkFromParent(parentPath, childName string) (uint64, error) {
+	// Get parent group metadata (same as linkToParent lines 308-319).
+	var heapAddr, btreeAddr uint64
+	if parentPath == "" || parentPath == "/" {
+		heapAddr = fw.rootHeapAddr
+		btreeAddr = fw.rootBTreeAddr
+	} else {
+		meta, exists := fw.groups[parentPath]
+		if !exists {
+			return 0, fmt.Errorf("parent group %q not found", parentPath)
+		}
+		heapAddr = meta.heapAddr
+		btreeAddr = meta.btreeAddr
+	}
+
+	// Step 1: Read existing local heap.
+	heap, err := fw.readLocalHeap(heapAddr)
+	if err != nil {
+		return 0, fmt.Errorf("read local heap: %w", err)
+	}
+
+	// Step 2: Read ALL SNODs from B-tree.
+	_, snodAddrs, err := fw.readGroupBTree(btreeAddr)
+	if err != nil {
+		return 0, fmt.Errorf("read group B-tree: %w", err)
+	}
+
+	// Step 3: Collect all entries from all SNODs.
+	allEntries := make([]structures.SymbolTableEntry, 0, snodCapacity)
+	for _, addr := range snodAddrs {
+		sn, readErr := fw.readSymbolTableNode(addr)
+		if readErr != nil {
+			return 0, fmt.Errorf("read SNOD at 0x%X: %w", addr, readErr)
+		}
+		allEntries = append(allEntries, sn.Entries...)
+	}
+
+	// Step 4: Find and remove the entry by name.
+	foundIdx := -1
+	var removedAddr uint64
+	for i, entry := range allEntries {
+		entryName, nameErr := heap.GetString(entry.LinkNameOffset)
+		if nameErr != nil {
+			continue
+		}
+		if entryName == childName {
+			foundIdx = i
+			removedAddr = entry.ObjectAddress
+			break
+		}
+	}
+
+	if foundIdx == -1 {
+		return 0, fmt.Errorf("child %q not found in parent group", childName)
+	}
+
+	// Remove the entry from the slice.
+	allEntries = append(allEntries[:foundIdx], allEntries[foundIdx+1:]...)
+
+	// Step 5: Rebuild and write B-tree + SNODs with the remaining entries.
+	// If no entries remain, still write an empty SNOD (HDF5 groups always have at least one SNOD).
+	numSNODs := 1
+	if len(allEntries) > 0 {
+		numSNODs = (len(allEntries) + snodCapacity - 1) / snodCapacity
+	}
+
+	// Reuse existing SNOD addresses where possible.
+	for len(snodAddrs) < numSNODs {
+		newAddr, allocErr := fw.writer.Allocate(snodTotalSize)
+		if allocErr != nil {
+			return 0, fmt.Errorf("allocate new SNOD: %w", allocErr)
+		}
+		snodAddrs = append(snodAddrs, newAddr)
+	}
+	// Only use as many as needed.
+	snodAddrs = snodAddrs[:numSNODs]
+
+	offsetSize := fw.file.sb.OffsetSize
+
+	// Rebuild B-tree.
+	const groupBTreeK = 16
+	newBTree := structures.NewBTreeNodeV1(0, groupBTreeK)
+
+	if len(allEntries) > 0 {
+		for i := 0; i < numSNODs; i++ {
+			var leftKey uint64
+			if i > 0 {
+				prevEnd := i * snodCapacity
+				if prevEnd > len(allEntries) {
+					prevEnd = len(allEntries)
+				}
+				leftKey = allEntries[prevEnd-1].LinkNameOffset
+			}
+			if addErr := newBTree.AddKey(leftKey, snodAddrs[i]); addErr != nil {
+				return 0, fmt.Errorf("add B-tree key for SNOD %d: %w", i, addErr)
+			}
+		}
+		// Final right key = last entry's name offset.
+		lastEntry := allEntries[len(allEntries)-1]
+		newBTree.Keys = append(newBTree.Keys, lastEntry.LinkNameOffset)
+	} else {
+		// Empty group: single SNOD with key 0.
+		if addErr := newBTree.AddKey(0, snodAddrs[0]); addErr != nil {
+			return 0, fmt.Errorf("add B-tree key for empty SNOD: %w", addErr)
+		}
+		newBTree.Keys = append(newBTree.Keys, uint64(0))
+	}
+
+	// Write B-tree.
+	if err := newBTree.WriteAt(fw.writer, btreeAddr, offsetSize, groupBTreeK, fw.file.sb.Endianness); err != nil {
+		return 0, fmt.Errorf("write B-tree: %w", err)
+	}
+
+	// Write entries to SNODs.
+	pos := 0
+	for i := 0; i < numSNODs; i++ {
+		end := pos + snodCapacity
+		if end > len(allEntries) {
+			end = len(allEntries)
+		}
+		chunk := allEntries[pos:end]
+		pos = end
+
+		sn := structures.NewSymbolTableNode(snodCapacity)
+		for _, e := range chunk {
+			if addErr := sn.AddEntry(e); addErr != nil {
+				return 0, fmt.Errorf("add entry to SNOD %d: %w", i, addErr)
+			}
+		}
+		if writeErr := sn.WriteAt(fw.writer, snodAddrs[i], offsetSize, snodCapacity, fw.file.sb.Endianness); writeErr != nil {
+			return 0, fmt.Errorf("write SNOD %d: %w", i, writeErr)
+		}
+	}
+
+	// Write updated heap.
+	if err := heap.WriteTo(fw.writer, heapAddr); err != nil {
+		return 0, fmt.Errorf("write heap: %w", err)
+	}
+
+	return removedAddr, nil
 }
 
 // Dense group threshold (HDF5 default: switch to dense when >8 links).
