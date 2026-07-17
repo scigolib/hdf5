@@ -1,8 +1,8 @@
 // Package writer provides HDF5 file writing infrastructure.
 //
 // The Allocator manages free space allocation in HDF5 files.
-// For v0.11.0-beta MVP, it uses a simple end-of-file allocation strategy
-// with no freed space reuse.
+// It allocates at end-of-file, tracks freed blocks, and reuses
+// freed space via a best-fit strategy.
 //
 // See ALLOCATOR_DESIGN.md for comprehensive design documentation.
 package writer
@@ -15,7 +15,7 @@ import (
 // AllocatedBlock tracks an allocated region of the file.
 //
 // Each block represents a contiguous region that has been allocated
-// and must not be overwritten or reused (in MVP version).
+// and must not be overwritten until it is freed.
 //
 // Blocks are tracked to prevent overlapping allocations and to
 // validate allocator integrity during testing.
@@ -62,7 +62,7 @@ type Allocator struct {
 // NewAllocator creates a space allocator.
 //
 // The allocator tracks all allocations and manages free space in the HDF5 file.
-// It uses end-of-file allocation strategy (no freed space reuse in MVP).
+// It allocates at end-of-file and reuses freed blocks (best-fit).
 //
 // Parameters:
 //   - initialOffset: Starting address for allocations (typically after superblock)

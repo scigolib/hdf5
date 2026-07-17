@@ -157,55 +157,6 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 	return node, nil
 }
 
-// FindChunk searches B-tree for chunk at given scaled coordinates.
-// coords: scaled chunk indices (not byte offsets).
-func (node *BTreeV1Node) FindChunk(r io.ReaderAt, coords []uint64, offsetSize uint8, chunkDims []uint64) (uint64, error) {
-	ndims := len(coords)
-
-	// Find which child to follow.
-	childIndex := 0
-	for i := 0; i < int(node.EntriesUsed); i++ {
-		// Compare coordinates with key.
-		if compareCoords(coords, node.Keys[i].Scaled) < 0 {
-			break
-		}
-		childIndex = i + 1
-	}
-
-	if childIndex > int(node.EntriesUsed) {
-		childIndex = int(node.EntriesUsed)
-	}
-
-	childAddr := node.Children[childIndex]
-
-	// If leaf node (level 0), child address points to actual chunk.
-	if node.NodeLevel == 0 {
-		return childAddr, nil
-	}
-
-	// Otherwise, recursively search child node.
-	childNode, err := ParseBTreeV1Node(r, childAddr, offsetSize, ndims, chunkDims)
-	if err != nil {
-		return 0, err
-	}
-
-	return childNode.FindChunk(r, coords, offsetSize, chunkDims)
-}
-
-// compareCoords compares two coordinate arrays.
-// Returns: -1 if a < b, 0 if a == b, 1 if a > b.
-func compareCoords(a, b []uint64) int {
-	for i := 0; i < len(a) && i < len(b); i++ {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	return 0
-}
-
 // readAddress reads a variable-sized address from byte slice.
 func readAddress(data []byte, size int) uint64 {
 	if size > len(data) {
@@ -230,12 +181,6 @@ func readAddress(data []byte, size int) uint64 {
 		copy(buf[:], d)
 		return binary.LittleEndian.Uint64(buf[:])
 	}
-}
-
-// String returns human-readable B-tree node description.
-func (node *BTreeV1Node) String() string {
-	return fmt.Sprintf("B-tree v1 node: type=%d level=%d entries=%d",
-		node.NodeType, node.NodeLevel, node.EntriesUsed)
 }
 
 // ChunkEntry represents a chunk location in the B-tree.

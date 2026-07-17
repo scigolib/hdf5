@@ -4,8 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-
-	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // FractalHeap represents a minimal read-only fractal heap implementation.
@@ -15,7 +13,7 @@ import (
 // Reference: HDF5 C library H5HF*.c files
 // Format Spec: https://docs.hdfgroup.org/hdf5/latest/_f_m_t3.html#FractalHeap
 //
-// Limitations (v0.10.0-beta):
+// Limitations:
 // - Only direct blocks supported (no indirect blocks)
 // - No huge objects support (objects stored outside heap)
 // - No tiny objects optimization
@@ -137,7 +135,7 @@ func OpenFractalHeap(r io.ReaderAt, address uint64, sizeofSize, sizeofAddr uint8
 
 	header, err := parseFractalHeapHeader(r, address, sizeofSize, sizeofAddr, endianness)
 	if err != nil {
-		return nil, utils.WrapError("failed to parse fractal heap header", err)
+		return nil, fmt.Errorf("failed to parse fractal heap header: %w", err)
 	}
 
 	heap := &FractalHeap{
@@ -304,216 +302,6 @@ func parseFractalHeapHeader(r io.ReaderAt, address uint64, sizeofSize, sizeofAdd
 	// Skip for now
 
 	return header, nil
-}
-
-// ReadObject reads an object from the fractal heap given its heap ID.
-// This is the main interface for retrieving objects from the heap.
-//
-// Parameters:
-// - heapID: The heap ID (from attribute info message or B-tree)
-//
-// Returns:
-// - []byte: Object data
-// - error: Any read errors or unsupported features.
-func (fh *FractalHeap) ReadObject(heapID []byte) ([]byte, error) {
-	// Parse heap ID
-	id, err := fh.parseHeapID(heapID)
-	if err != nil {
-		return nil, utils.WrapError("failed to parse heap ID", err)
-	}
-
-	// Handle different ID types
-	switch id.Type {
-	case HeapIDTypeManaged:
-		return fh.readManagedObject(id)
-	case HeapIDTypeHuge:
-		return nil, fmt.Errorf("huge objects not supported in minimal implementation (heap ID type: 0x%02X)", id.Type)
-	case HeapIDTypeTiny:
-		return fh.readTinyObject(id)
-	default:
-		return nil, fmt.Errorf("unsupported heap ID type: 0x%02X", id.Type)
-	}
-}
-
-// parseHeapID parses a heap ID into its components.
-//
-// Reference: H5HFpkg.h - H5HF_MAN_ID_DECODE macro.
-func (fh *FractalHeap) parseHeapID(heapID []byte) (*HeapID, error) {
-	if len(heapID) < 1 {
-		return nil, fmt.Errorf("heap ID too short: %d bytes", len(heapID))
-	}
-
-	id := &HeapID{
-		Raw: heapID,
-	}
-
-	// First byte contains version and type
-	flags := heapID[0]
-	id.Version = (flags & 0xC0) >> 6   // Bits 6-7
-	id.Type = HeapIDType(flags & 0x30) // Bits 4-5
-
-	if id.Version != 0 {
-		return nil, fmt.Errorf("unsupported heap ID version: %d", id.Version)
-	}
-
-	offset := 1
-
-	// Decode ID type-specific fields
-	switch id.Type {
-	case HeapIDTypeManaged:
-		// For managed objects, decode offset and length
-		offsetSize := int(fh.Header.HeapOffsetSize)
-		lengthSize := int(fh.Header.HeapLengthSize)
-
-		if len(heapID) < 1+offsetSize+lengthSize {
-			return nil, fmt.Errorf("heap ID too short for managed object: %d bytes (need %d)",
-				len(heapID), 1+offsetSize+lengthSize)
-		}
-
-		// Decode offset
-		id.Offset = readUint(heapID[offset:offset+offsetSize], offsetSize, fh.endianness)
-		offset += offsetSize
-
-		// Decode length
-		id.Length = readUint(heapID[offset:offset+lengthSize], lengthSize, fh.endianness)
-
-	case HeapIDTypeTiny:
-		// Tiny objects: length encoded in ID, data inline
-		// For now, return the rest of the ID as the object data
-		//nolint:gosec // G115: safe conversion, heap ID length bounded by format (max 64K)
-		id.Length = uint64(len(heapID) - 1)
-		id.Offset = 0
-	}
-
-	return id, nil
-}
-
-// readManagedObject reads a managed object from a direct block.
-//
-// Reference: H5HF.c - H5HF_read(), H5HFdblock.c.
-func (fh *FractalHeap) readManagedObject(id *HeapID) ([]byte, error) {
-	// For minimal implementation, assume root block is a direct block
-	// (no indirect block support yet)
-	if fh.Header.CurrentRowCount != 0 {
-		return nil, fmt.Errorf("indirect blocks not supported in minimal implementation (root has %d rows)",
-			fh.Header.CurrentRowCount)
-	}
-
-	// Read the direct block at root address
-	dblock, err := fh.readDirectBlock(fh.Header.RootBlockAddr, fh.Header.StartingBlockSize)
-	if err != nil {
-		return nil, utils.WrapError("failed to read direct block", err)
-	}
-
-	// Extract object from block data
-	// Offset is relative to heap space, need to account for direct block offset
-	if id.Offset < dblock.BlockOffset {
-		return nil, fmt.Errorf("object offset 0x%X before block offset 0x%X", id.Offset, dblock.BlockOffset)
-	}
-
-	relativeOffset := id.Offset - dblock.BlockOffset
-
-	if relativeOffset > uint64(len(dblock.Data)) {
-		return nil, fmt.Errorf("object offset 0x%X beyond block data (size: %d)", relativeOffset, len(dblock.Data))
-	}
-
-	if relativeOffset+id.Length > uint64(len(dblock.Data)) {
-		return nil, fmt.Errorf("object extends beyond block data (offset: 0x%X, length: %d, block size: %d)",
-			relativeOffset, id.Length, len(dblock.Data))
-	}
-
-	// Extract and return object data
-	objData := make([]byte, id.Length)
-	copy(objData, dblock.Data[relativeOffset:relativeOffset+id.Length])
-
-	return objData, nil
-}
-
-// readTinyObject reads a tiny object (data stored inline in heap ID).
-//
-// Reference: H5HFtiny.c.
-func (fh *FractalHeap) readTinyObject(id *HeapID) ([]byte, error) {
-	// Tiny objects store data directly in the heap ID after the first byte
-	if len(id.Raw) < 2 {
-		return []byte{}, nil
-	}
-
-	// Return data portion (skip first byte which is flags)
-	data := make([]byte, len(id.Raw)-1)
-	copy(data, id.Raw[1:])
-
-	return data, nil
-}
-
-// readDirectBlock reads and parses a fractal heap direct block.
-//
-// Reference: H5HFdblock.c - H5HF__cache_dblock_deserialize().
-func (fh *FractalHeap) readDirectBlock(address, blockSize uint64) (*DirectBlock, error) {
-	if address == 0 || address == ^uint64(0) {
-		return nil, fmt.Errorf("invalid direct block address: 0x%X", address)
-	}
-
-	// Calculate header size (currently not used but kept for documentation)
-	// Signature (4) + Version (1) + Heap Header Address (sizeof_addr) + Block Offset (heap_off_size)
-	_ = 5 + int(fh.sizeofAddr) + int(fh.Header.HeapOffsetSize) // headerSize calculated but not used yet
-
-	// Read entire block (header + data)
-	//nolint:gosec // G115: safe conversion, blockSize from HDF5 header (max ~2GB per block)
-	totalSize := int(blockSize)
-	buf := make([]byte, totalSize)
-	//nolint:gosec // G115: uint64 to int64 conversion safe for file offsets
-	if _, err := fh.reader.ReadAt(buf, int64(address)); err != nil {
-		return nil, fmt.Errorf("failed to read direct block: %w", err)
-	}
-
-	dblock := &DirectBlock{}
-	offset := 0
-
-	// Signature (4 bytes) - "FHDB"
-	copy(dblock.Signature[:], buf[offset:offset+4])
-	if string(dblock.Signature[:]) != "FHDB" {
-		return nil, fmt.Errorf("invalid direct block signature: %q (expected FHDB)", dblock.Signature)
-	}
-	offset += 4
-
-	// Version (1 byte)
-	dblock.Version = buf[offset]
-	if dblock.Version != 0 {
-		return nil, fmt.Errorf("unsupported direct block version: %d", dblock.Version)
-	}
-	offset++
-
-	// Heap Header Address (sizeof_addr bytes)
-	dblock.HeapHeaderAddr = readUint(buf[offset:offset+int(fh.sizeofAddr)], int(fh.sizeofAddr), fh.endianness)
-	offset += int(fh.sizeofAddr)
-
-	// Verify heap header address matches
-	if dblock.HeapHeaderAddr != fh.headerAddr {
-		return nil, fmt.Errorf("direct block heap header address mismatch: 0x%X (expected 0x%X)",
-			dblock.HeapHeaderAddr, fh.headerAddr)
-	}
-
-	// Block Offset (heap_off_size bytes)
-	dblock.BlockOffset = readUint(buf[offset:offset+int(fh.Header.HeapOffsetSize)],
-		int(fh.Header.HeapOffsetSize), fh.endianness)
-	offset += int(fh.Header.HeapOffsetSize)
-
-	// Checksum (4 bytes) - if enabled, at end of block
-	// Checksum validation deferred to v0.11.0-RC (feature-complete release).
-	// Current implementation reads but does not verify checksums.
-	// For production use, rely on file system integrity or external validation.
-	// Target version: v0.11.0-RC (comprehensive data integrity features)
-	// dblock.Checksum = fh.endianness.Uint32(buf[totalSize-4 : totalSize])
-
-	// Data (remaining bytes, excluding checksum if present)
-	dataEnd := totalSize
-	if fh.Header.ChecksumDirectBlocks {
-		dataEnd -= 4
-	}
-	dblock.Data = make([]byte, dataEnd-offset)
-	copy(dblock.Data, buf[offset:dataEnd])
-
-	return dblock, nil
 }
 
 // readUint reads a variable-length unsigned integer.

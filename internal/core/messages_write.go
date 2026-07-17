@@ -299,7 +299,7 @@ func encodeDatatypeNumeric(dt *DatatypeMessage) ([]byte, error) {
 	return buf, nil
 }
 
-// encodeDatatypeString encodes string datatype (fixed-length only for MVP).
+// encodeDatatypeString encodes string datatype (fixed-length only).
 func encodeDatatypeString(dt *DatatypeMessage) ([]byte, error) {
 	if dt.Size == 0 {
 		return nil, fmt.Errorf("fixed-length strings must have size > 0")

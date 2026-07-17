@@ -177,16 +177,3 @@ func parseCompoundV3(compound *CompoundType, properties []byte) (*CompoundType, 
 
 	return compound, nil
 }
-
-// String returns human-readable compound type description.
-func (ct *CompoundType) String() string {
-	result := fmt.Sprintf("compound{size=%d, members=[", ct.Size)
-	for i, member := range ct.Members {
-		if i > 0 {
-			result += ", "
-		}
-		result += fmt.Sprintf("%s:%s@%d", member.Name, member.Type.String(), member.Offset)
-	}
-	result += "]}"
-	return result
-}

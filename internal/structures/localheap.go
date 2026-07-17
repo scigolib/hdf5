@@ -3,6 +3,7 @@ package structures
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/scigolib/hdf5/internal/core"
@@ -23,7 +24,7 @@ import (
 //	  - Data segment address (address_t - 8 bytes)
 //	Data segment:
 //	  - Null-terminated strings, stored sequentially
-//	  - Free blocks tracked by free list (not used in MVP)
+//	  - Free blocks tracked by free list (not used here)
 type LocalHeap struct {
 	// Reading fields
 	Data       []byte
@@ -32,7 +33,7 @@ type LocalHeap struct {
 
 	// Writing fields
 	DataSegmentSize      uint64 // Size of data segment
-	OffsetToHeadFreeList uint64 // Offset to head of free list (MVP: always 1 = null)
+	OffsetToHeadFreeList uint64 // Offset to head of free list (always 1 = null)
 	DataSegmentAddress   uint64 // Address where data segment will be written
 	strings              []byte // Buffer for storing strings during construction
 }
@@ -49,7 +50,7 @@ func LoadLocalHeap(r io.ReaderAt, address uint64, sb *core.Superblock) (*LocalHe
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(headerBuf, int64(address)); err != nil {
-		return nil, utils.WrapError("local heap header read failed", err)
+		return nil, fmt.Errorf("local heap header read failed: %w", err)
 	}
 
 	if string(headerBuf[0:4]) != "HEAP" {
@@ -93,7 +94,7 @@ func LoadLocalHeap(r io.ReaderAt, address uint64, sb *core.Superblock) (*LocalHe
 	// Allocate and read data segment from the ACTUAL address in the header
 	heap.Data = make([]byte, dataSegmentSize)
 	if _, err := r.ReadAt(heap.Data, int64(dataSegmentAddr)); err != nil {
-		return nil, utils.WrapError("local heap data read failed", err)
+		return nil, fmt.Errorf("local heap data read failed: %w", err)
 	}
 
 	return heap, nil
@@ -129,7 +130,7 @@ func (h *LocalHeap) GetString(offset uint64) (string, error) {
 // Returns:
 //   - *LocalHeap: New local heap ready for adding strings
 //
-// For MVP:
+// Implementation notes:
 //   - No free list management (append-only)
 //   - Strings are stored sequentially with null terminators
 //   - Size is fixed at creation (no dynamic growth)
@@ -146,7 +147,7 @@ func NewLocalHeap(initialSize uint64) *LocalHeap {
 
 	heap := &LocalHeap{
 		DataSegmentSize:      initialSize,
-		OffsetToHeadFreeList: 1, // 1 = H5HL_FREE_NULL (no free list in MVP)
+		OffsetToHeadFreeList: 1, // 1 = H5HL_FREE_NULL (no free list)
 		DataSegmentAddress:   0, // Will be set when heap is written
 		strings:              make([]byte, 0, initialSize),
 	}
@@ -246,7 +247,7 @@ func (h *LocalHeap) WriteTo(w io.WriterAt, address uint64) error {
 	offset += 8
 
 	// Offset to head of free list (8 bytes, little-endian)
-	// MVP: Always 1 (H5HL_FREE_NULL = no free list)
+	// Always 1 (H5HL_FREE_NULL = no free list)
 	binary.LittleEndian.PutUint64(header[offset:offset+8], h.OffsetToHeadFreeList)
 	offset += 8
 
@@ -256,13 +257,13 @@ func (h *LocalHeap) WriteTo(w io.WriterAt, address uint64) error {
 	// Write header
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.WriterAt interface
 	if _, err := w.WriteAt(header, int64(address)); err != nil {
-		return utils.WrapError("failed to write local heap header", err)
+		return fmt.Errorf("failed to write local heap header: %w", err)
 	}
 
 	// Write data segment (strings)
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.WriterAt interface
 	if _, err := w.WriteAt(h.strings, int64(h.DataSegmentAddress)); err != nil {
-		return utils.WrapError("failed to write local heap data", err)
+		return fmt.Errorf("failed to write local heap data: %w", err)
 	}
 
 	return nil

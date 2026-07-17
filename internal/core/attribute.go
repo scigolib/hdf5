@@ -117,7 +117,7 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 	var err error
 	attr.Datatype, err = ParseDatatypeMessage(datatypeData)
 	if err != nil {
-		return nil, utils.WrapError("datatype parse failed", err)
+		return nil, fmt.Errorf("datatype parse failed: %w", err)
 	}
 
 	if version < 3 {
@@ -134,7 +134,7 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 	dataspaceData := data[offset : offset+int(dataspaceSize)]
 	attr.Dataspace, err = ParseDataspaceMessage(dataspaceData)
 	if err != nil {
-		return nil, utils.WrapError("dataspace parse failed", err)
+		return nil, fmt.Errorf("dataspace parse failed: %w", err)
 	}
 
 	if version < 3 {
@@ -1106,7 +1106,7 @@ func EncodeAttributeInfoMessage(aim *AttributeInfoMessage, sb *Superblock) ([]by
 
 	// Max Compact/Min Dense if creation order tracked
 	if trackCreationOrder {
-		// For MVP: these are not used (Flags = 0), but encoding should support them
+		// These fields are unused when Flags = 0, but encoding must support them
 		sb.Endianness.PutUint16(buf[offset:], uint16(aim.MaxCreationIndex)) //nolint:gosec // Safe: validated range
 		offset += 2
 

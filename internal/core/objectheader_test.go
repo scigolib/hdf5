@@ -6,7 +6,6 @@ import (
 	"os"
 	"testing"
 
-	mocktesting "github.com/scigolib/hdf5/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,7 +90,7 @@ func TestObjectHeaderBoundaryCheck(t *testing.T) {
 	}
 
 	// Create a small buffer (100 bytes)
-	mockFile := mocktesting.NewMockReaderAt(make([]byte, 100))
+	mockFile := bytes.NewReader(make([]byte, 100))
 
 	// Try to read object header near end of file (should fail with short read)
 	_, err := ReadObjectHeader(mockFile, 95, sb)

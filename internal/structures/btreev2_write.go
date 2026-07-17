@@ -72,7 +72,7 @@ type BTreeV2Header struct {
 	Type           uint8   // 5 = Link Name Index
 	NodeSize       uint32  // Node size in bytes
 	RecordSize     uint16  // Size of record (11 bytes for link name records)
-	Depth          uint16  // Tree depth (0 for MVP single leaf)
+	Depth          uint16  // Tree depth (0: single leaf)
 	SplitPercent   uint8   // 100
 	MergePercent   uint8   // 40
 	RootNodeAddr   uint64  // Address of root (leaf) node
@@ -119,7 +119,7 @@ type LinkNameRecord struct {
 
 // WritableBTreeV2 manages B-tree v2 construction for link name indexing.
 //
-// MVP Limitations:
+// Limitations:
 //   - Single leaf node only (no internal nodes)
 //   - No splits (error if node size exceeded)
 //   - Records sorted by name hash
@@ -133,12 +133,6 @@ type WritableBTreeV2 struct {
 	// Addresses loaded from file (for RMW scenarios)
 	loadedHeaderAddress uint64
 	loadedLeafAddress   uint64
-
-	// Lazy rebalancing state (nil if disabled)
-	lazyState *LazyRebalancingState
-
-	// Incremental rebalancing state (nil if disabled)
-	incrementalRebalancer *IncrementalRebalancer
 }
 
 // NewWritableBTreeV2 creates a new B-tree v2 for link name indexing.
@@ -184,7 +178,7 @@ func NewWritableBTreeV2(nodeSize uint32) *WritableBTreeV2 {
 //   - linkName: name of the link (for hash calculation)
 //   - heapID: 8-byte fractal heap object ID (we store 7 bytes)
 //
-// For MVP: stores in single leaf, sorted by name hash.
+// Stores in a single leaf node, sorted by name hash.
 //
 // Returns:
 //   - error if node is full or insertion fails
@@ -227,7 +221,7 @@ func (bt *WritableBTreeV2) InsertRecord(linkName string, heapID uint64) error {
 // Returns:
 //   - bool: true if name exists (hash found), false otherwise
 //
-// For MVP: searches single leaf node by name hash.
+// Searches the single leaf node by name hash.
 func (bt *WritableBTreeV2) HasKey(name string) bool {
 	hash := jenkinsHash(name)
 
@@ -253,7 +247,7 @@ func (bt *WritableBTreeV2) HasKey(name string) bool {
 //   - []byte: 8-byte heap ID (converted from 7-byte stored format)
 //   - bool: true if found, false if not found
 //
-// For MVP: searches single leaf node by name hash.
+// Searches the single leaf node by name hash.
 //
 // Reference: H5Adense.c - H5A__dense_write() searches B-tree by name.
 func (bt *WritableBTreeV2) SearchRecord(name string) ([]byte, bool) {
@@ -287,7 +281,7 @@ func (bt *WritableBTreeV2) SearchRecord(name string) ([]byte, bool) {
 // Returns:
 //   - error: if record not found or update fails
 //
-// For MVP: updates record in single leaf node.
+// Updates the record in the single leaf node.
 //
 // Reference: H5Adense.c - H5A__dense_write() updates B-tree when size changes.
 func (bt *WritableBTreeV2) UpdateRecord(name string, newHeapID uint64) error {
@@ -316,27 +310,31 @@ func (bt *WritableBTreeV2) UpdateRecord(name string, newHeapID uint64) error {
 
 // DeleteRecord removes a record from the B-tree by name.
 //
-// Deprecated: Use DeleteRecordWithRebalancing for production-quality deletion.
-// This method is kept for backward compatibility only.
-//
-// This function is used for attribute deletion:
-// 1. Search for record by name (hash)
-// 2. Remove from records slice
-// 3. Update record counts
-//
-// Parameters:
-//   - name: attribute/link name to delete
-//
-// Returns:
-//   - error: if record not found or deletion fails
-//
-// For MVP: removes record from single leaf node.
-// No tree rebalancing or node merging.
-//
-// Reference: H5B2.c - H5B2_remove(), H5Adelete.c - attribute deletion.
+// The tree is single-leaf (depth 0), so removal is a slice delete plus
+// count updates — no node merging is possible until multi-level trees
+// exist. Reference: H5B2.c - H5B2_remove().
 func (bt *WritableBTreeV2) DeleteRecord(name string) error {
-	// Delegate to rebalancing version (which handles MVP correctly)
-	return bt.DeleteRecordWithRebalancing(name)
+	hash := jenkinsHash(name)
+
+	recordIndex := -1
+	for i, record := range bt.records {
+		if record.NameHash == hash {
+			recordIndex = i
+			break
+		}
+	}
+
+	if recordIndex == -1 {
+		return fmt.Errorf("record not found for name: %s", name)
+	}
+
+	bt.records = append(bt.records[:recordIndex], bt.records[recordIndex+1:]...)
+	bt.leaf.Records = bt.records
+
+	bt.header.TotalRecords--
+	bt.header.NumRecordsRoot--
+
+	return nil
 }
 
 // WriteToFile writes B-tree v2 to file and returns header address.
@@ -652,7 +650,7 @@ func compareLinkNames(a, b string) int {
 // Returns:
 //   - error if read fails or validation fails
 //
-// MVP Limitations:
+// Limitations:
 //   - Single leaf node only (no internal nodes)
 //   - Assumes B-tree type 5 (Link Name Index)
 func (bt *WritableBTreeV2) LoadFromFile(r io.ReaderAt, headerAddr uint64, sb *core.Superblock) error {
@@ -928,8 +926,7 @@ func (bt *WritableBTreeV2) GetRecords() []LinkNameRecord {
 //   - H5checksum.c - H5_checksum_lookup3()
 //   - http://burtleburtle.net/bob/hash/doobs.html
 func jenkinsHash(name string) uint32 {
-	// Jenkins lookup3 hash implementation
-	// This is a simplified version for MVP; full implementation matches C library
+	// Jenkins lookup3 hash implementation (simplified version of the C library's)
 
 	length := len(name)
 	a, b, c := uint32(0xdeadbeef)+uint32(length), uint32(0xdeadbeef)+uint32(length), uint32(0xdeadbeef)+uint32(length) //nolint:gosec // G115: Jenkins hash algorithm, length is string length

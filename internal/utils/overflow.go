@@ -28,68 +28,6 @@ func SafeMultiply(a, b uint64) (uint64, error) {
 	return a * b, nil
 }
 
-// CalculateChunkSize safely calculates the total chunk size by multiplying dimensions and element size.
-// Returns an error if overflow would occur.
-func CalculateChunkSize(dimensions []uint32, elementSize uint64) (uint64, error) {
-	if len(dimensions) == 0 {
-		return 0, fmt.Errorf("no dimensions provided")
-	}
-
-	if elementSize == 0 {
-		return 0, fmt.Errorf("element size cannot be zero")
-	}
-
-	// Calculate product of all dimensions
-	size := uint64(1)
-	for i, dim := range dimensions {
-		dimU64 := uint64(dim)
-
-		// Check for overflow before multiplication
-		if dimU64 > 0 && size > math.MaxUint64/dimU64 {
-			return 0, fmt.Errorf("chunk size overflow at dimension %d: dimensions too large", i)
-		}
-
-		size *= dimU64
-	}
-
-	// Check element size multiplication
-	if size > math.MaxUint64/elementSize {
-		return 0, fmt.Errorf("chunk size overflow: total size too large (dims product: %d, elem size: %d)", size, elementSize)
-	}
-
-	return size * elementSize, nil
-}
-
-// CalculateChunkSize64 safely calculates chunk size for 64-bit chunk dimensions (HDF5 2.0.0+).
-// This function will be needed for TASK-025 (64-bit chunk support).
-func CalculateChunkSize64(dimensions []uint64, elementSize uint64) (uint64, error) {
-	if len(dimensions) == 0 {
-		return 0, fmt.Errorf("no dimensions provided")
-	}
-
-	if elementSize == 0 {
-		return 0, fmt.Errorf("element size cannot be zero")
-	}
-
-	// Calculate product of all dimensions
-	size := uint64(1)
-	for i, dim := range dimensions {
-		// Check for overflow before multiplication
-		if dim > 0 && size > math.MaxUint64/dim {
-			return 0, fmt.Errorf("chunk size overflow at dimension %d: dimensions too large", i)
-		}
-
-		size *= dim
-	}
-
-	// Check element size multiplication
-	if size > math.MaxUint64/elementSize {
-		return 0, fmt.Errorf("chunk size overflow: total size too large (dims product: %d, elem size: %d)", size, elementSize)
-	}
-
-	return size * elementSize, nil
-}
-
 // ValidateBufferSize validates that a buffer size is within reasonable limits.
 // maxSize parameter allows different limits for different use cases.
 func ValidateBufferSize(size, maxSize uint64, description string) error {

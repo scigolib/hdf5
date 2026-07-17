@@ -27,7 +27,7 @@ func Open(filename string) (*File, error) {
 	//nolint:gosec // G304: User-provided filename is intentional for HDF5 file library
 	f, err := os.Open(filename)
 	if err != nil {
-		return nil, utils.WrapError("file open failed", err)
+		return nil, fmt.Errorf("file open failed: %w", err)
 	}
 
 	// Verify HDF5 signature before reading superblock.
@@ -40,14 +40,14 @@ func Open(filename string) (*File, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
-		return nil, utils.WrapError("file stat failed", err)
+		return nil, fmt.Errorf("file stat failed: %w", err)
 	}
 	fileSize := fi.Size()
 
 	sb, err := core.ReadSuperblock(f)
 	if err != nil {
 		_ = f.Close()
-		return nil, utils.WrapError("superblock read failed", err)
+		return nil, fmt.Errorf("superblock read failed: %w", err)
 	}
 
 	file := &File{
@@ -68,7 +68,7 @@ func Open(filename string) (*File, error) {
 	file.root, err = loadGroup(file, sb.RootGroup)
 	if err != nil {
 		_ = f.Close()
-		return nil, utils.WrapError("root group load failed", err)
+		return nil, fmt.Errorf("root group load failed: %w", err)
 	}
 
 	// Ensure root group always has name "/" (may be empty from object header)
@@ -78,7 +78,7 @@ func Open(filename string) (*File, error) {
 }
 
 // isHDF5File verifies HDF5 file signature.
-func isHDF5File(r utils.ReaderAt) bool {
+func isHDF5File(r io.ReaderAt) bool {
 	buf := utils.GetBuffer(8)
 	defer utils.ReleaseBuffer(buf)
 

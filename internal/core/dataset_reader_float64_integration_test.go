@@ -20,19 +20,19 @@ func TestReadDatasetFloat64_RealFiles(t *testing.T) {
 	}{
 		{
 			name:       "C library corpus - aggregated dataset",
-			file:       "../../testdata/c-library-corpus/basic/aggr.h5",
+			file:       "../../testdata/hdf5_official/aggr.h5",
 			objectPath: "/dset",
 			expectLen:  100, // 100 int32 elements
 		},
 		{
 			name:       "C library corpus - little-endian float array",
-			file:       "../../testdata/c-library-corpus/basic/le_data.h5",
+			file:       "../../testdata/hdf5_official/le_data.h5",
 			objectPath: "/Array_le",
 			expectLen:  7 * 6, // 7x6 = 42 float64 elements
 		},
 		{
 			name:       "C library corpus - big-endian float array",
-			file:       "../../testdata/c-library-corpus/basic/be_data.h5",
+			file:       "../../testdata/hdf5_official/be_data.h5",
 			objectPath: "/Array_be",
 			expectLen:  7 * 6, // 7x6 = 42 float64 elements
 		},

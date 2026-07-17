@@ -42,7 +42,7 @@ func TestCInterop_WriteMatrix(t *testing.T) {
 
 	cases := []struct {
 		name  string
-		opts  []interface{} // CreateForWrite options
+		opts  []WriteOption // CreateForWrite options
 		build func(t *testing.T, fw *FileWriter)
 		want  []string // substrings required in `h5dump -p` output
 	}{
@@ -204,7 +204,7 @@ func TestCInterop_WriteMatrix(t *testing.T) {
 		},
 		{
 			name: "superblock_v0",
-			opts: []interface{}{WithSuperblockVersion(SuperblockV0)},
+			opts: []WriteOption{WithSuperblockVersion(SuperblockV0)},
 			build: func(t *testing.T, fw *FileWriter) {
 				ds, err := fw.CreateDataset("/legacy", Float64, []uint64{3})
 				require.NoError(t, err)

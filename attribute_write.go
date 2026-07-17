@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"unsafe"
 
 	"github.com/scigolib/hdf5/internal/core"
 	"github.com/scigolib/hdf5/internal/structures"
@@ -49,8 +48,6 @@ const (
 //
 // Limitations:
 //   - No compound types
-//   - Attributes cannot be modified after creation (write-once)
-//   - No attribute deletion
 func (ds *DatasetWriter) WriteAttribute(name string, value interface{}) error {
 	// For datasets opened with OpenForWrite, use cached object header and dense attr info
 	if ds.objectHeader != nil {
@@ -84,108 +81,6 @@ func (ds *DatasetWriter) DeleteAttribute(name string) error {
 	return deleteAttribute(ds.fileWriter, ds.address, name)
 }
 
-// RebalanceAttributeBTree manually triggers B-tree rebalancing for this dataset's dense attribute storage.
-//
-// Use this when:
-//   - You know this specific dataset needs rebalancing
-//   - More efficient than RebalanceAllBTrees() for targeted optimization
-//   - After batch deletions with rebalancing disabled
-//
-// Performance (for current MVP with single-leaf B-trees):
-//   - Instant (< 1ms) - no-op for single-leaf trees
-//
-// Future (when multi-level B-trees implemented):
-//   - Small (<1000 attrs): <10ms
-//   - Medium (1000-10000 attrs): 10-100ms
-//   - Large (10000+ attrs): 100ms-1s
-//
-// Returns:
-//   - error: if dataset doesn't use dense storage or rebalancing fails
-//
-// Example:
-//
-//	fw.DisableRebalancing()
-//	for i := 0; i < 1000; i++ {
-//	    ds.DeleteAttribute(fmt.Sprintf("temp_%d", i))  // Fast deletions
-//	}
-//	ds.RebalanceAttributeBTree()  // Rebalance this dataset only
-//
-// Reference: Similar to per-object rebalancing in HDF5 (hypothetical - not exposed in C API).
-func (ds *DatasetWriter) RebalanceAttributeBTree() error {
-	// Check if dataset uses dense attribute storage
-	if ds.denseAttrInfo == nil && ds.objectHeader == nil {
-		// Dataset doesn't have dense storage (compact or no attributes)
-		// Nothing to rebalance
-		return nil
-	}
-
-	// For datasets opened with OpenForWrite, we have cached dense attr info
-	if ds.denseAttrInfo != nil {
-		// Load B-tree from file
-		sb := ds.fileWriter.file.Superblock()
-		reader := ds.fileWriter.writer.Reader()
-
-		btree := structures.NewWritableBTreeV2(4096)
-		err := btree.LoadFromFile(reader, ds.denseAttrInfo.BTreeNameIndexAddr, sb)
-		if err != nil {
-			return fmt.Errorf("failed to load B-tree: %w", err)
-		}
-
-		// Trigger rebalancing
-		err = btree.RebalanceAll()
-		if err != nil {
-			return fmt.Errorf("failed to rebalance B-tree: %w", err)
-		}
-
-		// For MVP: RebalanceAll() is a no-op (single-leaf trees are already optimal)
-		// Future: If tree was modified, write it back to disk here
-
-		return nil
-	}
-
-	// For datasets created in this session, need to read object header
-	sb := ds.fileWriter.file.Superblock()
-	reader := ds.fileWriter.writer.Reader()
-	oh, err := core.ReadObjectHeader(reader, ds.address, sb)
-	if err != nil {
-		return fmt.Errorf("failed to read object header: %w", err)
-	}
-
-	// Check if has dense attribute storage
-	var attrInfo *core.AttributeInfoMessage
-	for _, msg := range oh.Messages {
-		if msg.Type == core.MsgAttributeInfo {
-			attrInfo, err = core.ParseAttributeInfoMessage(msg.Data, sb)
-			if err != nil {
-				return fmt.Errorf("failed to parse attribute info: %w", err)
-			}
-			break
-		}
-	}
-
-	if attrInfo == nil {
-		// No dense storage - nothing to rebalance
-		return nil
-	}
-
-	// Load and rebalance B-tree
-	btree := structures.NewWritableBTreeV2(4096)
-	err = btree.LoadFromFile(reader, attrInfo.BTreeNameIndexAddr, sb)
-	if err != nil {
-		return fmt.Errorf("failed to load B-tree: %w", err)
-	}
-
-	err = btree.RebalanceAll()
-	if err != nil {
-		return fmt.Errorf("failed to rebalance B-tree: %w", err)
-	}
-
-	// For MVP: RebalanceAll() is a no-op
-	// Future: Write modified tree back to disk
-
-	return nil
-}
-
 // writeAttribute is the internal implementation for writing attributes.
 //
 // Storage strategy:
@@ -197,9 +92,7 @@ func (ds *DatasetWriter) RebalanceAttributeBTree() error {
 // - Compact attribute messages are removed from object header
 // - Attribute Info Message is added to object header
 //
-// For MVP:
-// - Transition is one-way (compact → dense only, no dense → compact)
-// - No attribute deletion support
+// The transition is one-way (compact → dense only, no dense → compact).
 //
 // Reference: H5Aint.c - H5A__dense_create().
 func writeAttribute(fw *FileWriter, objectAddr uint64, name string, value interface{}) error {
@@ -461,8 +354,8 @@ func writeAttributeWithCachedHeader(fw *FileWriter, objectAddr uint64, oh *core.
 // writeDenseAttributeWithInfo writes or modifies attribute in existing dense storage.
 //
 // This implements upsert semantics for dense attributes:
-// - If attribute exists → modify it (Phase 2: Dense modification)
-// - If attribute doesn't exist → create it (Phase 3: Dense RMW)
+// - If attribute exists → modify it in place
+// - If attribute doesn't exist → create it (read-modify-write)
 //
 // This is similar to writeDenseAttribute but uses the cached AttributeInfoMessage
 // instead of searching for it in the object header.
@@ -505,7 +398,7 @@ func writeDenseAttributeWithInfo(fw *FileWriter, _ uint64, _ *core.ObjectHeader,
 	_, exists := btree.SearchRecord(name)
 
 	if exists { //nolint:nestif // Clear upsert logic
-		// Modify existing attribute (Phase 2)
+		// Modify existing attribute.
 		// Set the encoded data in attr for ModifyDenseAttribute
 		attr.Data = attrMsg
 		err = core.ModifyDenseAttribute(heap, btree, name, attr)
@@ -513,7 +406,7 @@ func writeDenseAttributeWithInfo(fw *FileWriter, _ uint64, _ *core.ObjectHeader,
 			return fmt.Errorf("failed to modify existing dense attribute: %w", err)
 		}
 	} else {
-		// Create new attribute (Phase 3 - original RMW code)
+		// Create new attribute.
 
 		// Insert into fractal heap
 		heapIDBytes, insertErr := heap.InsertObject(attrMsg)
@@ -696,9 +589,7 @@ func deleteDenseAttributeImpl(fw *FileWriter, attrInfo *core.AttributeInfoMessag
 	}
 
 	// Delete attribute using core deletion function
-	// Use FileWriter's rebalancing configuration
-	rebalance := fw.RebalancingEnabled()
-	err = core.DeleteDenseAttribute(heap, btree, name, rebalance)
+	err = core.DeleteDenseAttribute(heap, btree, name)
 	if err != nil {
 		return fmt.Errorf("failed to delete dense attribute: %w", err)
 	}
@@ -721,7 +612,7 @@ func deleteDenseAttributeImpl(fw *FileWriter, attrInfo *core.AttributeInfoMessag
 
 // writeDenseAttribute writes attribute to existing dense storage (heap + B-tree).
 //
-// This function implements Phase 3: Read-Modify-Write for dense attribute storage.
+// This function implements read-modify-write for dense attribute storage.
 //
 // Process:
 // 1. Find Attribute Info Message in object header
@@ -793,14 +684,14 @@ func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 	_, exists := btree.SearchRecord(name)
 
 	if exists { //nolint:nestif // Clear upsert logic
-		// Modify existing attribute (Phase 2)
+		// Modify existing attribute.
 		attr.Data = attrMsg
 		err = core.ModifyDenseAttribute(heap, btree, name, attr)
 		if err != nil {
 			return fmt.Errorf("failed to modify existing dense attribute: %w", err)
 		}
 	} else {
-		// Create new attribute (Phase 3 - original code)
+		// Create new attribute.
 
 		// Insert into fractal heap
 		heapIDBytes, insertErr := heap.InsertObject(attrMsg)
@@ -1433,12 +1324,3 @@ func encodeSliceValue(v reflect.Value) ([]byte, error) {
 		return nil, fmt.Errorf("unsupported slice element type: %s", elemKind)
 	}
 }
-
-// Suppress unused warnings for now (these will be used when attribute writing is fully implemented).
-var (
-	_ = (*core.DatatypeMessage)(nil)
-	_ = (*core.DataspaceMessage)(nil)
-	_ = inferDatatypeFromValue
-	_ = encodeAttributeValue
-	_ = unsafe.Sizeof(0)
-)

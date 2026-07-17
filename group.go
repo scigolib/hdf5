@@ -6,7 +6,6 @@ import (
 
 	"github.com/scigolib/hdf5/internal/core"
 	"github.com/scigolib/hdf5/internal/structures"
-	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // HDF5 signature constants.
@@ -112,7 +111,7 @@ func (d *Dataset) Read() ([]float64, error) {
 
 // ReadStrings reads string dataset values and returns them as string array.
 // Supports fixed-length strings (null-terminated, null-padded, space-padded).
-// Variable-length strings are not yet supported.
+// Variable-length strings are not supported by this method; use ReadVLenBytes.
 func (d *Dataset) ReadStrings() ([]string, error) {
 	// Read object header for this dataset.
 	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
@@ -238,7 +237,7 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 
 	header, err := core.ReadObjectHeader(r, address, sb)
 	if err != nil {
-		return nil, utils.WrapError("object header read failed", err)
+		return nil, fmt.Errorf("object header read failed: %w", err)
 	}
 
 	group := &Group{
@@ -262,7 +261,7 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 				// Parse the link message.
 				linkMsg, err := structures.ParseLinkMessage(msg.Data, sb)
 				if err != nil {
-					return nil, utils.WrapError("link message parse failed", err)
+					return nil, fmt.Errorf("link message parse failed: %w", err)
 				}
 
 				// Process based on link type.
@@ -276,10 +275,8 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 					}
 					group.children = append(group.children, child)
 				} else if linkMsg.IsSoftLink() {
-					// Soft link support deferred to v0.11.0-beta.
-					// Soft links are symbolic links within HDF5 file pointing to paths.
-					// Current implementation focuses on hard links (direct object references).
-					// Target version: v0.11.0-beta (write support phase)
+					// Soft links (path-based symbolic links) are not resolved
+					// when loading groups; only hard links are followed.
 					continue
 				}
 			}
@@ -298,7 +295,7 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 				}
 				linkInfo, err := core.ParseLinkInfoMessage(msg.Data, sb)
 				if err != nil {
-					return nil, utils.WrapError("link info parse failed", err)
+					return nil, fmt.Errorf("link info parse failed: %w", err)
 				}
 				if !linkInfo.HasFractalHeap() || !linkInfo.HasNameBTree() {
 					continue
@@ -309,7 +306,7 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 					sb,
 				)
 				if err != nil {
-					return nil, utils.WrapError("dense link read failed", err)
+					return nil, fmt.Errorf("dense link read failed: %w", err)
 				}
 				for _, raw := range heapObjects {
 					linkMsg, err := structures.ParseLinkMessage(raw, sb)
@@ -375,7 +372,7 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 
 			if group.symbolTable != nil {
 				if err := group.loadChildren(); err != nil {
-					return nil, utils.WrapError("load children failed", err)
+					return nil, fmt.Errorf("load children failed: %w", err)
 				}
 			}
 		}
@@ -388,7 +385,7 @@ func loadTraditionalGroup(file *File, address uint64) (*Group, error) {
 	// Parse the Symbol Table Node (SNOD).
 	node, err := structures.ParseSymbolTableNode(file.osFile, address, file.sb)
 	if err != nil {
-		return nil, utils.WrapError("symbol table node parse failed", err)
+		return nil, fmt.Errorf("symbol table node parse failed: %w", err)
 	}
 
 	// For traditional format, we need the local heap address.
@@ -412,7 +409,7 @@ func loadTraditionalGroup(file *File, address uint64) (*Group, error) {
 				heapAddr := file.sb.Endianness.Uint64(msg.Data[8:16])
 				heap, err = structures.LoadLocalHeap(file.osFile, heapAddr, file.sb)
 				if err != nil {
-					return nil, utils.WrapError("local heap load failed", err)
+					return nil, fmt.Errorf("local heap load failed: %w", err)
 				}
 				break
 			}
@@ -440,12 +437,12 @@ func loadTraditionalGroup(file *File, address uint64) (*Group, error) {
 
 		linkName, err := heap.GetString(entry.LinkNameOffset)
 		if err != nil {
-			return nil, utils.WrapError("link name read failed", err)
+			return nil, fmt.Errorf("link name read failed: %w", err)
 		}
 
 		child, err := loadObject(file, entry.ObjectAddress, linkName)
 		if err != nil {
-			return nil, utils.WrapError("child load failed", err)
+			return nil, fmt.Errorf("child load failed: %w", err)
 		}
 
 		group.children = append(group.children, child)
@@ -470,7 +467,7 @@ func (g *Group) loadChildren() error {
 
 	heap, err := structures.LoadLocalHeap(g.file.osFile, g.symbolTable.HeapAddress, g.file.sb)
 	if err != nil {
-		return utils.WrapError("local heap load failed", err)
+		return fmt.Errorf("local heap load failed: %w", err)
 	}
 
 	// Detect B-tree format by reading signature.
@@ -489,7 +486,7 @@ func (g *Group) loadChildren() error {
 	}
 
 	if err != nil {
-		return utils.WrapError("B-tree read failed", err)
+		return fmt.Errorf("b-tree read failed: %w", err)
 	}
 
 	for _, entry := range entries {
@@ -509,7 +506,7 @@ func (g *Group) loadChildren() error {
 			// This is an unnamed SNOD container - load its children directly.
 			node, err := structures.ParseSymbolTableNode(g.file.osFile, entry.ObjectAddress, g.file.sb)
 			if err != nil {
-				return utils.WrapError("SNOD parse failed", err)
+				return fmt.Errorf("SNOD parse failed: %w", err)
 			}
 
 			// Add each entry from the SNOD to this group.
@@ -521,7 +518,7 @@ func (g *Group) loadChildren() error {
 
 				childName, err := heap.GetString(snodEntry.LinkNameOffset)
 				if err != nil {
-					return utils.WrapError("SNOD child name read failed", err)
+					return fmt.Errorf("SNOD child name read failed: %w", err)
 				}
 
 				// For nested groups with CacheType=1, pass cached symbol table addresses.
@@ -533,7 +530,7 @@ func (g *Group) loadChildren() error {
 					child, err = loadObject(g.file, snodEntry.ObjectAddress, childName)
 				}
 				if err != nil {
-					return utils.WrapError("SNOD child load failed", err)
+					return fmt.Errorf("SNOD child load failed: %w", err)
 				}
 
 				g.children = append(g.children, child)
@@ -543,7 +540,7 @@ func (g *Group) loadChildren() error {
 
 		linkName, err := heap.GetString(entry.LinkNameOffset)
 		if err != nil {
-			return utils.WrapError("link name read failed", err)
+			return fmt.Errorf("link name read failed: %w", err)
 		}
 
 		// For nested groups with CacheType=1 (H5G_CACHED_STAB), use cached symbol table addresses.
@@ -556,7 +553,7 @@ func (g *Group) loadChildren() error {
 			child, err = loadObject(g.file, entry.ObjectAddress, linkName)
 		}
 		if err != nil {
-			return utils.WrapError("child load failed", err)
+			return fmt.Errorf("child load failed: %w", err)
 		}
 
 		g.children = append(g.children, child)
@@ -699,7 +696,7 @@ func loadGroupWithCachedSymbolTable(file *File, address uint64, name string, btr
 
 	// Load children using the cached symbol table addresses.
 	if err := group.loadChildren(); err != nil {
-		return nil, utils.WrapError("load children with cached symbol table failed", err)
+		return nil, fmt.Errorf("load children with cached symbol table failed: %w", err)
 	}
 
 	return group, nil

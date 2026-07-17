@@ -472,48 +472,6 @@ func TestParseLinkMessage_Errors(t *testing.T) {
 	}
 }
 
-func TestLinkMessage_String(t *testing.T) {
-	tests := []struct {
-		name     string
-		msg      *LinkMessage
-		expected string
-	}{
-		{
-			name: "hard link",
-			msg: &LinkMessage{
-				Type:          LinkTypeHard,
-				Name:          "dataset1",
-				ObjectAddress: 0x1234,
-			},
-			expected: "Hard link 'dataset1' -> address 0x1234",
-		},
-		{
-			name: "soft link",
-			msg: &LinkMessage{
-				Type:       LinkTypeSoft,
-				Name:       "link1",
-				TargetPath: "/path/to/target",
-			},
-			expected: "Soft link 'link1' -> '/path/to/target'",
-		},
-		{
-			name: "external link",
-			msg: &LinkMessage{
-				Type: LinkTypeExternal,
-				Name: "extlink",
-			},
-			expected: "Link 'extlink' (type 64)",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := tt.msg.String()
-			require.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestLinkMessage_TypeMethods(t *testing.T) {
 	hardLink := &LinkMessage{Type: LinkTypeHard}
 	require.True(t, hardLink.IsHardLink())

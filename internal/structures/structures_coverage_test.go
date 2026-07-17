@@ -351,60 +351,6 @@ func TestReadObject_UnsupportedVersion(t *testing.T) {
 	require.Contains(t, err.Error(), "unsupported fractal heap version")
 }
 
-// TestReadObject_HugeObjectError tests that huge objects return error.
-func TestReadObject_HugeObjectError(t *testing.T) {
-	// Build a minimal valid fractal heap in memory.
-	heap := buildMinimalFractalHeap(t)
-
-	// Try to read with a huge object heap ID (type=1).
-	hugeHeapID := []byte{0x10, 0, 0, 0, 0, 0, 0, 0} // Type bits 4-5 = 1 (huge)
-	_, err := heap.ReadObject(hugeHeapID)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "huge objects not supported")
-}
-
-// TestReadObject_EmptyHeapID tests ReadObject with empty heap ID.
-func TestReadObject_EmptyHeapID(t *testing.T) {
-	heap := buildMinimalFractalHeap(t)
-
-	_, err := heap.ReadObject([]byte{})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "too short")
-}
-
-// TestReadObject_UnsupportedIDVersion tests ReadObject with bad version in heap ID.
-func TestReadObject_UnsupportedIDVersion(t *testing.T) {
-	heap := buildMinimalFractalHeap(t)
-
-	// Heap ID with version=1 (bits 6-7).
-	badVersionID := []byte{0x40, 0, 0, 0, 0, 0, 0, 0}
-	_, err := heap.ReadObject(badVersionID)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported heap ID version")
-}
-
-// TestReadObject_TinyObject tests reading a tiny object from heap ID.
-func TestReadObject_TinyObject(t *testing.T) {
-	heap := buildMinimalFractalHeap(t)
-
-	// Tiny heap ID: type=2 in bits 4-5, data follows.
-	tinyID := []byte{0x20, 'h', 'e', 'l', 'l', 'o'}
-	data, err := heap.ReadObject(tinyID)
-	require.NoError(t, err)
-	require.Equal(t, []byte("hello"), data)
-}
-
-// TestReadObject_TinyObjectEmpty tests reading an empty tiny object.
-func TestReadObject_TinyObjectEmpty(t *testing.T) {
-	heap := buildMinimalFractalHeap(t)
-
-	// Tiny heap ID with only flag byte.
-	tinyID := []byte{0x20}
-	data, err := heap.ReadObject(tinyID)
-	require.NoError(t, err)
-	require.Empty(t, data)
-}
-
 // ---------------------------------------------------------------------------
 // WriteUint64 / ReadUint64 roundtrip coverage
 // ---------------------------------------------------------------------------
@@ -443,39 +389,4 @@ func TestCacheTypeConstants(t *testing.T) {
 	require.Equal(t, uint32(0), CacheTypeNone)
 	require.Equal(t, uint32(1), CacheTypeSymbolTable)
 	require.Equal(t, uint32(2), CacheTypeSoftLink)
-}
-
-// ---------------------------------------------------------------------------
-// Helper functions
-// ---------------------------------------------------------------------------
-
-// buildMinimalFractalHeap creates a minimal FractalHeap for testing ReadObject dispatch.
-func buildMinimalFractalHeap(t *testing.T) *FractalHeap {
-	t.Helper()
-
-	// We need a valid heap header structure, but ReadObject only uses it for
-	// parseHeapID dispatch logic. Build just enough to pass validation.
-	header := &FractalHeapHeader{
-		Signature:            [4]byte{'F', 'R', 'H', 'P'},
-		Version:              0,
-		HeapIDLen:            8,
-		MaxManagedObjSize:    4096,
-		MaxDirectBlockSize:   4096,
-		MaxHeapSize:          32,
-		HeapOffsetSize:       4,
-		HeapLengthSize:       2,
-		StartingBlockSize:    4096,
-		RootBlockAddr:        0xFFFFFFFFFFFFFFFF, // No root block
-		CurrentRowCount:      0,
-		ChecksumDirectBlocks: false,
-	}
-
-	return &FractalHeap{
-		Header:     header,
-		reader:     bytes.NewReader(make([]byte, 4096)),
-		headerAddr: 100,
-		sizeofSize: 8,
-		sizeofAddr: 8,
-		endianness: binary.LittleEndian,
-	}
 }

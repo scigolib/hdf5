@@ -233,6 +233,44 @@ func TestParseAttributeMessage_EdgeCases(t *testing.T) {
 			errMsg:  "dataspace extends beyond message",
 		},
 		{
+			name: "datatype parse failed",
+			data: func() []byte {
+				d := make([]byte, 24)
+				d[0] = 1                                 // version
+				d[1] = 0                                 // flags
+				binary.LittleEndian.PutUint16(d[2:4], 5) // name size
+				binary.LittleEndian.PutUint16(d[4:6], 4) // datatype size too small to parse
+				binary.LittleEndian.PutUint16(d[6:8], 8) // dataspace size
+				copy(d[8:], "test\x00")
+				// Datatype at offset 16 (name aligned to 8): only 4 bytes,
+				// ParseDatatypeMessage requires at least 8
+				return d
+			}(),
+			wantErr: true,
+			errMsg:  "datatype parse failed",
+		},
+		{
+			name: "dataspace parse failed",
+			data: func() []byte {
+				d := make([]byte, 32)
+				d[0] = 1                                 // version
+				d[1] = 0                                 // flags
+				binary.LittleEndian.PutUint16(d[2:4], 5) // name size
+				binary.LittleEndian.PutUint16(d[4:6], 8) // datatype size
+				binary.LittleEndian.PutUint16(d[6:8], 8) // dataspace size
+				copy(d[8:], "test\x00")
+				// Valid datatype at offset 16
+				d[16] = 0                                  // class: fixed-point
+				d[17] = 1                                  // flags
+				binary.LittleEndian.PutUint32(d[20:24], 4) // size
+				// Dataspace at offset 24 with invalid version
+				d[24] = 9 // unsupported dataspace version
+				return d
+			}(),
+			wantErr: true,
+			errMsg:  "dataspace parse failed",
+		},
+		{
 			name: "empty name (nameSize = 0)",
 			data: func() []byte {
 				// Need space for: version(1) + flags(1) + name_size(2) + dt_size(2) + ds_size(2)

@@ -256,20 +256,57 @@ func TestEncodeDatatypeVLen_UTF8String(t *testing.T) {
 
 // --- Compound Datatype Encoding Tests ---
 
+// testCompoundField describes one member of a compound datatype built in tests.
+type testCompoundField struct {
+	name   string
+	offset uint32
+	typ    *DatatypeMessage
+}
+
+// testBasicDatatype builds a basic member datatype for compound construction.
+func testBasicDatatype(class DatatypeClass, size uint32) *DatatypeMessage {
+	var props []byte
+	switch class {
+	case DatatypeFixed:
+		props = []byte{0, byte(size * 8), 0, 0}
+	case DatatypeFloat:
+		props = make([]byte, 12)
+		props[1] = byte(size * 8)
+	case DatatypeString:
+		props = []byte{0}
+	}
+	return &DatatypeMessage{Class: class, Version: 1, Size: size, Properties: props}
+}
+
+// testEncodeCompoundV3 encodes a version-3 compound datatype message
+// (header + member definitions) from the given fields.
+func testEncodeCompoundV3(totalSize uint32, fields []testCompoundField) []byte {
+	le := binary.LittleEndian
+	buf := make([]byte, 0, 64)
+	buf = le.AppendUint32(buf, uint32(DatatypeCompound)|3<<4)
+	buf = le.AppendUint32(buf, totalSize)
+	buf = le.AppendUint32(buf, uint32(len(fields)))
+	for _, f := range fields {
+		buf = append(buf, f.name...)
+		buf = append(buf, 0)
+		buf = le.AppendUint32(buf, f.offset)
+		buf = le.AppendUint32(buf, uint32(f.typ.Class)|uint32(f.typ.Version)<<4|f.typ.ClassBitField<<8)
+		buf = le.AppendUint32(buf, f.typ.Size)
+		buf = append(buf, f.typ.Properties...)
+	}
+	return buf
+}
+
 // TestEncodeDatatypeCompound_TwoMembers tests encoding compound with two integer members.
 func TestEncodeDatatypeCompound_TwoMembers(t *testing.T) {
 	// Create int32 member types
-	intType, err := CreateBasicDatatypeMessage(DatatypeFixed, 4)
-	require.NoError(t, err)
-
-	fields := []CompoundFieldDef{
-		{Name: "x", Offset: 0, Type: intType},
-		{Name: "y", Offset: 4, Type: intType},
-	}
+	intType := testBasicDatatype(DatatypeFixed, 4)
 
 	// Encode using V3 format to get full bytes (header + properties)
-	encoded, err := EncodeCompoundDatatypeV3(8, fields)
-	require.NoError(t, err)
+	encoded := testEncodeCompoundV3(8, []testCompoundField{
+		{name: "x", offset: 0, typ: intType},
+		{name: "y", offset: 4, typ: intType},
+	})
 	require.NotNil(t, encoded)
 
 	// Parse to get a DatatypeMessage
@@ -298,19 +335,10 @@ func TestEncodeDatatypeCompound_TwoMembers(t *testing.T) {
 
 // TestEncodeDatatypeCompound_WithString tests compound with a string member.
 func TestEncodeDatatypeCompound_WithString(t *testing.T) {
-	intType, err := CreateBasicDatatypeMessage(DatatypeFixed, 4)
-	require.NoError(t, err)
-
-	strType, err := CreateBasicDatatypeMessage(DatatypeString, 10)
-	require.NoError(t, err)
-
-	fields := []CompoundFieldDef{
-		{Name: "id", Offset: 0, Type: intType},
-		{Name: "name", Offset: 4, Type: strType},
-	}
-
-	encoded, err := EncodeCompoundDatatypeV3(14, fields)
-	require.NoError(t, err)
+	encoded := testEncodeCompoundV3(14, []testCompoundField{
+		{name: "id", offset: 0, typ: testBasicDatatype(DatatypeFixed, 4)},
+		{name: "name", offset: 4, typ: testBasicDatatype(DatatypeString, 10)},
+	})
 
 	dt, err := ParseDatatypeMessage(encoded)
 	require.NoError(t, err)
@@ -345,20 +373,14 @@ func TestEncodeDatatypeCompound_EmptyProperties(t *testing.T) {
 
 // TestEncodeDatatypeCompound_ThreeMembers tests compound with three mixed-type members.
 func TestEncodeDatatypeCompound_ThreeMembers(t *testing.T) {
-	intType, err := CreateBasicDatatypeMessage(DatatypeFixed, 4)
-	require.NoError(t, err)
+	intType := testBasicDatatype(DatatypeFixed, 4)
+	floatType := testBasicDatatype(DatatypeFloat, 8)
 
-	floatType, err := CreateBasicDatatypeMessage(DatatypeFloat, 8)
-	require.NoError(t, err)
-
-	fields := []CompoundFieldDef{
-		{Name: "a", Offset: 0, Type: intType},
-		{Name: "b", Offset: 4, Type: floatType},
-		{Name: "c", Offset: 12, Type: intType},
-	}
-
-	encoded, err := EncodeCompoundDatatypeV3(16, fields)
-	require.NoError(t, err)
+	encoded := testEncodeCompoundV3(16, []testCompoundField{
+		{name: "a", offset: 0, typ: intType},
+		{name: "b", offset: 4, typ: floatType},
+		{name: "c", offset: 12, typ: intType},
+	})
 
 	dt, err := ParseDatatypeMessage(encoded)
 	require.NoError(t, err)
@@ -373,17 +395,13 @@ func TestEncodeDatatypeCompound_ThreeMembers(t *testing.T) {
 
 // TestEncodeDatatypeCompound_RoundTrip tests encode-decode-encode roundtrip.
 func TestEncodeDatatypeCompound_RoundTrip(t *testing.T) {
-	intType, err := CreateBasicDatatypeMessage(DatatypeFixed, 4)
-	require.NoError(t, err)
-
-	fields := []CompoundFieldDef{
-		{Name: "x", Offset: 0, Type: intType},
-		{Name: "y", Offset: 4, Type: intType},
-	}
+	intType := testBasicDatatype(DatatypeFixed, 4)
 
 	// First encode
-	encoded1, err := EncodeCompoundDatatypeV3(8, fields)
-	require.NoError(t, err)
+	encoded1 := testEncodeCompoundV3(8, []testCompoundField{
+		{name: "x", offset: 0, typ: intType},
+		{name: "y", offset: 4, typ: intType},
+	})
 
 	// Parse
 	dt, err := ParseDatatypeMessage(encoded1)

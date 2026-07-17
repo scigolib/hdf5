@@ -69,11 +69,6 @@ func (lim *LinkInfoMessage) HasNameBTree() bool {
 	return lim.NameBTreeAddress != 0 && lim.NameBTreeAddress != haddrUndef
 }
 
-// HasCreationOrderBTree returns true if creation order B-tree address is set.
-func (lim *LinkInfoMessage) HasCreationOrderBTree() bool {
-	return lim.CreationOrderBTreeAddress != 0 && lim.CreationOrderBTreeAddress != haddrUndef
-}
-
 // ParseLinkInfoMessage parses Link Info message from header message data.
 //
 // This implements the decoding logic matching the C reference H5Olinfo.c:H5O__linfo_decode().

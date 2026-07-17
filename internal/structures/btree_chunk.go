@@ -27,7 +27,7 @@ const chunkBTreeK = 32
 // - Keys: N-dimensional chunk coordinates (2K+1 keys)
 // - Children: Addresses of child nodes or raw data chunks (2K children)
 //
-// For MVP (Phase 1):
+// Current implementation:
 // - Single leaf node only (no splits)
 // - N-dimensional chunk coordinates as keys
 // - Row-major sorting of coordinates.
@@ -36,7 +36,7 @@ type ChunkBTreeNode struct {
 	NodeType     uint8      // 1 = Raw Data Chunk (NOT 0 like groups!)
 	NodeLevel    uint8      // 0 = leaf
 	EntriesUsed  uint16     // Number of chunks
-	LeftSibling  uint64     // 0xFFFFFFFFFFFFFFFF (no siblings in MVP)
+	LeftSibling  uint64     // 0xFFFFFFFFFFFFFFFF (no siblings; single leaf node)
 	RightSibling uint64     // 0xFFFFFFFFFFFFFFFF
 	Keys         []ChunkKey // Chunk coordinates (2K+1 for full node)
 	ChildAddrs   []uint64   // Chunk file addresses (2K for full node)
@@ -49,12 +49,11 @@ type ChunkBTreeNode struct {
 // - Filter mask: uint32 (0 for no filters)
 // - Chunk scaled coordinates: uint64[dimensionality] (row-major, stored as byte offsets)
 //
-// For MVP (Phase 1):
-// - No filters (FilterMask = 0)
-// - Nbytes is set to chunk data size.
+// FilterMask is always written as 0 (all pipeline filters applied to every
+// chunk); Nbytes is the chunk data size after filtering.
 type ChunkKey struct {
 	Coords     []uint64 // [dim0, dim1, ..., dimN] (scaled chunk indices)
-	FilterMask uint32   // Always 0 for Phase 1 (no compression)
+	FilterMask uint32   // Always 0 (all pipeline filters applied)
 	Nbytes     uint32   // Chunk size in bytes (after filtering)
 }
 
@@ -72,9 +71,9 @@ type ChunkKey struct {
 // Usage:
 //
 //	writer := NewChunkBTreeWriter(2, []uint64{10, 20}, 8) // 2D dataset, chunk 10x20, float64
-//	writer.AddChunk([]uint64{0, 0}, chunkAddr1)
-//	writer.AddChunk([]uint64{0, 1}, chunkAddr2)
-//	writer.AddChunk([]uint64{1, 0}, chunkAddr3)
+//	writer.AddChunkWithSize([]uint64{0, 0}, chunkAddr1, 0)
+//	writer.AddChunkWithSize([]uint64{0, 1}, chunkAddr2, 0)
+//	writer.AddChunkWithSize([]uint64{1, 0}, chunkAddr3, 0)
 //	btreeAddr, err := writer.WriteToFile(fileWriter, allocator)
 type ChunkBTreeWriter struct {
 	dimensionality int
@@ -112,27 +111,6 @@ func NewChunkBTreeWriter(dimensionality int, chunkDims []uint64, elementSize uin
 		elementSize:    elementSize,
 		entries:        make([]ChunkBTreeEntry, 0),
 	}
-}
-
-// AddChunk adds chunk to index.
-//
-// Chunks must be added before WriteToFile is called.
-// The order of addition does not matter - chunks will be sorted
-// in row-major order before writing.
-//
-// Parameters:
-//   - coord: Scaled chunk coordinate [dim0, dim1, ..., dimN]
-//   - address: File address where chunk data is written
-//
-// Example:
-//
-//	// For 2D dataset with chunk size [10, 20]
-//	// Dataset element [5, 15] is in chunk [0, 0]
-//	// Dataset element [15, 25] is in chunk [1, 1]
-//	writer.AddChunk([]uint64{0, 0}, 1000) // First chunk at address 1000
-//	writer.AddChunk([]uint64{1, 1}, 2000) // Second chunk at address 2000
-func (w *ChunkBTreeWriter) AddChunk(coord []uint64, address uint64) error {
-	return w.AddChunkWithSize(coord, address, 0)
 }
 
 // AddChunkWithSize adds chunk to index with explicit size.
@@ -451,8 +429,8 @@ func (w *ChunkBTreeWriter) writeInternalLevel(
 //   - chunkDims: Chunk dimensions for converting scaled coords to byte offsets
 //   - elementSize: Datatype element size (for the trailing dimension)
 //
-// Note: We use fixed 8-byte addresses (offsetSize=8) for simplicity in MVP.
-// Future versions may support variable offsetSize from superblock.
+// Note: Fixed 8-byte addresses (offsetSize=8) are used; variable offsetSize
+// from the superblock is not supported.
 func serializeChunkBTreeNode(node *ChunkBTreeNode, onDiskDims int, chunkDims []uint64, _ uint32) []byte {
 	// Per C reference (H5B.c:1670-1678, H5Dbtree.c:773-776):
 	// The C library always reads sizeof_rnode bytes from disk, computed as:

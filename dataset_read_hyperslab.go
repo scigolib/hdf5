@@ -993,8 +993,7 @@ func extractChunkPortionRecursive(
 // The raw data is assumed to be in row-major (C-style) order, where the last dimension
 // varies fastest. The hyperslab selection is also in row-major order.
 //
-// For MVP, this returns []float64 (matching existing Read() method).
-// Future versions will support all datatypes with interface{} return.
+// Returns []float64, matching the existing Read() method.
 func extractHyperslabFromRawData(
 	selection *HyperslabSelection,
 	datatype *core.DatatypeMessage,

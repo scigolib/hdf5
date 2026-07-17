@@ -49,7 +49,7 @@ func NewDenseAttributeWriter(objectAddr uint64) *DenseAttributeWriter {
 		btree:       structures.NewWritableBTreeV2(4096),          // 4KB B-tree node
 		attrInfo: &core.AttributeInfoMessage{
 			Version: 0,
-			Flags:   0, // No creation order tracking for MVP
+			Flags:   0, // No creation order tracking
 		},
 		attributes: make(map[string]*core.Attribute),
 	}

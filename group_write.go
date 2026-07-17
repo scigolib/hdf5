@@ -185,7 +185,7 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, uint64, error) {
 // Groups organize datasets and other groups in a hierarchical structure.
 //
 // This method creates an empty group using symbol table format (old HDF5 format).
-// For groups with many links, consider using CreateDenseGroup() or CreateGroupWithLinks().
+// For groups with many links, consider using CreateDenseGroup().
 //
 // Parameters:
 //   - path: Group path (must start with "/", e.g., "/data" or "/data/experiments")
@@ -207,8 +207,8 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, uint64, error) {
 //	nested, _ := fw.CreateGroup("/data/experiments")
 //	nested.WriteAttribute("MATLAB_class", "double")
 //
-// Limitations for MVP (v0.11.0-beta):
-//   - Only symbol table structure (no indexed groups)
+// Limitations:
+//   - Symbol table structure only (use CreateDenseGroup for dense-format groups)
 //   - No link creation time tracking
 //   - Maximum 32 entries per group (symbol table node capacity)
 //   - Parent group must exist (create parents first)
@@ -710,7 +710,7 @@ func (fw *FileWriter) readLocalHeap(addr uint64) (*structures.LocalHeap, error) 
 
 	// Set write-mode fields
 	// Note: DataSegmentAddress is set by WriteTo(), not here
-	heap.OffsetToHeadFreeList = 1 // MVP: no free list (1 = H5HL_FREE_NULL)
+	heap.OffsetToHeadFreeList = 1 // No free list (1 = H5HL_FREE_NULL)
 
 	return heap, nil
 }
@@ -1016,65 +1016,4 @@ func (fw *FileWriter) unlinkFromParent(parentPath, childName string) (uint64, er
 	}
 
 	return removedAddr, nil
-}
-
-// Dense group threshold (HDF5 default: switch to dense when >8 links).
-const denseGroupThreshold = 8
-
-// CreateGroupWithLinks creates group with automatic format selection.
-//
-// This method automatically chooses the most efficient storage format:
-//   - Symbol table (old format) for ≤8 links (compact)
-//   - Dense format (new format) for >8 links (scalable)
-//
-// This matches HDF5 1.8+ behavior: start compact, use dense when needed.
-//
-// Parameters:
-//   - name: Group name (must start with "/")
-//   - links: Map of link_name → target_path (can be empty)
-//
-// Returns:
-//   - error: Non-nil if creation fails
-//
-// Example:
-//
-//	// Small group (will use symbol table)
-//	fw.CreateGroupWithLinks("/small", map[string]string{
-//	    "data1": "/dataset1",
-//	    "data2": "/dataset2",
-//	})
-//
-//	// Large group (will use dense format)
-//	largeLinks := make(map[string]string)
-//	for i := 0; i < 100; i++ {
-//	    largeLinks[fmt.Sprintf("link%d", i)] = fmt.Sprintf("/dataset%d", i)
-//	}
-//	fw.CreateGroupWithLinks("/large", largeLinks)
-//
-// Reference: H5Gint.c - H5G_convert_to_dense().
-func (fw *FileWriter) CreateGroupWithLinks(name string, links map[string]string) error {
-	if len(links) > denseGroupThreshold {
-		// Use dense format for large groups
-		return fw.CreateDenseGroup(name, links)
-	}
-
-	// Use symbol table format for small groups
-	// Create empty group first
-	_, err := fw.CreateGroup(name)
-	if err != nil {
-		return err
-	}
-
-	// For MVP: linking is handled by CreateDenseGroup for dense groups
-	// For symbol table groups, links would need to be added via linkToParent
-	// This is a limitation of the MVP - symbol table groups can be created empty,
-	// but adding links after creation requires manual linkToParent calls
-
-	// Future: implement addLinkToGroup() to add links to existing symbol table groups
-
-	if len(links) > 0 {
-		return fmt.Errorf("adding links to symbol table groups not yet supported in MVP (group %s has %d links)", name, len(links))
-	}
-
-	return nil
 }

@@ -3,10 +3,141 @@ package core
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+// v1FailAtReader serves data for reads that fit entirely below failAt and
+// returns a non-EOF error for any read touching offsets >= failAt.
+type v1FailAtReader struct {
+	data   []byte
+	failAt int64
+}
+
+func (r *v1FailAtReader) ReadAt(p []byte, off int64) (int, error) {
+	if off+int64(len(p)) > r.failAt {
+		return 0, errors.New("simulated read failure")
+	}
+	return copy(p, r.data[off:off+int64(len(p))]), nil
+}
+
+func TestParseV1Header_InvalidVersion(t *testing.T) {
+	// A v1-looking header with a bad version byte must be rejected.
+	header := make([]byte, 64)
+	header[0] = 2 // Invalid: v1 headers must have version 1
+	header[1] = 0
+	binary.LittleEndian.PutUint16(header[2:4], 0)
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], 16)
+
+	sb := &Superblock{
+		Endianness: binary.LittleEndian,
+		OffsetSize: 8,
+		LengthSize: 8,
+	}
+
+	msgs, _, _, err := parseV1Header(bytes.NewReader(header), 0, sb)
+	require.Error(t, err)
+	require.Nil(t, msgs)
+	require.Contains(t, err.Error(), "invalid v1 header version")
+}
+
+func TestParseV1Header_PrefixReadError(t *testing.T) {
+	// Reader too short for the 16-byte prefix: ReadAt returns EOF with a
+	// partial read, which must surface as a read error.
+	sb := &Superblock{
+		Endianness: binary.LittleEndian,
+		OffsetSize: 8,
+		LengthSize: 8,
+	}
+
+	msgs, _, _, err := parseV1Header(bytes.NewReader(make([]byte, 8)), 0, sb)
+	require.Error(t, err)
+	require.Nil(t, msgs)
+	require.Contains(t, err.Error(), "v1 header read failed")
+}
+
+func TestParseV1Header_MessageHeaderReadError(t *testing.T) {
+	// Prefix reads fine, but the first message header read fails (non-EOF).
+	header := make([]byte, 16)
+	header[0] = 1
+	header[1] = 0
+	binary.LittleEndian.PutUint16(header[2:4], 1)   // 1 message
+	binary.LittleEndian.PutUint32(header[4:8], 1)   // Ref count
+	binary.LittleEndian.PutUint32(header[8:12], 16) // Header size
+
+	sb := &Superblock{
+		Endianness: binary.LittleEndian,
+		OffsetSize: 8,
+		LengthSize: 8,
+	}
+
+	r := &v1FailAtReader{data: header, failAt: 16}
+	msgs, _, _, err := parseV1Header(r, 0, sb)
+	require.Error(t, err)
+	require.Nil(t, msgs)
+	require.Contains(t, err.Error(), "message header read failed")
+}
+
+func TestParseV1Header_MessageDataReadError(t *testing.T) {
+	// Message header reads fine, but the message data read fails (non-EOF).
+	header := make([]byte, 24)
+	header[0] = 1
+	header[1] = 0
+	binary.LittleEndian.PutUint16(header[2:4], 1)   // 1 message
+	binary.LittleEndian.PutUint32(header[4:8], 1)   // Ref count
+	binary.LittleEndian.PutUint32(header[8:12], 32) // Header size
+
+	// Message header at offset 16: Name message, 8 bytes of data
+	binary.LittleEndian.PutUint16(header[16:18], 13) // Type: Name
+	binary.LittleEndian.PutUint16(header[18:20], 8)  // Size: 8 bytes
+
+	sb := &Superblock{
+		Endianness: binary.LittleEndian,
+		OffsetSize: 8,
+		LengthSize: 8,
+	}
+
+	r := &v1FailAtReader{data: header, failAt: 24}
+	msgs, _, _, err := parseV1Header(r, 0, sb)
+	require.Error(t, err)
+	require.Nil(t, msgs)
+	require.Contains(t, err.Error(), "message data read failed")
+}
+
+func TestParseV1Header_ContinuationReadError(t *testing.T) {
+	// Main header parses fine but the continuation block is unreadable.
+	const contBlockAddr = 0x100
+	const contBlockSize = 32
+
+	header := make([]byte, 40)
+	header[0] = 1
+	header[1] = 0
+	binary.LittleEndian.PutUint16(header[2:4], 1)   // 1 message
+	binary.LittleEndian.PutUint32(header[4:8], 1)   // Ref count
+	binary.LittleEndian.PutUint32(header[8:12], 40) // Header size
+
+	// Continuation message (type 16, size 16)
+	binary.LittleEndian.PutUint16(header[16:18], 16)
+	binary.LittleEndian.PutUint16(header[18:20], 16)
+	binary.LittleEndian.PutUint64(header[24:32], contBlockAddr)
+	binary.LittleEndian.PutUint64(header[32:40], contBlockSize)
+
+	sb := &Superblock{
+		Endianness: binary.LittleEndian,
+		OffsetSize: 8,
+		LengthSize: 8,
+	}
+
+	r := &v1FailAtReader{data: make([]byte, contBlockAddr), failAt: contBlockAddr}
+	copy(r.data, header)
+	msgs, _, _, err := parseV1Header(r, 0, sb)
+	require.Error(t, err)
+	require.Nil(t, msgs)
+	require.Contains(t, err.Error(), "continuation block parse failed")
+}
 
 func TestParseV1Header_Basic(t *testing.T) {
 	// Create a minimal v1 object header

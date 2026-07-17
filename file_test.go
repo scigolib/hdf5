@@ -1,6 +1,8 @@
 package hdf5
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -61,6 +63,48 @@ func TestOpenFile(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestOpenFile_BadSuperblock tests that a file with a valid HDF5 signature
+// but an unreadable superblock is rejected.
+func TestOpenFile_BadSuperblock(t *testing.T) {
+	// Valid signature, unsupported superblock version (1), padded past the
+	// 48-byte superblock minimum.
+	data := make([]byte, 96)
+	copy(data, "\x89HDF\r\n\x1a\n")
+	data[8] = 1 // Unsupported superblock version
+
+	path := filepath.Join(t.TempDir(), "bad_superblock.h5")
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	file, err := Open(path)
+	require.Error(t, err)
+	require.Nil(t, file)
+	require.Contains(t, err.Error(), "superblock read failed")
+}
+
+// TestOpenFile_RootGroupBeyondEOF tests that a superblock pointing the root
+// group past the end of the file is rejected.
+func TestOpenFile_RootGroupBeyondEOF(t *testing.T) {
+	// Minimal superblock v2: signature, version 2, 8-byte offsets/lengths,
+	// root group address (bytes 36-43) far beyond the 96-byte file.
+	// Checksums are not validated on read.
+	data := make([]byte, 96)
+	copy(data, "\x89HDF\r\n\x1a\n")
+	data[8] = 2     // Superblock version
+	data[9] = 0     // Little-endian flags
+	data[10] = 8    // Offset size
+	data[11] = 8    // Length size
+	data[36] = 0xFF // Root group address low byte: 0xFF > file size
+	data[37] = 0xFF
+
+	path := filepath.Join(t.TempDir(), "root_beyond_eof.h5")
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	file, err := Open(path)
+	require.Error(t, err)
+	require.Nil(t, file)
+	require.Contains(t, err.Error(), "beyond file size")
 }
 
 // TestFileClose ensures files can be closed without error.

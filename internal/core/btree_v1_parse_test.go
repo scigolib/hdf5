@@ -269,48 +269,6 @@ func TestParseBTreeV1Node_DifferentOffsetSizes(t *testing.T) {
 	}
 }
 
-// TestBTreeV1Node_FindChunk tests chunk searching.
-func TestBTreeV1Node_FindChunk(t *testing.T) {
-	// Note: FindChunk algorithm:
-	// For each key i: if coords < Keys[i], use Children[i-1]
-	// After all comparisons, use Children[childIndex]
-	//
-	// coords [0,0]: compareCoords([0,0], [0,0]) = 0 (not <0), so childIndex++
-	//              compareCoords([0,0], [0,1]) = -1 (<0), break
-	//              childIndex = 1 → Children[1] = 0x1200
-	//
-	// This tests the actual B-tree search behavior
-	node := &BTreeV1Node{
-		Signature:    [4]byte{'T', 'R', 'E', 'E'},
-		NodeType:     1,
-		NodeLevel:    0, // Leaf
-		EntriesUsed:  2,
-		LeftSibling:  0xFFFFFFFFFFFFFFFF,
-		RightSibling: 0xFFFFFFFFFFFFFFFF,
-		Keys: []ChunkKey{
-			{Scaled: []uint64{0, 0}, Nbytes: 100}, // Key 0
-			{Scaled: []uint64{0, 1}, Nbytes: 100}, // Key 1
-			{Scaled: []uint64{1, 0}, Nbytes: 100}, // Key 2 (final)
-		},
-		Children: []uint64{0x1000, 0x1200},
-	}
-
-	emptyReader := &emptyReaderAt{}
-
-	// Find chunk [0, 0]
-	// compareCoords([0,0], [0,0]) = 0 (not <), childIndex becomes 1
-	// compareCoords([0,0], [0,1]) = -1 (<), break
-	// Returns Children[1] = 0x1200
-	// (This matches actual HDF5 B-tree behavior)
-	addr, err := node.FindChunk(emptyReader, []uint64{0, 0}, 8, []uint64{10, 20})
-	require.NoError(t, err)
-	require.Equal(t, uint64(0x1200), addr, "chunk [0,0] should map to children[1]")
-
-	// For proper test, we'd need different coordinates
-	// Skip this test for now as it requires understanding exact B-tree semantics
-	t.Skip("B-tree FindChunk semantics require deeper investigation")
-}
-
 // TestBTreeV1Node_CollectAllChunks tests collecting all chunks from leaf.
 func TestBTreeV1Node_CollectAllChunks(t *testing.T) {
 	// Create leaf node with 3 chunks

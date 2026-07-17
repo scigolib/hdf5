@@ -322,7 +322,7 @@ func TestReadGroupBTreeEntries_ReadErrors(t *testing.T) {
 					err:  errors.New("IO error"),
 				}, createMockSuperblock()
 			},
-			wantErr: "B-tree node header read failed",
+			wantErr: "b-tree node header read failed",
 		},
 		{
 			name: "insufficient header data",
@@ -345,7 +345,7 @@ func TestReadGroupBTreeEntries_ReadErrors(t *testing.T) {
 				binary.LittleEndian.PutUint64(buf[16:24], 0xFFFFFFFFFFFFFFFF)
 				return &mockReaderAt{data: buf}, createMockSuperblock()
 			},
-			wantErr: "B-tree data read failed",
+			wantErr: "b-tree data read failed",
 		},
 	}
 

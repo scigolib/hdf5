@@ -230,7 +230,7 @@ func TestReadBTreeEntries_ReadErrors(t *testing.T) {
 				}
 				return reader, createMockSuperblock()
 			},
-			wantErr: "B-tree node read failed",
+			wantErr: "b-tree node read failed",
 		},
 		{
 			name: "insufficient data for header",

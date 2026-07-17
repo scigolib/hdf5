@@ -146,17 +146,10 @@ func TestReadCompound_Simple(t *testing.T) {
 	filename := filepath.Join(tmpDir, "read_compound_simple.h5")
 
 	// Build compound type: struct { int32 id; float32 value }
-	int32Type, err := core.CreateBasicDatatypeMessage(core.DatatypeFixed, 4)
-	require.NoError(t, err)
-	float32Type, err := core.CreateBasicDatatypeMessage(core.DatatypeFloat, 4)
-	require.NoError(t, err)
-
-	fields := []core.CompoundFieldDef{
-		{Name: "id", Offset: 0, Type: int32Type},
-		{Name: "value", Offset: 4, Type: float32Type},
-	}
-	compoundType, err := core.CreateCompoundTypeFromFields(fields)
-	require.NoError(t, err)
+	compoundType := testCompoundType(t, []testCompoundField{
+		{name: "id", offset: 0, typ: testBasicType(core.DatatypeFixed, 4)},
+		{name: "value", offset: 4, typ: testBasicType(core.DatatypeFloat, 4)},
+	})
 
 	// Write
 	fw, err := CreateForWrite(filename, CreateTruncate)
@@ -216,20 +209,11 @@ func TestReadCompound_MixedTypes(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "read_compound_mixed.h5")
 
-	int32Type, err := core.CreateBasicDatatypeMessage(core.DatatypeFixed, 4)
-	require.NoError(t, err)
-	float64Type, err := core.CreateBasicDatatypeMessage(core.DatatypeFloat, 8)
-	require.NoError(t, err)
-	int64Type, err := core.CreateBasicDatatypeMessage(core.DatatypeFixed, 8)
-	require.NoError(t, err)
-
-	fields := []core.CompoundFieldDef{
-		{Name: "count", Offset: 0, Type: int32Type},
-		{Name: "weight", Offset: 4, Type: float64Type},
-		{Name: "flag", Offset: 12, Type: int64Type},
-	}
-	compoundType, err := core.CreateCompoundTypeFromFields(fields)
-	require.NoError(t, err)
+	compoundType := testCompoundType(t, []testCompoundField{
+		{name: "count", offset: 0, typ: testBasicType(core.DatatypeFixed, 4)},
+		{name: "weight", offset: 4, typ: testBasicType(core.DatatypeFloat, 8)},
+		{name: "flag", offset: 12, typ: testBasicType(core.DatatypeFixed, 8)},
+	})
 	require.Equal(t, uint32(20), compoundType.Size)
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
@@ -291,7 +275,7 @@ func TestReadCompound_MixedTypes(t *testing.T) {
 func TestNamedDatatype_Accessor(t *testing.T) {
 	// The official reference file memleak_H5O_dtype_decode_helper_H5Odtype.h5
 	// should contain a named datatype. Open it and walk to find one.
-	testFile := "testdata/reference/memleak_H5O_dtype_decode_helper_H5Odtype.h5"
+	testFile := "testdata/hdf5_official/memleak_H5O_dtype_decode_helper_H5Odtype.h5"
 
 	f, err := Open(testFile)
 	if err != nil {

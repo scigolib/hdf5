@@ -22,7 +22,7 @@ func TestLoadObject_DatasetFromV0File(t *testing.T) {
 	t.Parallel()
 
 	// fill_old.h5 is a v0 superblock file with datasets at root level.
-	f, err := Open("testdata/reference/fill_old.h5")
+	f, err := Open("testdata/hdf5_official/fill_old.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -53,7 +53,7 @@ func TestLoadObject_GroupFromV0File(t *testing.T) {
 	t.Parallel()
 
 	// group_old.h5 is a v0 superblock file with a nested group "/old".
-	f, err := Open("testdata/reference/group_old.h5")
+	f, err := Open("testdata/hdf5_official/group_old.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -75,7 +75,7 @@ func TestLoadObject_GroupFromV0File(t *testing.T) {
 func TestLoadObject_NestedGroupsV0(t *testing.T) {
 	t.Parallel()
 
-	f, err := Open("testdata/reference/tbogus.h5")
+	f, err := Open("testdata/hdf5_official/tbogus.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -105,7 +105,7 @@ func TestLoadObject_NestedGroupsV0(t *testing.T) {
 func TestLoadObject_ManyDatasetsV0(t *testing.T) {
 	t.Parallel()
 
-	f, err := Open("testdata/reference/le_data.h5")
+	f, err := Open("testdata/hdf5_official/le_data.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -129,7 +129,7 @@ func TestLoadObject_ManyDatasetsV0(t *testing.T) {
 func TestLoadObject_MultipleGroupsV0(t *testing.T) {
 	t.Parallel()
 
-	f, err := Open("testdata/reference/mergemsg.h5")
+	f, err := Open("testdata/hdf5_official/mergemsg.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -162,7 +162,7 @@ func TestLoadObject_MultipleGroupsV0(t *testing.T) {
 func TestLoadChildren_V0WithBigEndian(t *testing.T) {
 	t.Parallel()
 
-	f, err := Open("testdata/reference/be_data.h5")
+	f, err := Open("testdata/hdf5_official/be_data.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -179,7 +179,7 @@ func TestLoadChildren_V0WithBigEndian(t *testing.T) {
 func TestLoadChildren_V0WithDeflate(t *testing.T) {
 	t.Parallel()
 
-	f, err := Open("testdata/reference/deflate.h5")
+	f, err := Open("testdata/hdf5_official/deflate.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -204,7 +204,7 @@ func TestLoadChildren_V0WithDeflate(t *testing.T) {
 func TestDatasetRead_Float64FromV0(t *testing.T) {
 	t.Parallel()
 
-	f, err := Open("testdata/reference/filespace_1_8.h5")
+	f, err := Open("testdata/hdf5_official/filespace_1_8.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -225,7 +225,7 @@ func TestDatasetRead_Float64FromV0(t *testing.T) {
 func TestDatasetInfo_FromV0(t *testing.T) {
 	t.Parallel()
 
-	f, err := Open("testdata/reference/filespace_1_8.h5")
+	f, err := Open("testdata/hdf5_official/filespace_1_8.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -248,7 +248,7 @@ func TestDatasetInfo_FromV0(t *testing.T) {
 func TestDatasetAttributes_FromV0(t *testing.T) {
 	t.Parallel()
 
-	f, err := Open("testdata/reference/specmetaread.h5")
+	f, err := Open("testdata/hdf5_official/specmetaread.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -277,7 +277,7 @@ func TestDatasetAttributes_FromV0(t *testing.T) {
 func TestDatasetReadAttribute_NotFound(t *testing.T) {
 	t.Parallel()
 
-	f, err := Open("testdata/reference/specmetaread.h5")
+	f, err := Open("testdata/hdf5_official/specmetaread.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -330,7 +330,7 @@ func TestGroupAttributes_ModernGroup(t *testing.T) {
 func TestGroupAttributes_TraditionalV0Group(t *testing.T) {
 	t.Parallel()
 
-	f, err := Open("testdata/reference/group_old.h5")
+	f, err := Open("testdata/hdf5_official/group_old.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -488,107 +488,6 @@ func TestWriteReadRoundTrip_V2WithGroupsAndDatasets(t *testing.T) {
 	require.GreaterOrEqual(t, groups, 2, "should have root + grp")
 	require.GreaterOrEqual(t, datasets, 2, "should have data + grp/values")
 	require.Equal(t, "/", paths[0], "first path should be root")
-}
-
-// ---------------------------------------------------------------------------
-// Section 6: RebalanceAttributeBTree -- test the objectHeader != nil path
-// ---------------------------------------------------------------------------
-
-// TestRebalanceAttributeBTree_DenseViaReadHeader tests the code path
-// in RebalanceAttributeBTree where denseAttrInfo==nil but objectHeader==nil,
-// so it reads the object header from disk. We create a file with 10+ attrs
-// (triggers dense storage), close it, reopen it fresh, and call
-// RebalanceAttributeBTree.
-func TestRebalanceAttributeBTree_DenseViaReadHeader(t *testing.T) {
-	t.Parallel()
-
-	// Use explicit file path with defer Remove to avoid TempDir cleanup race.
-	filename := filepath.Join("tmp", "test_rebalance_read_header.h5")
-	defer func() { _ = os.Remove(filename) }()
-
-	// Step 1: Create file with dense attributes.
-	func() {
-		fw, err := CreateForWrite(filename, CreateTruncate)
-		require.NoError(t, err)
-
-		ds, err := fw.CreateDataset("/data", Float64, []uint64{5})
-		require.NoError(t, err)
-		require.NoError(t, ds.Write([]float64{1, 2, 3, 4, 5}))
-
-		// Add 10 attributes to trigger dense storage.
-		for i := 0; i < 10; i++ {
-			err = ds.WriteAttribute(fmt.Sprintf("attr_%d", i), int32(i))
-			require.NoError(t, err)
-		}
-
-		// The dataset was created in this session, so denseAttrInfo is nil
-		// and objectHeader is nil. This tests the fresh-read path.
-		err = ds.RebalanceAttributeBTree()
-		require.NoError(t, err, "RebalanceAttributeBTree should succeed on in-session dense dataset")
-
-		require.NoError(t, fw.Close())
-	}()
-
-	// Step 2: Reopen with OpenForWrite and test the cached path.
-	func() {
-		fw, err := OpenForWrite(filename, OpenReadWrite)
-		require.NoError(t, err)
-
-		ds, err := fw.OpenDataset("/data")
-		require.NoError(t, err)
-
-		// denseAttrInfo should be set now (cached from OpenDataset).
-		err = ds.RebalanceAttributeBTree()
-		require.NoError(t, err, "RebalanceAttributeBTree should succeed on reopened dataset with cached header")
-
-		require.NoError(t, fw.Close())
-	}()
-
-	// Step 3: Verify file is still valid after rebalancing.
-	f, err := Open(filename)
-	require.NoError(t, err)
-
-	root := f.Root()
-	require.NotNil(t, root)
-	children := root.Children()
-	require.Len(t, children, 1)
-
-	ds, ok := children[0].(*Dataset)
-	require.True(t, ok)
-
-	attrs, err := ds.Attributes()
-	require.NoError(t, err)
-	require.Len(t, attrs, 10, "should still have 10 attributes after rebalancing")
-
-	require.NoError(t, f.Close())
-}
-
-// TestRebalanceAttributeBTree_CompactOnly tests RebalanceAttributeBTree
-// on a dataset with only compact attributes (less than 8). The code should
-// find attrInfo==nil and return nil (no-op).
-func TestRebalanceAttributeBTree_CompactOnly(t *testing.T) {
-	t.Parallel()
-
-	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "test_rebalance_compact.h5")
-
-	fw, err := CreateForWrite(filename, CreateTruncate)
-	require.NoError(t, err)
-	defer func() { _ = fw.Close() }()
-
-	ds, err := fw.CreateDataset("/data", Float64, []uint64{3})
-	require.NoError(t, err)
-	require.NoError(t, ds.Write([]float64{1, 2, 3}))
-
-	// Add only 3 attributes (compact storage).
-	for i := 0; i < 3; i++ {
-		err = ds.WriteAttribute(fmt.Sprintf("compact_%d", i), int32(i))
-		require.NoError(t, err)
-	}
-
-	// RebalanceAttributeBTree should be a no-op.
-	err = ds.RebalanceAttributeBTree()
-	require.NoError(t, err, "should succeed (no-op) for compact storage")
 }
 
 // ---------------------------------------------------------------------------
@@ -844,15 +743,12 @@ func TestDatasetReadCompound_WriteRead(t *testing.T) {
 		defer func() { _ = fw.Close() }()
 
 		// Create compound type: struct { float64 x; float64 y }
-		f64Type, err := core.CreateBasicDatatypeMessage(core.DatatypeFloat, 8)
-		require.NoError(t, err)
+		f64Type := testBasicType(core.DatatypeFloat, 8)
 
-		fields := []core.CompoundFieldDef{
-			{Name: "x", Offset: 0, Type: f64Type},
-			{Name: "y", Offset: 8, Type: f64Type},
-		}
-		compoundType, err := core.CreateCompoundTypeFromFields(fields)
-		require.NoError(t, err)
+		compoundType := testCompoundType(t, []testCompoundField{
+			{name: "x", offset: 0, typ: f64Type},
+			{name: "y", offset: 8, typ: f64Type},
+		})
 
 		ds, err := fw.CreateCompoundDataset("/points", compoundType, []uint64{2})
 		require.NoError(t, err)
@@ -1001,18 +897,18 @@ func TestV0Files_TableDriven(t *testing.T) {
 		expectedVersion uint8
 		minChildren     int
 	}{
-		{"fill_old", "testdata/reference/fill_old.h5", 0, 2},
-		{"tarrold", "testdata/reference/tarrold.h5", 0, 2},
-		{"group_old", "testdata/reference/group_old.h5", 0, 1},
-		{"deflate", "testdata/reference/deflate.h5", 0, 1},
-		{"charsets", "testdata/reference/charsets.h5", 0, 1},
-		{"mergemsg", "testdata/reference/mergemsg.h5", 0, 3},
-		{"filespace_1_6", "testdata/reference/filespace_1_6.h5", 0, 1},
-		{"tmtimen", "testdata/reference/tmtimen.h5", 0, 1},
-		{"tmtimeo", "testdata/reference/tmtimeo.h5", 0, 1},
-		{"tnullspace", "testdata/reference/tnullspace.h5", 0, 1},
-		{"noencoder", "testdata/reference/noencoder.h5", 0, 2},
-		{"fsm_aggr_nopersist", "testdata/reference/fsm_aggr_nopersist.h5", 0, 1},
+		{"fill_old", "testdata/hdf5_official/fill_old.h5", 0, 2},
+		{"tarrold", "testdata/hdf5_official/tarrold.h5", 0, 2},
+		{"group_old", "testdata/hdf5_official/group_old.h5", 0, 1},
+		{"deflate", "testdata/hdf5_official/deflate.h5", 0, 1},
+		{"charsets", "testdata/hdf5_official/charsets.h5", 0, 1},
+		{"mergemsg", "testdata/hdf5_official/mergemsg.h5", 0, 3},
+		{"filespace_1_6", "testdata/hdf5_official/filespace_1_6.h5", 0, 1},
+		{"tmtimen", "testdata/hdf5_official/tmtimen.h5", 0, 1},
+		{"tmtimeo", "testdata/hdf5_official/tmtimeo.h5", 0, 1},
+		{"tnullspace", "testdata/hdf5_official/tnullspace.h5", 0, 1},
+		{"noencoder", "testdata/hdf5_official/noencoder.h5", 0, 2},
+		{"fsm_aggr_nopersist", "testdata/hdf5_official/fsm_aggr_nopersist.h5", 0, 1},
 	}
 
 	for _, tt := range tests {
@@ -1053,12 +949,12 @@ func TestV2V3Files_TableDriven(t *testing.T) {
 		expectedVersion uint8
 		minChildren     int
 	}{
-		{"aggr", "testdata/reference/aggr.h5", 2, 1},
-		{"btree_idx_1_8", "testdata/reference/btree_idx_1_8.h5", 2, 2},
-		{"fill18", "testdata/reference/fill18.h5", 2, 1},
-		{"none", "testdata/reference/none.h5", 2, 1},
-		{"fsm_aggr_persist", "testdata/reference/fsm_aggr_persist.h5", 2, 1},
-		{"paged_persist", "testdata/reference/paged_persist.h5", 2, 1},
+		{"aggr", "testdata/hdf5_official/aggr.h5", 2, 1},
+		{"btree_idx_1_8", "testdata/hdf5_official/btree_idx_1_8.h5", 2, 2},
+		{"fill18", "testdata/hdf5_official/fill18.h5", 2, 1},
+		{"none", "testdata/hdf5_official/none.h5", 2, 1},
+		{"fsm_aggr_persist", "testdata/hdf5_official/fsm_aggr_persist.h5", 2, 1},
+		{"paged_persist", "testdata/hdf5_official/paged_persist.h5", 2, 1},
 	}
 
 	for _, tt := range tests {
@@ -1141,9 +1037,9 @@ func TestDenseAttributes_FullLifecycle(t *testing.T) {
 	require.Len(t, names, numAttrs)
 }
 
-// TestDenseAttributes_WriteDeleteRebalanceVerify creates dense attrs,
-// deletes some, rebalances, and verifies remaining.
-func TestDenseAttributes_WriteDeleteRebalanceVerify(t *testing.T) {
+// TestDenseAttributes_WriteDeleteVerify creates dense attrs,
+// deletes some, and verifies remaining.
+func TestDenseAttributes_WriteDeleteVerify(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
@@ -1154,8 +1050,7 @@ func TestDenseAttributes_WriteDeleteRebalanceVerify(t *testing.T) {
 
 	// Write and delete.
 	func() {
-		fw, err := CreateForWrite(filename, CreateTruncate,
-			WithBTreeRebalancing(false))
+		fw, err := CreateForWrite(filename, CreateTruncate)
 		require.NoError(t, err)
 		defer func() { _ = fw.Close() }()
 
@@ -1173,10 +1068,6 @@ func TestDenseAttributes_WriteDeleteRebalanceVerify(t *testing.T) {
 			err = ds.DeleteAttribute(fmt.Sprintf("attr_%03d", i))
 			require.NoError(t, err)
 		}
-
-		// Rebalance.
-		err = ds.RebalanceAttributeBTree()
-		require.NoError(t, err)
 
 		require.NoError(t, fw.Close())
 	}()
@@ -1366,35 +1257,6 @@ func TestGroupNameAndChildren(t *testing.T) {
 	require.Len(t, g.Children(), 2)
 	require.Equal(t, "ds1", g.Children()[0].Name())
 	require.Equal(t, "ds2", g.Children()[1].Name())
-}
-
-// ---------------------------------------------------------------------------
-// Section 20: CreateForWrite error paths
-// ---------------------------------------------------------------------------
-
-// TestCreateForWrite_InvalidOption tests CreateForWrite with invalid
-// option type.
-func TestCreateForWrite_InvalidOption(t *testing.T) {
-	t.Parallel()
-
-	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "test_invalid_opt.h5")
-
-	_, err := CreateForWrite(filename, CreateTruncate, "invalid_option")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid option type")
-}
-
-// TestCreate_InvalidModeValue tests Create with invalid mode value.
-func TestCreate_InvalidModeValue(t *testing.T) {
-	t.Parallel()
-
-	tempDir := t.TempDir()
-	filename := filepath.Join(tempDir, "test_invalid_mode.h5")
-
-	_, err := Create(filename, CreateMode(99))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid create mode")
 }
 
 // ---------------------------------------------------------------------------
@@ -1734,7 +1596,7 @@ func TestLoadGroupWithCachedSymbolTable_ViaNestedGroups(t *testing.T) {
 		file      string
 		minGroups int
 	}{
-		{"tbogus_nested", "testdata/reference/tbogus.h5", 2},
+		{"tbogus_nested", "testdata/hdf5_official/tbogus.h5", 2},
 		{"tgroup", "testdata/hdf5_official/tgroup.h5", 10},
 		{"h5ex_g_traverse", "testdata/hdf5_official/h5ex_g_traverse.h5", 5},
 		{"tall", "testdata/hdf5_official/tall.h5", 4},
@@ -1844,7 +1706,7 @@ func TestGroupAttributeWrite_ReadVerify(t *testing.T) {
 func TestDatasetRead_IntegerFromV0(t *testing.T) {
 	t.Parallel()
 
-	f, err := Open("testdata/reference/specmetaread.h5")
+	f, err := Open("testdata/hdf5_official/specmetaread.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -2359,66 +2221,6 @@ func TestFileWriterClose_WithDatasets(t *testing.T) {
 	stat, err := os.Stat(filename)
 	require.NoError(t, err)
 	require.Greater(t, stat.Size(), int64(100), "file should have content")
-}
-
-// ---------------------------------------------------------------------------
-// Section 38: RebalanceAttributeBTree -- with OpenForWrite path
-// ---------------------------------------------------------------------------
-
-// TestRebalanceAllBTrees_WithMultipleDatasets tests the global
-// rebalance on a file opened with OpenForWrite.
-func TestRebalanceAllBTrees_WithMultipleDatasets(t *testing.T) {
-	t.Parallel()
-
-	filename := filepath.Join("tmp", "test_rebalance_all.h5")
-	defer func() { _ = os.Remove(filename) }()
-
-	// Create file with multiple datasets with dense attrs.
-	func() {
-		fw, err := CreateForWrite(filename, CreateTruncate)
-		require.NoError(t, err)
-
-		for i := 0; i < 3; i++ {
-			ds, err := fw.CreateDataset(
-				fmt.Sprintf("/ds_%d", i), Float64, []uint64{3})
-			require.NoError(t, err)
-			require.NoError(t, ds.Write([]float64{1, 2, 3}))
-
-			for j := 0; j < 10; j++ {
-				require.NoError(t, ds.WriteAttribute(
-					fmt.Sprintf("attr_%d", j), int32(j)))
-			}
-		}
-
-		require.NoError(t, fw.Close())
-	}()
-
-	// Reopen and rebalance all.
-	func() {
-		fw, err := OpenForWrite(filename, OpenReadWrite)
-		require.NoError(t, err)
-
-		require.NoError(t, fw.RebalanceAllBTrees())
-		require.NoError(t, fw.Close())
-	}()
-
-	// Verify.
-	f, err := Open(filename)
-	require.NoError(t, err)
-
-	root := f.Root()
-	require.Len(t, root.Children(), 3)
-
-	for _, child := range root.Children() {
-		ds, ok := child.(*Dataset)
-		require.True(t, ok)
-
-		attrs, err := ds.Attributes()
-		require.NoError(t, err)
-		require.Len(t, attrs, 10)
-	}
-
-	require.NoError(t, f.Close())
 }
 
 // ---------------------------------------------------------------------------

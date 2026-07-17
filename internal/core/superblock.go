@@ -45,7 +45,7 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 
 	n, err := r.ReadAt(buf, 0)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, utils.WrapError("superblock read failed", err)
+		return nil, fmt.Errorf("superblock read failed: %w", err)
 	}
 	if n < 48 {
 		return nil, errors.New("file too small to contain a superblock")
@@ -173,7 +173,7 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		// Read object header address at offset 64
 		sb.RootGroup, err = readValue(64, offsetSize)
 		if err != nil {
-			return nil, utils.WrapError("root group address read failed", err)
+			return nil, fmt.Errorf("root group address read failed: %w", err)
 		}
 
 		// ALWAYS read cached B-tree and Heap addresses for v0 files
@@ -181,12 +181,12 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		// Even if object header address is non-zero, the symbol table may use these
 		sb.RootBTreeAddr, err = readValue(80, offsetSize)
 		if err != nil {
-			return nil, utils.WrapError("b-tree address read failed", err)
+			return nil, fmt.Errorf("b-tree address read failed: %w", err)
 		}
 
 		sb.RootHeapAddr, err = readValue(88, offsetSize)
 		if err != nil {
-			return nil, utils.WrapError("heap address read failed", err)
+			return nil, fmt.Errorf("heap address read failed: %w", err)
 		}
 	} else {
 		// For v2 and v3, fields start at byte 12
@@ -194,13 +194,13 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 
 		sb.BaseAddress, err = readValue(current, offsetSize)
 		if err != nil {
-			return nil, utils.WrapError("base address read failed", err)
+			return nil, fmt.Errorf("base address read failed: %w", err)
 		}
 		current += int(offsetSize)
 
 		sb.SuperExtension, err = readValue(current, offsetSize)
 		if err != nil {
-			return nil, utils.WrapError("super extension read failed", err)
+			return nil, fmt.Errorf("super extension read failed: %w", err)
 		}
 		current += int(offsetSize)
 
@@ -209,7 +209,7 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 
 		sb.RootGroup, err = readValue(current, offsetSize)
 		if err != nil {
-			return nil, utils.WrapError("root group address read failed", err)
+			return nil, fmt.Errorf("root group address read failed: %w", err)
 		}
 		// Note: v2 and v3 have checksum at bytes 44-47, but we don't validate it during read
 		// The HDF5 C library also doesn't enforce checksum validation on read
@@ -219,7 +219,7 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 }
 
 // WriteTo writes the superblock to the writer at offset 0.
-// For MVP (v0.11.0-beta), only superblock v2 is supported for writing.
+// Only superblock v2 is supported for writing.
 //
 // Superblock v2 format (48 bytes):
 //

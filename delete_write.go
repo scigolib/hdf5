@@ -105,7 +105,7 @@ func (fw *FileWriter) Delete(path string) error {
 
 // writeRefCount rewrites the object header with an updated reference count.
 // For V2 headers, this adds/updates a RefCount message.
-// For V1 headers, the refcount is part of the header prefix (not rewritten in MVP).
+// For V1 headers, the refcount is part of the header prefix and is not rewritten.
 func (fw *FileWriter) writeRefCount(addr uint64, oh *core.ObjectHeader, sb *core.Superblock) error {
 	if oh.Version != 2 {
 		// V1: RefCount is in the header prefix. The ObjectHeaderWriter handles this.
@@ -247,58 +247,18 @@ func (fw *FileWriter) freeChunkedData(btreeAddr uint64, allocator interface{ Fre
 
 	nodeLevel := header[5]
 
-	// For level-0 (leaf) nodes, the child pointers ARE the chunk addresses.
-	// Each key is: chunkSize(4) + filterMask(4) + dimOffsets (chunkKeySize * ndims).
-	// For simplicity, we read the child pointers and free them.
-	// The chunk size is embedded in the key.
-
-	// Read keys and children. Layout: Key[0], Child[0], Key[1], ..., Key[N].
-	// Key size for chunk B-trees: 4 (chunk size) + 4 (filter mask) + 4*ndims (dimension offsets).
-	// We need to figure out the key size. For type-1 B-trees, the key format depends on
-	// the dataset's dimensionality. We'll read enough data and parse conservatively.
-
 	if nodeLevel > 0 {
-		// Internal nodes: recurse into children.
-		// For simplicity in MVP, we only handle leaf nodes (level 0).
+		// Only leaf nodes (level 0) are handled; internal nodes are not recursed.
 		// Multi-level chunk B-trees are rare for small-medium datasets.
 		return
 	}
 
-	// For level-0 chunk B-trees, read all keys and children.
-	// We need to determine the key size. Read the data region and parse.
-	// Key format: chunkSize(4) + filterMask(4) + dims (variable).
-	// The number of dimensions is not directly in the B-tree; it's in the dataset's layout message.
-	// However, we can use a simpler approach: read the entire data region and extract child pointers
-	// using the known structure: [key, child, key, child, ..., key].
-	// The child pointer is always offsetSize bytes.
-
-	// For each entry, we need to know the key size to skip over it.
-	// ChunkKey = chunkSize(4) + filterMask(4) + dimensionOffsets.
-	// Without knowing ndims, we estimate from the data layout's ChunkSize field length.
-	// However, since we're called from cascadeDelete where we had the layout, we should
-	// instead track the chunk sizes from the B-tree keys.
-
-	// Practical approach: for each child pointer, the chunk data was allocated as a
-	// contiguous block. We read the chunk size from each key (first 4 bytes).
-	// We can compute the offset to each key/child pair using:
-	//   keySize = data_between_children / known_structure.
-	// Since we know entriesUsed and the total data following the header, we can solve for keySize.
-
-	// Alternative simpler approach: read all data after header. The total data size is:
-	//   (entriesUsed+1) * keySize + entriesUsed * offsetSize.
-	// We know entriesUsed and offsetSize, but not keySize. So let's estimate using a
-	// reasonable upper bound and try to parse.
-
-	// Actually, the simplest correct approach: the B-tree is a fixed allocation,
-	// and freeing just the B-tree node itself is sufficient for space recovery.
-	// Individual chunk data blocks need their sizes, which we get from keys.
-
-	// For MVP: free the B-tree node itself (it was allocated as part of the dataset).
-	// The chunk data blocks are harder to free without the full key size, but we can
-	// try with common key sizes (most datasets are 1-3 dimensional).
-
-	// Try common key sizes: 1D = 4+4+4 = 12, 2D = 4+4+8 = 16, 3D = 4+4+12 = 20.
-	// We try each and see which one produces valid child pointers (non-zero, non-UNDEF).
+	// Leaf node layout after the header: Key[0], Child[0], Key[1], ..., Key[N].
+	// Each key is chunkSize(4) + filterMask(4) + 4*ndims dimension offsets, and each
+	// child pointer (offsetSize bytes) is the chunk data address. The dataset's
+	// dimensionality is not stored in the B-tree, so the key size is unknown here.
+	// Probe common key sizes (1-4 dimensions) and use the first that parses into
+	// valid child pointers, then free each chunk using the size from its key.
 	for _, ndims := range []int{1, 2, 3, 4} {
 		keySize := 4 + 4 + 4*ndims // chunkSize + filterMask + ndims*4
 		totalDataSize := (int(entriesUsed)+1)*keySize + int(entriesUsed)*int(offsetSize)
@@ -348,7 +308,7 @@ func (fw *FileWriter) freeChunkedData(btreeAddr uint64, allocator interface{ Fre
 		}
 	}
 	// Could not determine key size. B-tree node will be freed with OHDR;
-	// chunk data blocks are leaked. This is acceptable for MVP.
+	// chunk data blocks are leaked.
 }
 
 // freeGroupStructures frees the B-tree, symbol table nodes, and local heap
@@ -390,9 +350,7 @@ func (fw *FileWriter) freeGroupStructures(symTableData []byte, sb *core.Superblo
 		_ = allocator.Free(addr, snodTotalSize)
 	}
 
-	// Free heap. Local heap has a fixed header + data segment.
-	// We don't know the exact size, but a typical heap is 4096 bytes.
-	// For MVP, we free a standard heap size. This is conservative.
+	// Free heap using its parsed size (fixed header + data segment).
 	heap, heapErr := fw.readLocalHeap(heapAddr)
 	if heapErr == nil {
 		_ = allocator.Free(heapAddr, heap.Size())

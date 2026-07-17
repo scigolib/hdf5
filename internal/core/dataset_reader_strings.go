@@ -10,7 +10,8 @@ import (
 )
 
 // ReadDatasetStrings reads a string dataset and returns values as string array.
-// Supports both fixed-length and variable-length strings.
+// Supports fixed-length strings; variable-length strings return an error
+// (use ReadDatasetVLenBytes instead).
 func ReadDatasetStrings(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]string, error) {
 	// 1. Extract required messages from object header.
 	var datatypeMsg, dataspaceMsg, layoutMsg *HeaderMessage
@@ -137,9 +138,8 @@ func convertToStrings(rawData []byte, datatype *DatatypeMessage, numElements uin
 			result[i] = decodeFixedString(stringBytes, paddingType)
 		}
 	} else if datatype.IsVariableString() {
-		// Variable-length strings.
-		// Format: each element is (global_heap_id, size, index).
-		// For now, return error - variable-length strings require global heap support.
+		// Variable-length strings (each element is a global heap ID) are not
+		// handled by this reader; use ReadDatasetVLenBytes instead.
 		return nil, errors.New("variable-length strings not yet supported")
 	} else {
 		return nil, errors.New("unknown string type")

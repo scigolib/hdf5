@@ -97,7 +97,7 @@ func TestOpen_ReaderAccessor(t *testing.T) {
 // TestLoadObject_NamedDatatypeBranch opens a file with a committed (named) datatype
 // and verifies it hits the ObjectTypeDatatype case in loadObject.
 func TestLoadObject_NamedDatatypeBranch(t *testing.T) {
-	f, err := Open("testdata/reference/bad_compound.h5")
+	f, err := Open("testdata/hdf5_official/bad_compound.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -119,7 +119,7 @@ func TestLoadObject_NamedDatatypeBranch(t *testing.T) {
 // TestLoadObject_NamedDatatypeFromMemleak uses the memleak reference file,
 // exercising loadObject with various object types present in this file.
 func TestLoadObject_NamedDatatypeFromMemleak(t *testing.T) {
-	f, err := Open("testdata/reference/memleak_H5O_dtype_decode_helper_H5Odtype.h5")
+	f, err := Open("testdata/hdf5_official/memleak_H5O_dtype_decode_helper_H5Odtype.h5")
 	if err != nil {
 		t.Skipf("skipping: cannot open reference file: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestLoadObject_NamedDatatypeFromMemleak(t *testing.T) {
 // with nested SNOD groups, and exhaustively walks the tree to exercise
 // loadTraditionalGroup, loadChildren with SNOD inline, and CacheType=1.
 func TestLoadTraditionalGroup_GroupOld_DeepWalk(t *testing.T) {
-	f, err := Open("testdata/reference/group_old.h5")
+	f, err := Open("testdata/hdf5_official/group_old.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -194,7 +194,7 @@ func TestLoadTraditionalGroup_GroupOld_DeepWalk(t *testing.T) {
 // TestLoadTraditionalGroup_FillOld exercises loadTraditionalGroup via fill_old.h5,
 // another v0 file using traditional SNOD format.
 func TestLoadTraditionalGroup_FillOld(t *testing.T) {
-	f, err := Open("testdata/reference/fill_old.h5")
+	f, err := Open("testdata/hdf5_official/fill_old.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -210,7 +210,7 @@ func TestLoadTraditionalGroup_FillOld(t *testing.T) {
 // TestLoadChildren_V0WithMultipleDatasets exercises loadChildren with multiple
 // SNOD entries from a v0 file.
 func TestLoadChildren_V0WithMultipleDatasets(t *testing.T) {
-	f, err := Open("testdata/reference/tarrold.h5")
+	f, err := Open("testdata/hdf5_official/tarrold.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -237,10 +237,10 @@ func TestLoadChildren_V0WithMultipleDatasets(t *testing.T) {
 // branch in loadGroup.
 func TestLoadGroup_SNODSignatureBranch(t *testing.T) {
 	v0Files := []string{
-		"testdata/reference/group_old.h5",
-		"testdata/reference/tarrold.h5",
-		"testdata/reference/fill_old.h5",
-		"testdata/reference/tlayouto.h5",
+		"testdata/hdf5_official/group_old.h5",
+		"testdata/hdf5_official/tarrold.h5",
+		"testdata/hdf5_official/fill_old.h5",
+		"testdata/hdf5_official/tlayouto.h5",
 	}
 
 	for _, path := range v0Files {
@@ -312,7 +312,7 @@ func TestGroup_Attributes_NonEmpty(t *testing.T) {
 // TestGroup_Attributes_TraditionalFormat tests Attributes() on a traditional
 // (SNOD) group (address=0), which should return empty slice without error.
 func TestGroup_Attributes_TraditionalFormat(t *testing.T) {
-	f, err := Open("testdata/reference/group_old.h5")
+	f, err := Open("testdata/hdf5_official/group_old.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -1053,14 +1053,14 @@ func TestReferenceFiles_BroadCoverage(t *testing.T) {
 		{"testdata/v0.h5", 2},
 		{"testdata/v2.h5", 1},
 		{"testdata/v3.h5", 1},
-		{"testdata/reference/group_old.h5", 2},
-		{"testdata/reference/tarrold.h5", 3},
-		{"testdata/reference/fill_old.h5", 1},
-		{"testdata/reference/tlayouto.h5", 1},
-		{"testdata/reference/aggr.h5", 1},
-		{"testdata/reference/bad_compound.h5", 1},
-		{"testdata/reference/deflate.h5", 1},
-		{"testdata/reference/charsets.h5", 1},
+		{"testdata/hdf5_official/group_old.h5", 2},
+		{"testdata/hdf5_official/tarrold.h5", 3},
+		{"testdata/hdf5_official/fill_old.h5", 1},
+		{"testdata/hdf5_official/tlayouto.h5", 1},
+		{"testdata/hdf5_official/aggr.h5", 1},
+		{"testdata/hdf5_official/bad_compound.h5", 1},
+		{"testdata/hdf5_official/deflate.h5", 1},
+		{"testdata/hdf5_official/charsets.h5", 1},
 		{"testdata/with_groups.h5", 2},
 		{"testdata/with_attributes.h5", 1},
 		{"testdata/multiple_datasets.h5", 1},

@@ -318,8 +318,7 @@ func TestCreateCompoundDataset_WrongClass(t *testing.T) {
 	defer func() { _ = fw.Close() }()
 
 	// Create a non-compound datatype (fixed-point)
-	intType, err := core.CreateBasicDatatypeMessage(core.DatatypeFixed, 4)
-	require.NoError(t, err)
+	intType := testBasicType(core.DatatypeFixed, 4)
 
 	_, err = fw.CreateCompoundDataset("/bad", intType, []uint64{2})
 	require.Error(t, err)
@@ -336,14 +335,9 @@ func TestCreateCompoundDataset_InvalidDimensions(t *testing.T) {
 	defer func() { _ = fw.Close() }()
 
 	// Create a valid compound type
-	int32Type, err := core.CreateBasicDatatypeMessage(core.DatatypeFixed, 4)
-	require.NoError(t, err)
-
-	fields := []core.CompoundFieldDef{
-		{Name: "id", Offset: 0, Type: int32Type},
-	}
-	compoundType, err := core.CreateCompoundTypeFromFields(fields)
-	require.NoError(t, err)
+	compoundType := testCompoundType(t, []testCompoundField{
+		{name: "id", offset: 0, typ: testBasicType(core.DatatypeFixed, 4)},
+	})
 
 	tests := []struct {
 		name    string
@@ -380,14 +374,9 @@ func TestCreateCompoundDataset_InvalidName(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = fw.Close() }()
 
-	int32Type, err := core.CreateBasicDatatypeMessage(core.DatatypeFixed, 4)
-	require.NoError(t, err)
-
-	fields := []core.CompoundFieldDef{
-		{Name: "id", Offset: 0, Type: int32Type},
-	}
-	compoundType, err := core.CreateCompoundTypeFromFields(fields)
-	require.NoError(t, err)
+	compoundType := testCompoundType(t, []testCompoundField{
+		{name: "id", offset: 0, typ: testBasicType(core.DatatypeFixed, 4)},
+	})
 
 	// Empty name
 	_, err = fw.CreateCompoundDataset("", compoundType, []uint64{2})

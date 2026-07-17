@@ -40,7 +40,7 @@ func TestCreateChunkedDataset_1D(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify B-tree address was assigned
-	require.NotEqual(t, uint64(0), ds.dataAddress, "B-tree address should be non-zero after Write()")
+	require.NotEqual(t, uint64(0), ds.dataAddress, "b-tree address should be non-zero after Write()")
 
 	// Flush
 	err = fw.Close()

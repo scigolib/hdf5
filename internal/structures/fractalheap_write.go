@@ -43,10 +43,10 @@ var (
 // indirect block structure, moving existing data to first child block.
 //
 // Limitations:
-// - Single-level indirect blocks (no multiply-indirect yet)
-// - No filters/compression (MVP)
-// - No huge objects (MVP)
-// - No tiny object optimization (MVP)
+// - Single-level indirect blocks (no multiply-indirect)
+// - No filters/compression
+// - No huge objects
+// - No tiny object optimization
 //
 // Reference: H5HF.c, H5HFhdr.c, H5HFdblock.c, H5HFiblock.c.
 type WritableFractalHeap struct {
@@ -64,24 +64,24 @@ type WritableFractalHeap struct {
 }
 
 // WritableHeapHeader represents a fractal heap header for writing.
-// Simplified from FractalHeapHeader for MVP write support.
+// Simplified from FractalHeapHeader for write support.
 type WritableHeapHeader struct {
 	// Core fields
 	Version         uint8
 	HeapIDLength    uint16 // Typically 8 bytes
-	IOFiltersLength uint16 // 0 for MVP
+	IOFiltersLength uint16 // Always 0 (no I/O filters)
 	Flags           uint8  // Bit flags
 
 	// Object limits
 	MaxManagedObjectSize uint32 // Typically 64KB
 
-	// Huge object support (MVP: all zeros)
+	// Huge object support (unused: all zeros)
 	NextHugeObjectID    uint64
 	HugeObjectBTreeAddr uint64
 
 	// Free space management
 	FreeSpace          uint64 // Free space in managed blocks
-	FreeSectionAddress uint64 // 0 for MVP (no free space manager)
+	FreeSectionAddress uint64 // Always 0 (no free space manager)
 
 	// Heap statistics
 	ManagedSpaceSize      uint64 // Total managed space
@@ -89,20 +89,20 @@ type WritableHeapHeader struct {
 	ManagedSpaceOffset    uint64 // Next insert position (iterator offset)
 	NumManagedObjects     uint64 // Object count
 
-	// Huge/Tiny object stats (MVP: all zeros)
+	// Huge/Tiny object stats (unused: all zeros)
 	SizeHugeObjects uint64
 	NumHugeObjects  uint64
 	SizeTinyObjects uint64
 	NumTinyObjects  uint64
 
 	// Doubling table parameters
-	TableWidth         uint16 // Width of doubling table (MVP: 2)
+	TableWidth         uint16 // Width of doubling table (default 2)
 	StartingBlockSize  uint64 // Size of first direct block
-	MaxDirectBlockSize uint64 // Same as starting for MVP
-	MaxHeapSize        uint16 // Max rows (MVP: 16 to allow offset encoding)
-	StartingNumRows    uint16 // For indirect blocks (MVP: 0)
+	MaxDirectBlockSize uint64 // Same as starting block size
+	MaxHeapSize        uint16 // Max rows (16 to allow offset encoding)
+	StartingNumRows    uint16 // For indirect blocks (0)
 	RootBlockAddress   uint64 // Address of direct block
-	CurrentNumRows     uint16 // For indirect blocks (MVP: 0)
+	CurrentNumRows     uint16 // Rows in root indirect block (0 = direct root)
 
 	// Computed values (not stored, but needed for encoding)
 	HeapOffsetSize uint8 // Size of heap offsets (bytes)
@@ -141,14 +141,14 @@ func NewWritableFractalHeap(blockSize uint64) *WritableFractalHeap {
 		Version:         0,
 		HeapIDLength:    DefaultHeapIDLength,
 		IOFiltersLength: 0,
-		Flags:           0, // No checksums, no huge objects for MVP
+		Flags:           0, // No checksums, no huge objects
 
 		MaxManagedObjectSize: DefaultMaxManagedObjectSize,
 		NextHugeObjectID:     0,
 		HugeObjectBTreeAddr:  0,
 
 		FreeSpace:          blockSize, // Initially all free
-		FreeSectionAddress: 0,         // No free space manager in MVP
+		FreeSectionAddress: 0,         // No free space manager
 
 		ManagedSpaceSize:      blockSize,
 		AllocatedManagedSpace: blockSize,
@@ -164,7 +164,7 @@ func NewWritableFractalHeap(blockSize uint64) *WritableFractalHeap {
 		StartingBlockSize:  blockSize,
 		MaxDirectBlockSize: blockSize,
 		MaxHeapSize:        maxHeapSize,
-		StartingNumRows:    0, // Not used in MVP
+		StartingNumRows:    0, // Not used
 		RootBlockAddress:   0, // Will be set when written
 		CurrentNumRows:     0, // 0 = direct block at root
 
@@ -179,7 +179,7 @@ func NewWritableFractalHeap(blockSize uint64) *WritableFractalHeap {
 		Size:              blockSize,
 		Objects:           make([]byte, 0, blockSize),
 		FreeOffset:        0,     // Next insert at 0
-		ChecksumEnabled:   false, // No checksum for MVP
+		ChecksumEnabled:   false, // No checksum
 	}
 
 	return &WritableFractalHeap{
@@ -202,7 +202,7 @@ func NewWritableFractalHeap(blockSize uint64) *WritableFractalHeap {
 //
 // Reference: H5HFiblock.c - H5HF__man_iblock_create().
 //
-// MVP Limitation: Single-level indirect only (max_direct_rows = nrows).
+// Limitation: single-level indirect only (max_direct_rows = nrows).
 func (fh *WritableFractalHeap) transitionToIndirectRoot() error {
 	if fh.RootIndirectBlock != nil {
 		return fmt.Errorf("heap already has indirect root")
@@ -215,7 +215,7 @@ func (fh *WritableFractalHeap) transitionToIndirectRoot() error {
 	// Calculate indirect block parameters
 	// Start with 1 row (holds 2 direct blocks with table width=2)
 	numRows := uint16(1)
-	maxDirectRows := numRows // All rows are direct blocks (MVP: no multiply-indirect)
+	maxDirectRows := numRows // All rows are direct blocks (no multiply-indirect)
 
 	// Create root indirect block
 	// Block offset = 0 (root starts at beginning of heap address space)
@@ -364,7 +364,7 @@ func (fh *WritableFractalHeap) insertViaDirect(data []byte) ([]byte, error) {
 // This method navigates the doubling table to find an appropriate block,
 // allocates new child blocks as needed, and inserts the object.
 //
-// MVP Implementation:
+// Implementation:
 // - Single-level indirect blocks only
 // - Simple allocation strategy (fill first block, then second, etc.)
 // - No block splitting or compaction
@@ -374,7 +374,7 @@ func (fh *WritableFractalHeap) insertViaIndirect(data []byte) ([]byte, error) {
 	dataSize := uint64(len(data))
 
 	// Find a block with enough free space
-	// MVP: Simple linear search through child blocks
+	// Simple linear search through child blocks
 	var targetBlock *WritableDirectBlock
 	var targetOffset uint64
 
@@ -390,7 +390,7 @@ func (fh *WritableFractalHeap) insertViaIndirect(data []byte) ([]byte, error) {
 	// If no block found, allocate a new child block
 	if targetBlock == nil {
 		// Calculate next block offset
-		// MVP: Use ManagedSpaceOffset (grows with heap)
+		// Use ManagedSpaceOffset (grows with heap)
 		nextBlockOffset := fh.Header.ManagedSpaceSize
 
 		// Create new child direct block
@@ -413,11 +413,10 @@ func (fh *WritableFractalHeap) insertViaIndirect(data []byte) ([]byte, error) {
 		fh.Header.FreeSpace += fh.MaxDirectBlockSize
 
 		// Find entry in indirect block for this new child
-		// MVP: Simple append to next available entry
+		// Simple append to next available entry
 		numExistingBlocks := len(fh.DirectBlocks) - 1 // -1 because we just added one
 		if numExistingBlocks >= len(fh.RootIndirectBlock.ChildAddresses) {
-			// Need to grow indirect block (add more rows)
-			// MVP: For now, return error (will implement growth in future)
+			// Growing the indirect block (adding more rows) is not supported.
 			return nil, fmt.Errorf("%w: indirect block full (need to grow)", ErrHeapFull)
 		}
 
@@ -474,12 +473,12 @@ func (fh *WritableFractalHeap) encodeHeapID(offset, length uint64) []byte {
 	// Flags byte: version (bits 6-7) = 0, type (bits 4-5) = 0 (managed)
 	heapID[0] = 0x00 // Version 0, Type managed
 
-	// Encode offset (little-endian for MVP)
+	// Encode offset (little-endian)
 	idx := 1
 	writeUintVar(heapID[idx:], offset, int(fh.Header.HeapOffsetSize), binary.LittleEndian)
 	idx += int(fh.Header.HeapOffsetSize)
 
-	// Encode length (little-endian for MVP)
+	// Encode length (little-endian)
 	writeUintVar(heapID[idx:], length, int(fh.Header.HeapLengthSize), binary.LittleEndian)
 	// Remaining bytes stay zero-padded
 
@@ -796,7 +795,7 @@ func (fh *WritableFractalHeap) readDirectBlockFromFile(reader io.ReaderAt, addre
 	dblock.Data = make([]byte, dataEnd-offset)
 	copy(dblock.Data, buf[offset:dataEnd])
 
-	// Checksum at end (not validated in this MVP)
+	// Checksum at end (not validated)
 	dblock.Checksum = endianness.Uint32(buf[totalSize-4 : totalSize])
 
 	return dblock, nil
@@ -808,7 +807,7 @@ func (fh *WritableFractalHeap) readDirectBlockFromFile(reader io.ReaderAt, addre
 //
 // Process:
 // 1. Read heap header from file address
-// 2. Read direct block (MVP: single block only)
+// 2. Read direct block (single block only)
 // 3. Initialize writable structures with existing data
 // 4. New insertions append to existing objects
 //
@@ -838,7 +837,7 @@ func (fh *WritableFractalHeap) LoadFromFile(reader io.ReaderAt, address uint64, 
 		return fmt.Errorf("failed to open fractal heap: %w", err)
 	}
 
-	// Verify this is a simple heap we can modify (MVP limitations)
+	// Verify this is a simple heap we can modify (supported subset)
 	if readHeap.Header.CurrentRowCount != 0 {
 		return fmt.Errorf("cannot modify heap with indirect blocks (root has %d rows)", readHeap.Header.CurrentRowCount)
 	}
@@ -910,8 +909,7 @@ func (fh *WritableFractalHeap) LoadFromFile(reader io.ReaderAt, address uint64, 
 
 // GetObject retrieves object by ID from fractal heap (for testing).
 //
-// For MVP:
-// - Object ID contains offset and length directly
+// The object ID contains offset and length directly.
 //
 // Parameters:
 // - heapID: object ID (returned from InsertObject)
@@ -983,7 +981,7 @@ func (fh *WritableFractalHeap) getObjectFromDirect(offset, length uint64) ([]byt
 // We need to find which child block contains this offset.
 func (fh *WritableFractalHeap) getObjectFromIndirect(globalOffset, length uint64) ([]byte, error) {
 	// Find which block contains this offset
-	// MVP: Simple linear search through blocks
+	// Simple linear search through blocks
 	for blockOffset, block := range fh.DirectBlocks {
 		blockEnd := blockOffset + block.Size
 		if globalOffset >= blockOffset && globalOffset < blockEnd {
@@ -1026,7 +1024,7 @@ func (fh *WritableFractalHeap) getObjectFromIndirect(globalOffset, length uint64
 //
 // Reference: H5HF.c - H5HF_write() (in-place modification).
 //
-// MVP Limitation: Only works for managed objects in direct block.
+// Limitation: only works for managed objects in direct blocks.
 func (fh *WritableFractalHeap) OverwriteObject(heapID, newData []byte) error {
 	// Parse heap ID to get offset and length
 	if len(heapID) < 1 {
@@ -1092,10 +1090,9 @@ func (fh *WritableFractalHeap) OverwriteObject(heapID, newData []byte) error {
 //
 // Reference: H5HF.c - H5HF_remove() (mark object as free).
 //
-// MVP Limitation:
+// Limitation:
 // - Marked as deleted, but space is NOT reclaimed (no free space manager).
-// - Free space accumulates until heap compaction (future work).
-// - This is acceptable for MVP (matches HDF5 C library behavior without compaction).
+// - Free space accumulates; matches HDF5 C library behavior without compaction.
 func (fh *WritableFractalHeap) DeleteObject(heapID []byte) error {
 	// Parse heap ID to get offset and length
 	if len(heapID) < 1 {
@@ -1133,9 +1130,8 @@ func (fh *WritableFractalHeap) DeleteObject(heapID []byte) error {
 		return fmt.Errorf("%w: object extends beyond used space", ErrObjectNotFound)
 	}
 
-	// MVP: Mark space as deleted by zeroing it out
-	// In full implementation, this would add to free space list
-	// For now, we just zero the data (space is lost until compaction)
+	// Mark space as deleted by zeroing it out.
+	// There is no free space list; the space is lost until compaction.
 	for i := offset; i < offset+length; i++ {
 		fh.DirectBlock.Objects[i] = 0
 	}

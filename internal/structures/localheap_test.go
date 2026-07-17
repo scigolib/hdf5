@@ -883,3 +883,40 @@ func (m *mockWriter) WriteAt(p []byte, off int64) (n int, err error) {
 	n = copy(m.data[off:], p)
 	return n, nil
 }
+
+// failNthWriteAt fails on the nth WriteAt call (1-based); other calls succeed.
+type failNthWriteAt struct {
+	failCall int
+	calls    int
+}
+
+func (w *failNthWriteAt) WriteAt(p []byte, _ int64) (int, error) {
+	w.calls++
+	if w.calls == w.failCall {
+		return 0, errors.New("simulated write failure")
+	}
+	return len(p), nil
+}
+
+func TestLocalHeap_WriteTo_Errors(t *testing.T) {
+	tests := []struct {
+		name     string
+		failCall int
+		wantErr  string
+	}{
+		{"header write fails", 1, "failed to write local heap header"},
+		{"data segment write fails", 2, "failed to write local heap data"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			heap := NewLocalHeap(64)
+			_, err := heap.AddString("test")
+			require.NoError(t, err)
+
+			err = heap.WriteTo(&failNthWriteAt{failCall: tt.failCall}, 0)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}

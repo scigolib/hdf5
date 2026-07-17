@@ -44,7 +44,7 @@ func TestTraditionalGroup_V0File(t *testing.T) {
 // TestTraditionalGroup_GroupOld opens the reference group_old.h5 file that
 // uses traditional (SNOD) format with nested groups.
 func TestTraditionalGroup_GroupOld(t *testing.T) {
-	f, err := Open("testdata/reference/group_old.h5")
+	f, err := Open("testdata/hdf5_official/group_old.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -72,7 +72,7 @@ func TestTraditionalGroup_GroupOld(t *testing.T) {
 // TestTraditionalGroup_Tarrold opens tarrold.h5 (v0) which has multiple
 // datasets under the root, exercising loadChildren with SNOD entries.
 func TestTraditionalGroup_Tarrold(t *testing.T) {
-	f, err := Open("testdata/reference/tarrold.h5")
+	f, err := Open("testdata/hdf5_official/tarrold.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -172,7 +172,7 @@ func TestLoadObject_V0ObjectTypeUnknown(t *testing.T) {
 // TestLoadObject_GroupType_V0Nested tests loading nested groups in v0 format,
 // which exercises loadGroupWithCachedSymbolTable and CacheType=1 paths.
 func TestLoadObject_GroupType_V0Nested(t *testing.T) {
-	f, err := Open("testdata/reference/group_old.h5")
+	f, err := Open("testdata/hdf5_official/group_old.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -225,7 +225,7 @@ func TestLoadObject_DatasetAddress(t *testing.T) {
 // TestNamedDatatype_BadCompound opens the reference file bad_compound.h5
 // which contains a committed (named) datatype and verifies the accessors.
 func TestNamedDatatype_BadCompound(t *testing.T) {
-	f, err := Open("testdata/reference/bad_compound.h5")
+	f, err := Open("testdata/hdf5_official/bad_compound.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 
@@ -250,10 +250,10 @@ func TestNamedDatatype_BadCompound(t *testing.T) {
 // for NamedDatatype objects, verifying accessors work on all of them.
 func TestNamedDatatype_ScanAllReferenceFiles(t *testing.T) {
 	files := []string{
-		"testdata/reference/bad_compound.h5",
-		"testdata/reference/memleak_H5O_dtype_decode_helper_H5Odtype.h5",
-		"testdata/reference/tarrold.h5",
-		"testdata/reference/group_old.h5",
+		"testdata/hdf5_official/bad_compound.h5",
+		"testdata/hdf5_official/memleak_H5O_dtype_decode_helper_H5Odtype.h5",
+		"testdata/hdf5_official/tarrold.h5",
+		"testdata/hdf5_official/group_old.h5",
 	}
 
 	foundAny := false
@@ -368,22 +368,6 @@ func TestSoftLink_MultipleLinks(t *testing.T) {
 	require.NotEmpty(t, root.Children())
 }
 
-// TestSoftLink_ResolveSoftLink_NotImplemented verifies that resolveSoftLink
-// returns the expected "not implemented" error.
-func TestSoftLink_ResolveSoftLink_NotImplemented(t *testing.T) {
-	tmpDir := t.TempDir()
-	filename := filepath.Join(tmpDir, "test_resolve_soft.h5")
-
-	fw, err := CreateForWrite(filename, CreateTruncate)
-	require.NoError(t, err)
-	defer fw.Close()
-
-	// Call resolveSoftLink directly (it's unexported but accessible from same package)
-	_, err = fw.resolveSoftLink(0, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not yet implemented")
-}
-
 // ---------------------------------------------------------------------------
 // External link creation + round-trip tests
 // ---------------------------------------------------------------------------
@@ -462,22 +446,6 @@ func TestExternalLink_MultipleLinks(t *testing.T) {
 	root := f.Root()
 	require.NotNil(t, root)
 	require.NotEmpty(t, root.Children())
-}
-
-// TestExternalLink_ResolveExternalLink_NotImplemented verifies that
-// resolveExternalLink returns the expected "not implemented" error.
-func TestExternalLink_ResolveExternalLink_NotImplemented(t *testing.T) {
-	tmpDir := t.TempDir()
-	filename := filepath.Join(tmpDir, "test_resolve_ext.h5")
-
-	fw, err := CreateForWrite(filename, CreateTruncate)
-	require.NoError(t, err)
-	defer fw.Close()
-
-	// Call resolveExternalLink directly
-	_, _, err = fw.resolveExternalLink(0, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not yet implemented")
 }
 
 // ---------------------------------------------------------------------------
@@ -566,10 +534,10 @@ func TestTraditionalGroup_MultipleV0ReferenceFiles(t *testing.T) {
 		minObjects int // minimum total objects (groups + datasets + named dt)
 	}{
 		{"testdata/v0.h5", 2},
-		{"testdata/reference/group_old.h5", 2},
-		{"testdata/reference/tarrold.h5", 3},
-		{"testdata/reference/fill_old.h5", 1},
-		{"testdata/reference/tlayouto.h5", 1},
+		{"testdata/hdf5_official/group_old.h5", 2},
+		{"testdata/hdf5_official/tarrold.h5", 3},
+		{"testdata/hdf5_official/fill_old.h5", 1},
+		{"testdata/hdf5_official/tlayouto.h5", 1},
 	}
 
 	for _, tc := range v0Files {
@@ -596,7 +564,7 @@ func TestTraditionalGroup_MultipleV0ReferenceFiles(t *testing.T) {
 // Note: tarrold.h5 uses data layout v1 which may not fully support Info()/Read(),
 // but the objects should still be loaded correctly as *Dataset with valid names.
 func TestTraditionalGroup_TarroldDatasetAccessors(t *testing.T) {
-	f, err := Open("testdata/reference/tarrold.h5")
+	f, err := Open("testdata/hdf5_official/tarrold.h5")
 	require.NoError(t, err)
 	defer func() { _ = f.Close() }()
 

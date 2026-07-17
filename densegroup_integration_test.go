@@ -324,71 +324,6 @@ func TestDenseGroup_Integration_WithDatasetWrite(t *testing.T) {
 	t.Logf("Dense group with data-written datasets created successfully")
 }
 
-// TestGroupWithLinks_AutomaticTransition tests automatic compact→dense transition.
-func TestGroupWithLinks_AutomaticTransition(t *testing.T) {
-	tmpFile := createTempFile(t)
-	defer os.Remove(tmpFile)
-
-	fw, err := CreateForWrite(tmpFile, CreateTruncate)
-	if err != nil {
-		t.Fatalf("CreateForWrite failed: %v", err)
-	}
-	defer fw.Close()
-
-	// Create 20 datasets
-	for i := 0; i < 20; i++ {
-		name := fmt.Sprintf("/ds%d", i)
-		_, err := fw.CreateDataset(name, Uint16, []uint64{2})
-		if err != nil {
-			t.Fatalf("CreateDataset %d failed: %v", i, err)
-		}
-	}
-
-	// Create group with 20 links (should trigger dense format)
-	links := make(map[string]string)
-	for i := 0; i < 20; i++ {
-		linkName := fmt.Sprintf("link%d", i)
-		targetPath := fmt.Sprintf("/ds%d", i)
-		links[linkName] = targetPath
-	}
-
-	err = fw.CreateGroupWithLinks("/autogroup", links)
-	if err != nil {
-		t.Fatalf("CreateGroupWithLinks failed: %v", err)
-	}
-
-	if err := fw.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
-
-	t.Logf("Automatic transition test: %d links (should use dense format)", len(links))
-}
-
-// TestGroupWithLinks_SmallGroup tests compact format selection.
-func TestGroupWithLinks_SmallGroup(t *testing.T) {
-	tmpFile := createTempFile(t)
-	defer os.Remove(tmpFile)
-
-	fw, err := CreateForWrite(tmpFile, CreateTruncate)
-	if err != nil {
-		t.Fatalf("CreateForWrite failed: %v", err)
-	}
-	defer fw.Close()
-
-	// Create group with no links (should use symbol table)
-	err = fw.CreateGroupWithLinks("/emptygroup", map[string]string{})
-	if err != nil {
-		t.Fatalf("CreateGroupWithLinks failed: %v", err)
-	}
-
-	if err := fw.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
-
-	t.Logf("Small group test: 0 links (should use symbol table format)")
-}
-
-// TestDenseGroup_Integration_Threshold tests boundary at threshold.
 func TestDenseGroup_Integration_Threshold(t *testing.T) {
 	tmpFile := createTempFile(t)
 	defer os.Remove(tmpFile)
@@ -414,10 +349,10 @@ func TestDenseGroup_Integration_Threshold(t *testing.T) {
 		links9[fmt.Sprintf("link%d", i)] = fmt.Sprintf("/threshold_ds%d", i)
 	}
 
-	// CreateGroupWithLinks should automatically use dense format for 9 links
-	err = fw.CreateGroupWithLinks("/above_threshold", links9)
+	// 9 links (above threshold) use dense format
+	err = fw.CreateDenseGroup("/above_threshold", links9)
 	if err != nil {
-		t.Fatalf("CreateGroupWithLinks (9 links) failed: %v", err)
+		t.Fatalf("CreateDenseGroup (9 links) failed: %v", err)
 	}
 
 	// Also test explicit dense group creation

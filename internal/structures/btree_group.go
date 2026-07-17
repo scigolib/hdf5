@@ -34,7 +34,7 @@ func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) (
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(header, int64(address)); err != nil {
-		return nil, utils.WrapError("B-tree node header read failed", err)
+		return nil, fmt.Errorf("b-tree node header read failed: %w", err)
 	}
 
 	// Check signature.
@@ -81,7 +81,7 @@ func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) (
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	dataOffset := int64(address) + int64(headerSize)
 	if _, err := r.ReadAt(data[:dataSize+int(sb.OffsetSize)], dataOffset); err != nil {
-		return nil, utils.WrapError("B-tree data read failed", err)
+		return nil, fmt.Errorf("b-tree data read failed: %w", err)
 	}
 
 	// Collect all SNOD addresses (children)
@@ -162,7 +162,7 @@ func readAddress(data []byte, size int, endianness binary.ByteOrder) uint64 {
 // - offsetSize bytes: Right sibling address (0xFFFFFFFFFFFFFFFF for none)
 // - Then: 2K+1 keys (each offsetSize bytes) alternating with 2K child addresses
 //
-// For MVP (single node), we simplify:
+// Simplifications (single node):
 // - Only leaf nodes (level = 0)
 // - Only one child pointer (to symbol table node)
 // - Left/right siblings are undefined.
@@ -178,12 +178,12 @@ type BTreeNodeV1 struct {
 }
 
 // NewBTreeNodeV1 creates a new B-tree v1 node for group symbol tables.
-// For MVP, this is always a leaf node pointing to a single symbol table node.
+// This is always a leaf node pointing to a single symbol table node.
 func NewBTreeNodeV1(nodeType uint8, k uint16) *BTreeNodeV1 {
 	return &BTreeNodeV1{
 		Signature:     [4]byte{'T', 'R', 'E', 'E'},
 		NodeType:      nodeType,
-		NodeLevel:     0, // Leaf node for MVP
+		NodeLevel:     0, // Leaf node
 		EntriesUsed:   0,
 		LeftSibling:   0xFFFFFFFFFFFFFFFF,            // Undefined
 		RightSibling:  0xFFFFFFFFFFFFFFFF,            // Undefined
@@ -201,7 +201,7 @@ func (btn *BTreeNodeV1) AddKey(key, childAddr uint64) error {
 		return fmt.Errorf("b-tree node is full (%d/%d keys)", len(btn.Keys), maxKeys)
 	}
 
-	// For MVP: simple append (no balancing)
+	// Simple append (no balancing)
 	btn.Keys = append(btn.Keys, key)
 	btn.ChildPointers = append(btn.ChildPointers, childAddr)
 	btn.EntriesUsed++

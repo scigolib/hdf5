@@ -59,8 +59,8 @@ type IndirectBlockHeader struct {
 // This structure supports building indirect blocks during heap construction
 // and modification operations (RMW - Read-Modify-Write).
 //
-// MVP Implementation Notes:
-//   - Single-level indirect blocks (no multiply-indirect yet)
+// Implementation notes:
+//   - Single-level indirect blocks (no multiply-indirect)
 //   - Direct block children only
 //   - No compression/filtering
 //   - Simple allocation strategy (append-only)
@@ -115,7 +115,7 @@ func NewWritableIndirectBlock(heapHeaderAddr, blockOffset uint64, numRows, table
 			NumRows:         numRows,
 			TableWidth:      tableWidth,
 			MaxDirectRows:   maxDirectRows,
-			ChecksumEnabled: false, // MVP: no checksum
+			ChecksumEnabled: false, // No checksum
 		},
 		ChildAddresses: make([]uint64, numEntries),
 		loadedAddress:  0,
@@ -373,7 +373,7 @@ func ParseIndirectBlock(reader io.ReaderAt, address uint64, numRows, tableWidth 
 	}
 
 	// Checksum (4 bytes) - validate if present
-	// For MVP: skip validation, just note presence
+	// Skip validation, just note presence
 	iblock.Header.ChecksumPresent = (totalSize == headerSize+entriesSize+4)
 
 	return iblock, nil

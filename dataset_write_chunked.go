@@ -20,8 +20,7 @@ import (
 // 6. Write object header
 // 7. Add link to group
 //
-// For MVP (Phase 1):
-// - No compression (filter pipeline empty)
+// Limitations:
 // - B-tree v1 for chunk indexing
 // - Single-level B-tree (no splits).
 //
@@ -227,9 +226,8 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 // 4. Write B-tree to file
 // 5. Update object header with B-tree address
 //
-// For MVP (Phase 1):
+// Limitations:
 // - All chunks written at once (no partial writes)
-// - No compression
 // - Simple B-tree v1.
 //
 //nolint:gocognit,cyclop,gocyclo // Complex by nature: writing chunks + B-tree + updating layout + checksum recompute

@@ -354,15 +354,14 @@ func TestFractalHeapRoundTrip(t *testing.T) {
 		t.Fatalf("Failed to write heap: %v", err)
 	}
 
-	// Read back using the existing read implementation
-	readHeap, err := OpenFractalHeap(writer, headerAddr, sb.LengthSize, sb.OffsetSize, sb.Endianness)
-	if err != nil {
+	// Read back the header using the existing read implementation
+	if _, err := OpenFractalHeap(writer, headerAddr, sb.LengthSize, sb.OffsetSize, sb.Endianness); err != nil {
 		t.Fatalf("Failed to open heap: %v", err)
 	}
 
-	// Verify all objects can be read back
+	// Verify all objects can be read back from the writable heap
 	for name, heapID := range heapIDs {
-		data, err := readHeap.ReadObject(heapID)
+		data, err := writeHeap.GetObject(heapID)
 		if err != nil {
 			t.Errorf("Failed to read object %s: %v", name, err)
 			continue

@@ -99,34 +99,6 @@ func TestWriteCov_DatasetWriterClose(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestWriteCov_RebalancingEnabledDisabled tests toggle of rebalancing.
-func TestWriteCov_RebalancingEnabledDisabled(t *testing.T) {
-	tmpDir := t.TempDir()
-	filename := filepath.Join(tmpDir, "rebalance_toggle.h5")
-
-	fw, err := CreateForWrite(filename, CreateTruncate)
-	require.NoError(t, err)
-	defer func() { _ = fw.Close() }()
-
-	// Default: enabled.
-	require.True(t, fw.RebalancingEnabled())
-
-	// Disable.
-	fw.DisableRebalancing()
-	require.False(t, fw.RebalancingEnabled())
-
-	// Enable again.
-	fw.EnableRebalancing()
-	require.True(t, fw.RebalancingEnabled())
-}
-
-// TestWriteCov_RebalancingEnabled_NilConfig tests RebalancingEnabled when config is nil.
-func TestWriteCov_RebalancingEnabled_NilConfig(t *testing.T) {
-	// Create a FileWriter with nil config to test the nil branch.
-	fw := &FileWriter{config: nil}
-	require.True(t, fw.RebalancingEnabled(), "nil config should return true (default)")
-}
-
 // TestWriteCov_OpenForWrite_ModifyExisting tests OpenForWrite on existing file.
 func TestWriteCov_OpenForWrite_ModifyExisting(t *testing.T) {
 	filename := filepath.Join("tmp", "cov_openforwrite.h5")
@@ -285,19 +257,14 @@ func TestWriteCov_CreateCompoundDataset_ThreeFieldRoundTrip(t *testing.T) {
 	filename := filepath.Join(tmpDir, "compound_3field.h5")
 
 	// Define compound: struct { int32 x; int32 y; float64 z }
-	int32Type, err := core.CreateBasicDatatypeMessage(core.DatatypeFixed, 4)
-	require.NoError(t, err)
-	float64Type, err := core.CreateBasicDatatypeMessage(core.DatatypeFloat, 8)
-	require.NoError(t, err)
+	int32Type := testBasicType(core.DatatypeFixed, 4)
+	float64Type := testBasicType(core.DatatypeFloat, 8)
 
-	fields := []core.CompoundFieldDef{
-		{Name: "x", Offset: 0, Type: int32Type},
-		{Name: "y", Offset: 4, Type: int32Type},
-		{Name: "z", Offset: 8, Type: float64Type},
-	}
-
-	compoundType, err := core.CreateCompoundTypeFromFields(fields)
-	require.NoError(t, err)
+	compoundType := testCompoundType(t, []testCompoundField{
+		{name: "x", offset: 0, typ: int32Type},
+		{name: "y", offset: 4, typ: int32Type},
+		{name: "z", offset: 8, typ: float64Type},
+	})
 	require.Equal(t, uint32(16), compoundType.Size) // 4+4+8
 
 	fw, err := CreateForWrite(filename, CreateTruncate)
@@ -480,47 +447,6 @@ func TestWriteCov_ChunkedWithShuffleAndGZIP(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestWriteCov_CreateGroupWithLinks_EmptyLinks tests CreateGroupWithLinks with no links.
-func TestWriteCov_CreateGroupWithLinks_EmptyLinks(t *testing.T) {
-	tmpDir := t.TempDir()
-	filename := filepath.Join(tmpDir, "group_empty_links.h5")
-
-	fw, err := CreateForWrite(filename, CreateTruncate)
-	require.NoError(t, err)
-	defer func() { _ = fw.Close() }()
-
-	// Empty links => symbol table format, no error.
-	err = fw.CreateGroupWithLinks("/empty_group", map[string]string{})
-	require.NoError(t, err)
-
-	err = fw.Close()
-	require.NoError(t, err)
-
-	// Verify file readable.
-	f, err := Open(filename)
-	require.NoError(t, err)
-	_ = f.Close()
-}
-
-// TestWriteCov_CreateGroupWithLinks_SmallGroup tests CreateGroupWithLinks with few links.
-func TestWriteCov_CreateGroupWithLinks_SmallGroup(t *testing.T) {
-	tmpDir := t.TempDir()
-	filename := filepath.Join(tmpDir, "group_small_links.h5")
-
-	fw, err := CreateForWrite(filename, CreateTruncate)
-	require.NoError(t, err)
-	defer func() { _ = fw.Close() }()
-
-	// Creating a symbol table group with links is not supported in MVP.
-	// 1-8 links triggers symbol table path which returns error for non-empty links.
-	links := map[string]string{
-		"link1": "/ds1",
-	}
-	err = fw.CreateGroupWithLinks("/small_group", links)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "not yet supported")
-}
-
 // TestWriteCov_CreateSoftLink_ConsecutiveSlashes tests CreateSoftLink with consecutive slashes.
 func TestWriteCov_CreateSoftLink_ConsecutiveSlashes(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -662,97 +588,6 @@ func TestWriteCov_SuperblockV0_CreationVerify(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint8(0), f.SuperblockVersion())
 	_ = f.Close()
-}
-
-// TestWriteCov_CreateForWrite_InvalidOptionType tests invalid option type.
-func TestWriteCov_CreateForWrite_InvalidOptionType(t *testing.T) {
-	tmpDir := t.TempDir()
-	filename := filepath.Join(tmpDir, "invalid_option.h5")
-
-	_, err := CreateForWrite(filename, CreateTruncate, "invalid_option")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid option type")
-}
-
-// TestWriteCov_RebalanceAttributeBTree_NoDenseStorage tests RebalanceAttributeBTree
-// on a newly created dataset with no attributes (no dense storage, no object header cached).
-func TestWriteCov_RebalanceAttributeBTree_NoDenseStorage(t *testing.T) {
-	tmpDir := t.TempDir()
-	filename := filepath.Join(tmpDir, "rebalance_no_dense.h5")
-
-	fw, err := CreateForWrite(filename, CreateTruncate)
-	require.NoError(t, err)
-	defer func() { _ = fw.Close() }()
-
-	ds, err := fw.CreateDataset("/data", Float64, []uint64{10})
-	require.NoError(t, err)
-
-	// No attributes written, denseAttrInfo == nil, objectHeader == nil.
-	// Should be a no-op (returns nil).
-	err = ds.RebalanceAttributeBTree()
-	require.NoError(t, err)
-}
-
-// TestWriteCov_RebalanceAttributeBTree_DenseViaObjectHeader tests RebalanceAttributeBTree
-// on a dataset with 9+ attributes written in the same session (reads object header from file).
-func TestWriteCov_RebalanceAttributeBTree_DenseViaObjectHeader(t *testing.T) {
-	tmpDir := t.TempDir()
-	filename := filepath.Join(tmpDir, "rebalance_dense_oh.h5")
-
-	fw, err := CreateForWrite(filename, CreateTruncate)
-	require.NoError(t, err)
-	defer func() { _ = fw.Close() }()
-
-	ds, err := fw.CreateDataset("/data", Float64, []uint64{5})
-	require.NoError(t, err)
-
-	// Write 9 attributes to trigger dense storage.
-	for i := 0; i < 9; i++ {
-		err = ds.WriteAttribute(fmt.Sprintf("attr_%d", i), int32(i*100))
-		require.NoError(t, err)
-	}
-
-	// Rebalance triggers the "datasets created in this session" path
-	// (objectHeader == nil, denseAttrInfo == nil, reads OH from file).
-	err = ds.RebalanceAttributeBTree()
-	require.NoError(t, err)
-}
-
-// TestWriteCov_RebalanceAttributeBTree_ViaOpenDataset tests RebalanceAttributeBTree
-// on a dataset opened with OpenForWrite (has cached denseAttrInfo).
-func TestWriteCov_RebalanceAttributeBTree_ViaOpenDataset(t *testing.T) {
-	filename := filepath.Join("tmp", "cov_rebalance_open.h5")
-	_ = os.MkdirAll("tmp", 0o755)
-	defer func() { _ = os.Remove(filename) }()
-
-	// Phase 1: Create file with dense attributes.
-	fw, err := CreateForWrite(filename, CreateTruncate)
-	require.NoError(t, err)
-	ds, err := fw.CreateDataset("/data", Float64, []uint64{5})
-	require.NoError(t, err)
-
-	for i := 0; i < 9; i++ {
-		err = ds.WriteAttribute(fmt.Sprintf("attr_%d", i), int32(i))
-		require.NoError(t, err)
-	}
-	err = fw.Close()
-	require.NoError(t, err)
-
-	// Phase 2: Reopen and rebalance.
-	fw2, err := OpenForWrite(filename, OpenReadWrite)
-	require.NoError(t, err)
-
-	ds2, err := fw2.OpenDataset("/data")
-	require.NoError(t, err)
-
-	// This exercises the denseAttrInfo != nil path.
-	err = ds2.RebalanceAttributeBTree()
-	require.NoError(t, err)
-
-	_ = fw2.Close()
-	if fw2.file != nil {
-		_ = fw2.file.Close()
-	}
 }
 
 // TestWriteCov_DenseAttributeModify_Upsert tests modifying an existing dense attribute.
@@ -912,20 +747,6 @@ func TestWriteCov_ChunkedDataset_ValidationErrors(t *testing.T) {
 	require.Contains(t, err.Error(), "cannot exceed")
 }
 
-// TestWriteCov_RebalanceAllBTrees tests RebalanceAllBTrees (MVP no-op).
-func TestWriteCov_RebalanceAllBTrees(t *testing.T) {
-	tmpDir := t.TempDir()
-	filename := filepath.Join(tmpDir, "rebalance_all.h5")
-
-	fw, err := CreateForWrite(filename, CreateTruncate)
-	require.NoError(t, err)
-	defer func() { _ = fw.Close() }()
-
-	// MVP: returns nil (no-op).
-	err = fw.RebalanceAllBTrees()
-	require.NoError(t, err)
-}
-
 // TestWriteCov_ValidateLinkPath tests validateLinkPath edge cases.
 func TestWriteCov_ValidateLinkPath(t *testing.T) {
 	tests := []struct {
@@ -1078,35 +899,6 @@ func TestWriteCov_ExternalLinkValid(t *testing.T) {
 	f, err := Open(filename)
 	require.NoError(t, err)
 	_ = f.Close()
-}
-
-// TestWriteCov_DisableEnableRebalancing_WithDelete tests disable/enable around a delete.
-func TestWriteCov_DisableEnableRebalancing_WithDelete(t *testing.T) {
-	tmpDir := t.TempDir()
-	filename := filepath.Join(tmpDir, "rebalance_delete.h5")
-
-	fw, err := CreateForWrite(filename, CreateTruncate)
-	require.NoError(t, err)
-	defer func() { _ = fw.Close() }()
-
-	ds, err := fw.CreateDataset("/data", Float64, []uint64{5})
-	require.NoError(t, err)
-
-	// Write compact attributes.
-	for i := 0; i < 5; i++ {
-		err = ds.WriteAttribute(fmt.Sprintf("attr_%d", i), int32(i))
-		require.NoError(t, err)
-	}
-
-	// Disable rebalancing, delete attribute, re-enable.
-	fw.DisableRebalancing()
-	require.False(t, fw.RebalancingEnabled())
-
-	err = ds.DeleteAttribute("attr_2")
-	require.NoError(t, err)
-
-	fw.EnableRebalancing()
-	require.True(t, fw.RebalancingEnabled())
 }
 
 // TestWriteCov_OpenDataset_NotFound tests OpenDataset with non-existent path.
@@ -1432,13 +1224,9 @@ func TestWriteCov_CreateCompoundDataset_ChunkedError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = fw.Close() }()
 
-	int32Type, err := core.CreateBasicDatatypeMessage(core.DatatypeFixed, 4)
-	require.NoError(t, err)
-	fields := []core.CompoundFieldDef{
-		{Name: "id", Offset: 0, Type: int32Type},
-	}
-	compoundType, err := core.CreateCompoundTypeFromFields(fields)
-	require.NoError(t, err)
+	compoundType := testCompoundType(t, []testCompoundField{
+		{name: "id", offset: 0, typ: testBasicType(core.DatatypeFixed, 4)},
+	})
 
 	_, err = fw.CreateCompoundDataset("/data", compoundType, []uint64{10},
 		WithChunkDims([]uint64{5}))

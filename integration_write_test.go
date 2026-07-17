@@ -153,7 +153,7 @@ func TestFullWriteWorkflow_BinaryStructure(t *testing.T) {
 
 	// Must contain group structures (from CreateGroup)
 	require.Contains(t, string(data), "HEAP", "local heap for group names")
-	require.Contains(t, string(data), "TREE", "B-tree for group indexing")
+	require.Contains(t, string(data), "TREE", "b-tree for group indexing")
 	require.Contains(t, string(data), "SNOD", "symbol table node")
 
 	// File size should be reasonable (not huge)

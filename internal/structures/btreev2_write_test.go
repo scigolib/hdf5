@@ -88,6 +88,37 @@ func TestBTreeV2_InsertMultipleRecords(t *testing.T) {
 	}
 }
 
+// TestBTreeV2_DeleteRecord tests record deletion by name.
+func TestBTreeV2_DeleteRecord(t *testing.T) {
+	bt := NewWritableBTreeV2(4096)
+
+	names := []string{"alpha", "beta", "gamma"}
+	for i, name := range names {
+		err := bt.InsertRecord(name, uint64(0x1000*(i+1)))
+		require.NoError(t, err)
+	}
+	require.Equal(t, uint64(3), bt.header.TotalRecords)
+
+	// Delete existing record
+	err := bt.DeleteRecord("beta")
+	require.NoError(t, err)
+	require.Equal(t, 2, len(bt.records))
+	require.Equal(t, uint64(2), bt.header.TotalRecords)
+	require.Equal(t, uint16(2), bt.header.NumRecordsRoot)
+	require.False(t, bt.HasKey("beta"))
+	require.True(t, bt.HasKey("alpha"))
+	require.True(t, bt.HasKey("gamma"))
+
+	// Leaf records must stay in sync with the in-memory slice
+	require.Equal(t, bt.records, bt.leaf.Records)
+
+	// Delete nonexistent record
+	err = bt.DeleteRecord("missing")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "record not found")
+	require.Equal(t, uint64(2), bt.header.TotalRecords)
+}
+
 // TestBTreeV2_WriteToFile tests full write workflow.
 func TestBTreeV2_WriteToFile(t *testing.T) {
 	// Setup test environment

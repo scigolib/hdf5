@@ -56,7 +56,7 @@ func TestBTreeV2LoadFromFile(t *testing.T) {
 		require.NoError(t, err)
 		require.Greater(t, headerAddr, uint64(0))
 
-		t.Logf("B-tree written at header address 0x%X", headerAddr)
+		t.Logf("b-tree written at header address 0x%X", headerAddr)
 		t.Logf("Root (leaf) address: 0x%X", bt.header.RootNodeAddr)
 
 		// Phase 2: Load from buffer and append more records

@@ -24,7 +24,7 @@ func TestOpenForWrite_CreateGroup_Issue50(t *testing.T) {
 
 			// Step 1: Create a file with one dataset.
 			func() {
-				opts := []interface{}{}
+				opts := []WriteOption{}
 				if sbVersion == 0 {
 					opts = append(opts, WithSuperblockVersion(SuperblockV0))
 				}
@@ -78,7 +78,7 @@ func TestOpenForWrite_CreateDataset(t *testing.T) {
 			path := filepath.Join(dir, "new_ds.h5")
 
 			func() {
-				opts := []interface{}{}
+				opts := []WriteOption{}
 				if sbVersion == 0 {
 					opts = append(opts, WithSuperblockVersion(SuperblockV0))
 				}

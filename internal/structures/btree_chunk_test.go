@@ -58,7 +58,7 @@ func TestChunkBTreeWriter_1D(t *testing.T) {
 
 	// Add 10 chunks (scaled indices 0..9)
 	for i := uint64(0); i < 10; i++ {
-		err := writer.AddChunk([]uint64{i}, 1000+i*100)
+		err := writer.AddChunkWithSize([]uint64{i}, 1000+i*100, 0)
 		require.NoError(t, err)
 	}
 
@@ -149,7 +149,7 @@ func TestChunkBTreeWriter_2D(t *testing.T) {
 	}
 
 	for _, chunk := range chunks {
-		err := writer.AddChunk(chunk.coord, chunk.addr)
+		err := writer.AddChunkWithSize(chunk.coord, chunk.addr, 0)
 		require.NoError(t, err)
 	}
 
@@ -227,7 +227,7 @@ func TestChunkBTreeWriter_3D(t *testing.T) {
 	}
 
 	for _, chunk := range chunks {
-		err := writer.AddChunk(chunk.coord, chunk.addr)
+		err := writer.AddChunkWithSize(chunk.coord, chunk.addr, 0)
 		require.NoError(t, err)
 	}
 
@@ -335,7 +335,7 @@ func TestChunkBTreeWriter_Sorting(t *testing.T) {
 	}
 
 	for i, coord := range coords {
-		err := writer.AddChunk(coord, uint64(1000+i*100))
+		err := writer.AddChunkWithSize(coord, uint64(1000+i*100), 0)
 		require.NoError(t, err)
 	}
 
@@ -389,7 +389,7 @@ func TestChunkBTreeWriter_EdgeChunks(t *testing.T) {
 	}
 
 	for _, chunk := range chunks {
-		err := writer.AddChunk(chunk.coord, chunk.addr)
+		err := writer.AddChunkWithSize(chunk.coord, chunk.addr, 0)
 		require.NoError(t, err)
 	}
 
@@ -431,7 +431,7 @@ func TestChunkBTreeWriter_SingleChunk(t *testing.T) {
 	elemSize := uint32(4)
 	writer := NewChunkBTreeWriter(1, chunkDims, elemSize)
 
-	err := writer.AddChunk([]uint64{0}, 5000)
+	err := writer.AddChunkWithSize([]uint64{0}, 5000, 0)
 	require.NoError(t, err)
 
 	mockWriter := newMockChunkWriter()
@@ -492,7 +492,7 @@ func TestChunkBTreeWriter_ErrorCases(t *testing.T) {
 	t.Run("dimension mismatch", func(t *testing.T) {
 		writer := NewChunkBTreeWriter(2, []uint64{10, 20}, 4)
 
-		err := writer.AddChunk([]uint64{0, 0, 0}, 1000) // 3D coord for 2D writer
+		err := writer.AddChunkWithSize([]uint64{0, 0, 0}, 1000, 0) // 3D coord for 2D writer
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "dimensionality mismatch")
 	})
@@ -507,7 +507,7 @@ func TestChunkBTreeWriter_MultiLevel_65Chunks(t *testing.T) {
 
 	// Add 65 chunks (scaled indices 0..64). This exceeds the 64-entry single leaf limit.
 	for i := uint64(0); i < 65; i++ {
-		err := writer.AddChunk([]uint64{i}, 1000+i*80)
+		err := writer.AddChunkWithSize([]uint64{i}, 1000+i*80, 0)
 		require.NoError(t, err)
 	}
 
@@ -577,7 +577,7 @@ func TestChunkBTreeWriter_MultiLevel_100Chunks(t *testing.T) {
 	writer := NewChunkBTreeWriter(1, chunkDims, elemSize)
 
 	for i := uint64(0); i < 100; i++ {
-		err := writer.AddChunk([]uint64{i}, 2000+i*40)
+		err := writer.AddChunkWithSize([]uint64{i}, 2000+i*40, 0)
 		require.NoError(t, err)
 	}
 
@@ -692,7 +692,7 @@ func TestChunkBTreeWriter_MultiLevel_2D(t *testing.T) {
 	// Create a 10x10 grid of chunks = 100 total (exceeds 64 single-leaf limit).
 	for i := uint64(0); i < 10; i++ {
 		for j := uint64(0); j < 10; j++ {
-			err := writer.AddChunk([]uint64{i, j}, 5000+(i*10+j)*400)
+			err := writer.AddChunkWithSize([]uint64{i, j}, 5000+(i*10+j)*400, 0)
 			require.NoError(t, err)
 		}
 	}
@@ -789,7 +789,7 @@ func (f *failingWriter) WriteAtAddress(_ []byte, _ uint64) error {
 
 func TestChunkBTreeWriter_SingleLeaf_AllocError(t *testing.T) {
 	writer := NewChunkBTreeWriter(1, []uint64{10}, 4)
-	_ = writer.AddChunk([]uint64{0}, 1000)
+	_ = writer.AddChunkWithSize([]uint64{0}, 1000, 0)
 
 	alloc := &failingAllocator{remaining: 0, nextAddr: 5000}
 	_, err := writer.WriteToFile(&failingWriter{}, alloc)
@@ -799,7 +799,7 @@ func TestChunkBTreeWriter_SingleLeaf_AllocError(t *testing.T) {
 
 func TestChunkBTreeWriter_SingleLeaf_WriteError(t *testing.T) {
 	writer := NewChunkBTreeWriter(1, []uint64{10}, 4)
-	_ = writer.AddChunk([]uint64{0}, 1000)
+	_ = writer.AddChunkWithSize([]uint64{0}, 1000, 0)
 
 	alloc := newMockChunkAllocator(5000)
 	_, err := writer.WriteToFile(&failingWriter{}, alloc)
@@ -810,7 +810,7 @@ func TestChunkBTreeWriter_SingleLeaf_WriteError(t *testing.T) {
 func TestChunkBTreeWriter_MultiLevel_AllocError(t *testing.T) {
 	writer := NewChunkBTreeWriter(1, []uint64{10}, 4)
 	for i := uint64(0); i < 65; i++ {
-		_ = writer.AddChunk([]uint64{i}, 1000+i)
+		_ = writer.AddChunkWithSize([]uint64{i}, 1000+i, 0)
 	}
 
 	// Fail on first leaf allocation
@@ -823,7 +823,7 @@ func TestChunkBTreeWriter_MultiLevel_AllocError(t *testing.T) {
 func TestChunkBTreeWriter_MultiLevel_WriteError(t *testing.T) {
 	writer := NewChunkBTreeWriter(1, []uint64{10}, 4)
 	for i := uint64(0); i < 65; i++ {
-		_ = writer.AddChunk([]uint64{i}, 1000+i)
+		_ = writer.AddChunkWithSize([]uint64{i}, 1000+i, 0)
 	}
 
 	// Allocations succeed, writes fail
@@ -836,7 +836,7 @@ func TestChunkBTreeWriter_MultiLevel_WriteError(t *testing.T) {
 func TestChunkBTreeWriter_MultiLevel_InternalAllocError(t *testing.T) {
 	writer := NewChunkBTreeWriter(1, []uint64{10}, 4)
 	for i := uint64(0); i < 65; i++ {
-		_ = writer.AddChunk([]uint64{i}, 1000+i)
+		_ = writer.AddChunkWithSize([]uint64{i}, 1000+i, 0)
 	}
 
 	// 2 leaf allocs succeed, internal alloc fails
@@ -849,7 +849,7 @@ func TestChunkBTreeWriter_MultiLevel_InternalAllocError(t *testing.T) {
 func TestChunkBTreeWriter_MultiLevel_InternalWriteError(t *testing.T) {
 	writer := NewChunkBTreeWriter(1, []uint64{10}, 4)
 	for i := uint64(0); i < 65; i++ {
-		_ = writer.AddChunk([]uint64{i}, 1000+i)
+		_ = writer.AddChunkWithSize([]uint64{i}, 1000+i, 0)
 	}
 
 	// Writer fails after leaf writes succeed (on internal node write).
@@ -881,7 +881,7 @@ func TestChunkBTreeWriter_MultiLevel_InternalSiblingLinks(t *testing.T) {
 	// This exercises sibling links on the internal level (level 1).
 	writer := NewChunkBTreeWriter(1, []uint64{1}, 4)
 	for i := uint64(0); i < 4160; i++ {
-		require.NoError(t, writer.AddChunk([]uint64{i}, 10000+i))
+		require.NoError(t, writer.AddChunkWithSize([]uint64{i}, 10000+i, 0))
 	}
 
 	mockWriter := newMockChunkWriter()

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -37,13 +38,13 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(headerBuf, int64(headerAddr)); err != nil {
-		return nil, "", 0, utils.WrapError("v1 header read failed", err)
+		return nil, "", 0, fmt.Errorf("v1 header read failed: %w", err)
 	}
 
 	// Parse header fields.
 	version := headerBuf[0]
 	if version != 1 {
-		return nil, "", 0, utils.WrapError("invalid v1 header version", nil)
+		return nil, "", 0, errors.New("invalid v1 header version")
 	}
 
 	numMessages := sb.Endianness.Uint16(headerBuf[2:4])
@@ -78,7 +79,7 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 		// Parse continuation block
 		contMessages, contName, err := parseV1ContinuationBlock(r, cont.Address, cont.Size, sb)
 		if err != nil {
-			return nil, "", 0, utils.WrapError("continuation block parse failed", err)
+			return nil, "", 0, fmt.Errorf("continuation block parse failed: %w", err)
 		}
 
 		// Mark and add messages from continuation.
@@ -215,7 +216,7 @@ func parseV1MessagesInBlock(r io.ReaderAt, start, end uint64, maxMessages uint16
 			if err == io.EOF {
 				break // End of block reached
 			}
-			return nil, "", utils.WrapError("message header read failed", err)
+			return nil, "", fmt.Errorf("message header read failed: %w", err)
 		}
 
 		msgType := MessageType(sb.Endianness.Uint16(msgHeaderBuf[0:2]))
@@ -242,7 +243,7 @@ func parseV1MessagesInBlock(r io.ReaderAt, start, end uint64, maxMessages uint16
 			if err == io.EOF {
 				break
 			}
-			return nil, "", utils.WrapError("message data read failed", err)
+			return nil, "", fmt.Errorf("message data read failed: %w", err)
 		}
 
 		// Extract name if this is a name message.

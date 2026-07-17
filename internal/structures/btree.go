@@ -3,6 +3,7 @@ package structures
 
 import (
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/scigolib/hdf5/internal/core"
@@ -34,7 +35,7 @@ func ReadBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) ([]BTr
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(buf, int64(address)); err != nil {
-		return nil, utils.WrapError("B-tree node read failed", err)
+		return nil, fmt.Errorf("b-tree node read failed: %w", err)
 	}
 
 	if string(buf[0:4]) != "BTRE" {

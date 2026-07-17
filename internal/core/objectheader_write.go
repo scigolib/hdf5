@@ -24,7 +24,7 @@ type MessageWriter struct {
 }
 
 // NewMinimalRootGroupHeader creates a minimal object header v2 for an empty root group.
-// This is suitable for MVP file creation - just enough to make a valid HDF5 file.
+// Just enough to make a valid HDF5 file.
 //
 // The root group header contains:
 //   - Object Header v2 with minimal flags (no times, no attribute phase change)
@@ -41,7 +41,7 @@ func NewMinimalRootGroupHeader() *ObjectHeaderWriter {
 	//   Heap Address (8 bytes): 0xFFFFFFFFFFFFFFFF (UNDEF for compact)
 	//   B-tree Address (8 bytes): 0xFFFFFFFFFFFFFFFF (UNDEF for compact)
 	//
-	// For MVP empty group: Version=0, Flags=0, no optional fields, two UNDEF addresses
+	// Empty group: Version=0, Flags=0, no optional fields, two UNDEF addresses
 	linkInfoData := make([]byte, 18) // 1+1+8+8 = 18 bytes
 	linkInfoData[0] = 0              // Version 0
 	linkInfoData[1] = 0              // Flags: compact storage, no tracking
@@ -235,7 +235,7 @@ func writeChunkSize(buf []byte, chunkSize, width uint64) {
 //   - Size of Chunk 0: (1, 2, 4, or 8 bytes based on flags bits 0-1)
 //   - Messages: variable size
 //
-// For MVP v2:
+// V2 encoding choices:
 //   - No timestamp fields (flags bit 5 = 0)
 //   - No attribute phase change (flags bit 4 = 0)
 //   - Chunk size in 1 byte (flags bits 0-1 = 0)
@@ -311,7 +311,7 @@ func (ohw *ObjectHeaderWriter) writeToV1(w io.WriterAt, address uint64) (uint64,
 		offset += 2
 
 		// Message flags (1 byte)
-		buf[offset] = 0 // For MVP: no flags
+		buf[offset] = 0 // No flags
 		offset++
 
 		// Reserved (3 bytes) - already zero from make()
@@ -344,7 +344,6 @@ func (ohw *ObjectHeaderWriter) writeToV1(w io.WriterAt, address uint64) (uint64,
 }
 
 // writeToV2 writes an object header v2 to the writer.
-// V2 format (current MVP implementation).
 func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64, error) {
 	// Calculate message data size
 	var messageDataSize uint64
@@ -413,7 +412,7 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 		offset += 2
 
 		// Message flags (1 byte)
-		// For MVP: flags = 0 (not shared, not constant, not shareable)
+		// flags = 0 (not shared, not constant, not shareable)
 		buf[offset] = 0
 		offset++
 
@@ -478,9 +477,9 @@ func AddMessageToObjectHeader(oh *ObjectHeader, msgType MessageType, msgData []b
 // WriteObjectHeader writes an object header back to disk at a given address.
 // This is used when modifying object headers (e.g., adding attributes).
 //
-// For MVP (v0.11.1-beta):
+// Limitations:
 //   - Only object header v2 supported
-//   - No continuation blocks
+//   - Continuation blocks are not written here (OCHK chunks are written separately)
 //   - Overwrites existing header at the same address
 //
 // Parameters:
@@ -668,45 +667,4 @@ func ContinuationChunkSizeV2(messages []MessageWriter) uint64 {
 		messageDataSize += 1 + 2 + 1 + uint64(len(msg.Data))
 	}
 	return 4 + messageDataSize + 4
-}
-
-// RewriteObjectHeaderV2 rewrites an object header v2 with updated messages.
-// This handles the case where we need to modify an existing object header
-// by reading it, modifying it, and writing it back.
-//
-// Parameters:
-//   - w: Writer with WriteAt capability
-//   - r: Reader for reading current header
-//   - addr: File address of object header
-//   - sb: Superblock
-//   - newMessages: Additional messages to add
-//
-// Returns:
-//   - error: Non-nil if operation fails
-func RewriteObjectHeaderV2(w io.WriterAt, r io.ReaderAt, addr uint64, sb *Superblock, newMessages []*HeaderMessage) error {
-	// Read existing object header
-	oh, err := ReadObjectHeader(r, addr, sb)
-	if err != nil {
-		return fmt.Errorf("failed to read object header: %w", err)
-	}
-
-	if oh.Version != 2 {
-		return fmt.Errorf("only v2 headers supported for rewrite, got version %d", oh.Version)
-	}
-
-	// Add new messages
-	for _, msg := range newMessages {
-		err = AddMessageToObjectHeader(oh, msg.Type, msg.Data)
-		if err != nil {
-			return fmt.Errorf("failed to add message: %w", err)
-		}
-	}
-
-	// Write back to same location
-	err = WriteObjectHeader(w, addr, oh, sb)
-	if err != nil {
-		return fmt.Errorf("failed to write object header: %w", err)
-	}
-
-	return nil
 }

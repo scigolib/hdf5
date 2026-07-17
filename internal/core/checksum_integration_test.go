@@ -153,8 +153,8 @@ func TestJenkinsChecksum_RoundTrip(t *testing.T) {
 func TestJenkinsChecksum_KnownFile(t *testing.T) {
 	// Try to find a V2 superblock file in testdata.
 	testFiles := []string{
-		filepath.Join("..", "..", "testdata", "c-library-corpus", "basic", "aggr.h5"),
-		filepath.Join("..", "..", "testdata", "c-library-corpus", "basic", "filespace_1_8.h5"),
+		filepath.Join("..", "..", "testdata", "hdf5_official", "aggr.h5"),
+		filepath.Join("..", "..", "testdata", "hdf5_official", "filespace_1_8.h5"),
 	}
 
 	var validFile string

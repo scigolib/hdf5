@@ -158,9 +158,8 @@ func OpenFileWriter(filename string, mode CreateMode, initialOffset uint64) (*Fi
 // Returns the address where the block was allocated.
 // The space is not zeroed - caller must write data to the allocated block.
 //
-// For MVP:
-// - Allocation always occurs at end of file
-// - No alignment requirements
+// Allocation reuses freed blocks when possible (best-fit), otherwise
+// occurs at end of file. No alignment requirements.
 //
 // Example:
 //

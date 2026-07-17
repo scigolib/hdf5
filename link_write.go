@@ -43,11 +43,10 @@ import (
 //	}
 //	// Now /data/temperature and /data/temp_link point to the same dataset
 //
-// Limitations (MVP v0.11.5-beta):
+// Limitations:
 //   - Target must exist before creating link
 //   - Parent group must exist before creating link
 //   - Reference count stored in object header (v1) or RefCount message (v2)
-//   - No link deletion support yet (DeleteLink not implemented)
 //   - No circular link detection
 //
 // Reference: H5L.c - H5Lcreate_hard().
@@ -246,8 +245,8 @@ func ensureRefCountMessage(fw *FileWriter, oh *core.ObjectHeader) error {
 //	// This is allowed - target can be created later
 //
 // Limitations:
-//   - Symbol table format only (dense groups not yet supported)
-//   - No soft link resolution yet (reading soft links not implemented)
+//   - Symbol table format only (links cannot be added to dense-format groups)
+//   - Soft links are not resolved on read
 //   - No circular link detection
 //
 // HDF5 Spec: Section IV.A.2.f "Link Message" - Type 1 (Soft Link)
@@ -300,31 +299,6 @@ func validateSoftLinkTargetPath(path string) error {
 	return nil
 }
 
-// resolveSoftLink follows a soft link and returns the target object address.
-//
-// **STATUS: NOT YET IMPLEMENTED (MVP v0.11.5-beta)** - Planned for v0.12.0
-//
-// Planned functionality:
-//   - Chain resolution (A→B→C): Follows multiple soft links
-//   - Cycle detection: Detects circular references (A→B→A)
-//   - Depth limiting: Maximum 32 resolution levels
-//   - Dangling links: Returns error if target not found
-//
-// Parameters:
-//   - linkAddr: Address of the soft link message
-//   - visitedPaths: Set of visited paths for cycle detection (pass nil to start)
-//
-// Returns:
-//   - uint64: Address of target object
-//   - error: if target not found, cycle detected, or max depth exceeded
-//
-// Internal use only - will be called when accessing soft link in v0.12.0.
-func (fw *FileWriter) resolveSoftLink(linkAddr uint64, visitedPaths map[string]bool) (uint64, error) {
-	_ = linkAddr
-	_ = visitedPaths
-	return 0, fmt.Errorf("soft link resolution not yet implemented (planned for v0.12.0)")
-}
-
 // CreateExternalLink creates a link to an object in another HDF5 file.
 // The link stores the external file path and object path within that file.
 // Both files must exist when the external link is accessed (lazy resolution).
@@ -354,8 +328,8 @@ func (fw *FileWriter) resolveSoftLink(linkAddr uint64, visitedPaths map[string]b
 //   - File path stored as-is (absolute or relative)
 //
 // Limitations:
-//   - Symbol table format only (dense groups not yet supported)
-//   - No external link resolution yet (reading external links not implemented)
+//   - Symbol table format only (links cannot be added to dense-format groups)
+//   - External links are not resolved on read
 //   - No file caching or performance optimization
 //
 // HDF5 Spec: Section IV.A.2.f "Link Message" - Type 64 (External Link)
@@ -488,38 +462,10 @@ func validateExternalFileName(fileName string) error {
 		return fmt.Errorf("file name cannot contain '..' (path traversal)")
 	}
 
-	// Check extension (warning-level check, not strict)
-	// In full v0.12.0 implementation, we would log a warning here if extension is not .h5 or .hdf5
-	// For now, we accept any extension to support custom file formats
+	// Extension is not checked strictly: any extension is accepted
+	// to support custom file formats.
 
 	return nil
-}
-
-// resolveExternalLink resolves an external link and returns the target object.
-//
-// **STATUS: NOT YET IMPLEMENTED (MVP v0.11.5-beta)** - Planned for v0.12.0
-//
-// Planned functionality:
-//   - Open external HDF5 file (cache for performance)
-//   - Resolve objectPath within external file
-//   - Handle file not found, object not found errors
-//   - Support absolute and relative file paths
-//   - Prevent circular external references
-//
-// Parameters:
-//   - linkAddr: Address of the external link message
-//   - visitedFiles: Set of visited files for cycle detection (pass nil to start)
-//
-// Returns:
-//   - *File: Opened external file (caller must cache/close)
-//   - uint64: Address of target object in external file
-//   - error: if file/object not found or cycle detected
-//
-// Internal use only - will be called when accessing external link in v0.12.0.
-func (fw *FileWriter) resolveExternalLink(linkAddr uint64, visitedFiles map[string]bool) (*File, uint64, error) {
-	_ = linkAddr
-	_ = visitedFiles
-	return nil, 0, fmt.Errorf("external link resolution not yet implemented in MVP v0.11.5-beta (planned for v0.12.0)")
 }
 
 // Note: The following methods are already implemented in group_write.go and are reused here:

@@ -31,7 +31,7 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(header, int64(address)); err != nil {
-		return nil, utils.WrapError("SNOD header read failed", err)
+		return nil, fmt.Errorf("SNOD header read failed: %w", err)
 	}
 
 	// Check signature.
@@ -82,7 +82,7 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	entryOffset := int64(address) + 8 // After header.
 	if _, err := r.ReadAt(data, entryOffset); err != nil {
-		return nil, utils.WrapError("SNOD entries read failed", err)
+		return nil, fmt.Errorf("SNOD entries read failed: %w", err)
 	}
 
 	// Parse entries.

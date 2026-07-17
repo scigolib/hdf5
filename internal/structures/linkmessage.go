@@ -215,15 +215,3 @@ func (lm *LinkMessage) IsHardLink() bool {
 func (lm *LinkMessage) IsSoftLink() bool {
 	return lm.Type == LinkTypeSoft
 }
-
-// String returns a string representation of the link.
-func (lm *LinkMessage) String() string {
-	switch lm.Type {
-	case LinkTypeHard:
-		return fmt.Sprintf("Hard link '%s' -> address 0x%x", lm.Name, lm.ObjectAddress)
-	case LinkTypeSoft:
-		return fmt.Sprintf("Soft link '%s' -> '%s'", lm.Name, lm.TargetPath)
-	default:
-		return fmt.Sprintf("Link '%s' (type %d)", lm.Name, lm.Type)
-	}
-}

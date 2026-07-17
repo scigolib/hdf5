@@ -63,7 +63,7 @@ func NewDenseGroupWriter(name string) *DenseGroupWriter {
 		btree:       structures.NewWritableBTreeV2(4096),           // 4KB node
 		linkInfo: &core.LinkInfoMessage{
 			Version: 0,
-			Flags:   0, // No creation order tracking for MVP
+			Flags:   0, // No creation order tracking
 		},
 		links: make([]denseLink, 0),
 	}
@@ -71,7 +71,7 @@ func NewDenseGroupWriter(name string) *DenseGroupWriter {
 
 // AddLink adds hard link to dense group.
 //
-// For MVP: Only hard links supported (targetAddr points to object header)
+// Only hard links are supported (targetAddr points to object header).
 // Future: Soft links, external links
 //
 // Parameters:
@@ -172,7 +172,7 @@ func (dgw *DenseGroupWriter) WriteToFile(fw *FileWriter, allocator *Allocator, s
 	// Step 4: Create Link Info Message
 	dgw.linkInfo.FractalHeapAddress = heapAddr
 	dgw.linkInfo.NameBTreeAddress = btreeAddr
-	dgw.linkInfo.CreationOrderBTreeAddress = 0 // No creation order tracking in MVP
+	dgw.linkInfo.CreationOrderBTreeAddress = 0 // No creation order tracking
 
 	// Step 5: Create object header with Link Info Message
 	ohAddr, err := dgw.createObjectHeader(fw, allocator, sb)
@@ -188,7 +188,7 @@ func (dgw *DenseGroupWriter) WriteToFile(fw *FileWriter, allocator *Allocator, s
 // Format (from H5Olinfo.c - link message):
 //   - Version: 1 (1 byte)
 //   - Type: 0 = Hard Link (1 byte)
-//   - Creation Order Present: 0 (1 byte, bit flags) - MVP: no creation order
+//   - Creation Order Present: 0 (1 byte, bit flags) - no creation order
 //   - Link Name Encoding: 0 = ASCII/UTF-8 (1 byte)
 //   - Link Name Length: variable (compact uint64 encoding)
 //   - Link Name: UTF-8 bytes
@@ -202,7 +202,7 @@ func (dgw *DenseGroupWriter) createLinkMessage(link denseLink, sb *core.Superblo
 
 	// Calculate message size
 	// Version (1) + Type (1) + Flags (1) + Encoding (1) + Name Length (variable) + Name + Address
-	// For MVP: name length encoded as compact uint64 (1-8 bytes based on value)
+	// Name length encoded as compact uint64 (1-8 bytes based on value)
 	nameLenSize := compactUint64Size(nameLen)
 	messageSize := 4 + nameLenSize + len(nameBytes) + int(sb.OffsetSize)
 
@@ -222,7 +222,7 @@ func (dgw *DenseGroupWriter) createLinkMessage(link denseLink, sb *core.Superblo
 	// Bit 1: link type field present (0 = no, type is in separate field)
 	// Bit 2: link name character set field present (1 = yes)
 	// Bit 3: link name is stored as a creation order (0 = no)
-	// For MVP: only bit 2 set (character set field present)
+	// Only bit 2 set (character set field present)
 	buf[offset] = 0x04 // Character set field present
 	offset++
 
@@ -249,7 +249,7 @@ func (dgw *DenseGroupWriter) createLinkMessage(link denseLink, sb *core.Superblo
 // Messages to include:
 //   - Link Info Message (type 0x0002)
 //   - Dataspace Message (type 0x0001) - scalar for groups
-//   - Datatype Message (type 0x0003) - opaque for groups (optional, skipped in MVP)
+//   - Datatype Message (type 0x0003) - opaque for groups (optional, skipped)
 //
 // Reference: H5Oobj.c - H5O_obj_create().
 func (dgw *DenseGroupWriter) createObjectHeader(fw *FileWriter, allocator *Allocator, sb *core.Superblock) (uint64, error) {

@@ -578,11 +578,10 @@ func TestLinkInfoMessageFlags(t *testing.T) {
 // TestLinkInfoMessageAddressHelpers tests address helper methods.
 func TestLinkInfoMessageAddressHelpers(t *testing.T) {
 	tests := []struct {
-		name                      string
-		msg                       *LinkInfoMessage
-		wantHasFractalHeap        bool
-		wantHasNameBTree          bool
-		wantHasCreationOrderBTree bool
+		name               string
+		msg                *LinkInfoMessage
+		wantHasFractalHeap bool
+		wantHasNameBTree   bool
 	}{
 		{
 			name: "no addresses",
@@ -591,9 +590,8 @@ func TestLinkInfoMessageAddressHelpers(t *testing.T) {
 				NameBTreeAddress:          0,
 				CreationOrderBTreeAddress: 0,
 			},
-			wantHasFractalHeap:        false,
-			wantHasNameBTree:          false,
-			wantHasCreationOrderBTree: false,
+			wantHasFractalHeap: false,
+			wantHasNameBTree:   false,
 		},
 		{
 			name: "fractal heap only",
@@ -602,9 +600,8 @@ func TestLinkInfoMessageAddressHelpers(t *testing.T) {
 				NameBTreeAddress:          0,
 				CreationOrderBTreeAddress: 0,
 			},
-			wantHasFractalHeap:        true,
-			wantHasNameBTree:          false,
-			wantHasCreationOrderBTree: false,
+			wantHasFractalHeap: true,
+			wantHasNameBTree:   false,
 		},
 		{
 			name: "all addresses",
@@ -613,9 +610,8 @@ func TestLinkInfoMessageAddressHelpers(t *testing.T) {
 				NameBTreeAddress:          0x2000,
 				CreationOrderBTreeAddress: 0x3000,
 			},
-			wantHasFractalHeap:        true,
-			wantHasNameBTree:          true,
-			wantHasCreationOrderBTree: true,
+			wantHasFractalHeap: true,
+			wantHasNameBTree:   true,
 		},
 	}
 
@@ -623,7 +619,6 @@ func TestLinkInfoMessageAddressHelpers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.wantHasFractalHeap, tt.msg.HasFractalHeap())
 			assert.Equal(t, tt.wantHasNameBTree, tt.msg.HasNameBTree())
-			assert.Equal(t, tt.wantHasCreationOrderBTree, tt.msg.HasCreationOrderBTree())
 		})
 	}
 }

@@ -455,3 +455,87 @@ func createMockSuperblockV3(t *testing.T) []byte {
 
 	return data
 }
+
+// TestReadSuperblock_ParseErrors covers superblock parse-error branches.
+//
+// Note: the readValue error branches inside version-specific field parsing
+// (root group / b-tree / heap / base / extension addresses) are unreachable
+// through ReadSuperblock: offsets are fixed constants within the 128-byte
+// buffer and sizes are validated to 1/2/4/8 beforehand.
+func TestReadSuperblock_ParseErrors(t *testing.T) {
+	validSig := []byte{0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n'}
+
+	tests := []struct {
+		name    string
+		reader  func() *bytes.Reader
+		wantErr string
+	}{
+		{
+			name: "file too small",
+			reader: func() *bytes.Reader {
+				data := make([]byte, 40)
+				copy(data, validSig)
+				return bytes.NewReader(data)
+			},
+			wantErr: "file too small",
+		},
+		{
+			name: "invalid signature",
+			reader: func() *bytes.Reader {
+				return bytes.NewReader(make([]byte, 128))
+			},
+			wantErr: "invalid HDF5 signature",
+		},
+		{
+			name: "unsupported version",
+			reader: func() *bytes.Reader {
+				data := make([]byte, 128)
+				copy(data, validSig)
+				data[8] = 1 // Version 1 is not supported
+				return bytes.NewReader(data)
+			},
+			wantErr: "unsupported superblock version",
+		},
+		{
+			name: "invalid offset size code",
+			reader: func() *bytes.Reader {
+				data := make([]byte, 128)
+				copy(data, validSig)
+				data[8] = 2     // Version 2
+				data[9] = 0     // Little-endian
+				data[10] = 0x0F // Packed codes: offset code 15 is invalid
+				return bytes.NewReader(data)
+			},
+			wantErr: "invalid offset size code",
+		},
+		{
+			name: "invalid length size code",
+			reader: func() *bytes.Reader {
+				data := make([]byte, 128)
+				copy(data, validSig)
+				data[8] = 2     // Version 2
+				data[9] = 0     // Little-endian
+				data[10] = 0xF3 // Offset code 3 (8 bytes), length code 15 invalid
+				return bytes.NewReader(data)
+			},
+			wantErr: "invalid length size code",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sb, err := ReadSuperblock(tt.reader())
+			require.Error(t, err)
+			require.Nil(t, sb)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// TestReadSuperblock_ReadError covers the non-EOF read failure branch.
+func TestReadSuperblock_ReadError(t *testing.T) {
+	sb, err := ReadSuperblock(&failingReaderAt{})
+	require.Error(t, err)
+	require.Nil(t, sb)
+	require.Contains(t, err.Error(), "superblock read failed")
+}
