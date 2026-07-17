@@ -271,3 +271,47 @@ func TestObjectHeaderWriter_MultipleMessages(t *testing.T) {
 	// Validate chunk size (includes 4-byte Jenkins checksum)
 	assert.Equal(t, uint8(22), data[6], "Chunk size should be sum of messages (excludes checksum)")
 }
+
+// TestReadObjectHeader_RefCountMessage verifies the RefCount message parse:
+// the spec layout (version byte + uint32) and the legacy pre-v0.15 layout
+// (bare uint32, written by earlier releases of this library).
+func TestReadObjectHeader_RefCountMessage(t *testing.T) {
+	sb := &Superblock{
+		Version:    2,
+		OffsetSize: 8,
+		LengthSize: 8,
+		Endianness: binary.LittleEndian,
+	}
+
+	writeAndRead := func(t *testing.T, refCountData []byte) *ObjectHeader {
+		t.Helper()
+		header := &ObjectHeaderWriter{
+			Version: 2,
+			Messages: []MessageWriter{
+				{Type: MsgRefCount, Data: refCountData},
+			},
+		}
+		writer := newMockWriterAt()
+		_, err := header.WriteTo(writer, 0)
+		require.NoError(t, err)
+
+		oh, err := ReadObjectHeader(bytes.NewReader(writer.Bytes()), 0, sb)
+		require.NoError(t, err)
+		return oh
+	}
+
+	t.Run("versioned layout", func(t *testing.T) {
+		data := make([]byte, 5)
+		data[0] = 0 // message version
+		binary.LittleEndian.PutUint32(data[1:], 3)
+		oh := writeAndRead(t, data)
+		assert.Equal(t, uint32(3), oh.ReferenceCount)
+	})
+
+	t.Run("legacy bare uint32 layout", func(t *testing.T) {
+		data := make([]byte, 4)
+		binary.LittleEndian.PutUint32(data, 2)
+		oh := writeAndRead(t, data)
+		assert.Equal(t, uint32(2), oh.ReferenceCount)
+	})
+}

@@ -109,21 +109,28 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 		offset += 4
 
 		// Read scratch-pad (16 bytes).
-		// For CacheType == 1 (H5G_CACHED_STAB), this contains cached B-tree and heap addresses.
+		// CacheType 1 (H5G_CACHED_STAB): cached B-tree and heap addresses.
+		// CacheType 2 (H5G_CACHED_SLINK): 4-byte offset of the soft-link
+		// target path in the group's local heap.
 		var cachedBTree, cachedHeap uint64
-		if cacheType == 1 {
+		var cachedSoftLink uint32
+		switch cacheType {
+		case 1:
 			cachedBTree = readAddressFromBytes(data[offset:], int(sb.OffsetSize), sb.Endianness)
 			cachedHeap = readAddressFromBytes(data[offset+int(sb.OffsetSize):], int(sb.OffsetSize), sb.Endianness)
+		case CacheTypeSoftLink:
+			cachedSoftLink = sb.Endianness.Uint32(data[offset : offset+4])
 		}
 		offset += 16
 
 		node.Entries = append(node.Entries, SymbolTableEntry{
-			LinkNameOffset:  linkOffset,
-			ObjectAddress:   objAddr,
-			CacheType:       cacheType,
-			Reserved:        reserved,
-			CachedBTreeAddr: cachedBTree,
-			CachedHeapAddr:  cachedHeap,
+			LinkNameOffset:       linkOffset,
+			ObjectAddress:        objAddr,
+			CacheType:            cacheType,
+			Reserved:             reserved,
+			CachedBTreeAddr:      cachedBTree,
+			CachedHeapAddr:       cachedHeap,
+			CachedSoftLinkOffset: cachedSoftLink,
 		})
 	}
 
@@ -216,7 +223,14 @@ func (stn *SymbolTableNode) WriteAt(w io.WriterAt, address uint64, offsetSize ui
 			endianness.PutUint32(buf[pos:pos+4], entry.Reserved)
 			pos += 4
 
-			// Skip scratch-pad (16 bytes, already zero)
+			// Write scratch-pad (16 bytes; unused bytes stay zero).
+			switch entry.CacheType {
+			case 1:
+				writeAddressToBytes(buf[pos:], entry.CachedBTreeAddr, int(offsetSize), endianness)
+				writeAddressToBytes(buf[pos+int(offsetSize):], entry.CachedHeapAddr, int(offsetSize), endianness)
+			case CacheTypeSoftLink:
+				endianness.PutUint32(buf[pos:pos+4], entry.CachedSoftLinkOffset)
+			}
 			pos += 16
 		} else {
 			// Write empty entry (all zeros)

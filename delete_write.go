@@ -115,12 +115,18 @@ func (fw *FileWriter) writeRefCount(addr uint64, oh *core.ObjectHeader, sb *core
 	}
 
 	// V2: Update or add RefCount message (type 0x0016).
-	refCountData := make([]byte, 4)
-	sb.Endianness.PutUint32(refCountData, oh.ReferenceCount)
+	// Body: version byte (0) + uint32 count (H5Orefcount.c).
+	refCountData := make([]byte, 5)
+	refCountData[0] = 0 // message version
+	sb.Endianness.PutUint32(refCountData[1:], oh.ReferenceCount)
 
 	found := false
 	for _, msg := range oh.Messages {
 		if msg.Type == core.MsgRefCount {
+			if len(msg.Data) == 4 {
+				// Pre-v0.15 layout without the version byte — replace it.
+				msg.Data = make([]byte, 5)
+			}
 			copy(msg.Data, refCountData)
 			found = true
 			break
@@ -133,7 +139,9 @@ func (fw *FileWriter) writeRefCount(addr uint64, oh *core.ObjectHeader, sb *core
 		}
 	}
 
-	return core.WriteObjectHeader(fw.writer, addr, oh, sb)
+	// Bounds-checked write: the header may have grown past its allocation
+	// at the end of the file (keeps the superblock EOA correct).
+	return writeOHDRWithBoundsCheck(fw, addr, oh, sb)
 }
 
 // cascadeDelete frees all storage associated with an object whose refcount has

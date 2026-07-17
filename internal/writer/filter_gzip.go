@@ -2,7 +2,7 @@ package writer
 
 import (
 	"bytes"
-	"compress/gzip"
+	"compress/zlib"
 	"fmt"
 	"io"
 )
@@ -12,9 +12,11 @@ import (
 // helper tests.
 const filterDeflateName = "deflate"
 
-// GZIPFilter implements GZIP compression (FilterID = 1).
-// This filter uses the DEFLATE compression algorithm to reduce data size.
-// In HDF5, this filter is named "deflate" following zlib terminology.
+// GZIPFilter implements the HDF5 deflate filter (FilterID = 1).
+// Despite the historical "GZIP" naming, the stored stream is zlib format
+// (RFC 1950) — what the C library's compress2() produces — NOT gzip
+// (RFC 1952). Do not switch this back to compress/gzip: the C tools
+// cannot read gzip-wrapped chunks (verified by TestCInterop_WriteMatrix).
 //
 // Compression levels:
 //
@@ -25,7 +27,7 @@ type GZIPFilter struct {
 	level int // Compression level (1-9)
 }
 
-// NewGZIPFilter creates a GZIP filter with the specified compression level.
+// NewGZIPFilter creates a deflate (zlib) filter with the specified compression level.
 //
 // Valid levels:
 //
@@ -52,51 +54,48 @@ func (f *GZIPFilter) Name() string {
 	return filterDeflateName
 }
 
-// Apply compresses data using GZIP/DEFLATE algorithm.
-// Returns compressed data suitable for storage.
-//
-// The compressed data includes GZIP headers and CRC32 checksum.
+// Apply compresses data using the DEFLATE algorithm in zlib format
+// (RFC 1950). The HDF5 deflate filter stores zlib streams (what the C
+// library's compress2() produces), NOT gzip-wrapped (RFC 1952) streams.
 func (f *GZIPFilter) Apply(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
 
-	// Create gzip writer with specified compression level
-	w, err := gzip.NewWriterLevel(&buf, f.level)
+	w, err := zlib.NewWriterLevel(&buf, f.level)
 	if err != nil {
-		return nil, fmt.Errorf("gzip writer creation failed: %w", err)
+		return nil, fmt.Errorf("zlib writer creation failed: %w", err)
 	}
 
 	// Compress data
 	if _, err := w.Write(data); err != nil {
 		_ = w.Close() // Ignore close error on write failure
-		return nil, fmt.Errorf("gzip compression failed: %w", err)
+		return nil, fmt.Errorf("zlib compression failed: %w", err)
 	}
 
 	// Flush and close to ensure all data is written
 	if err := w.Close(); err != nil {
-		return nil, fmt.Errorf("gzip close failed: %w", err)
+		return nil, fmt.Errorf("zlib close failed: %w", err)
 	}
 
 	return buf.Bytes(), nil
 }
 
-// Remove decompresses GZIP-compressed data.
+// Remove decompresses zlib-compressed data.
 // Returns the original uncompressed data.
 //
 // This method reverses the Apply operation, restoring the original data.
 func (f *GZIPFilter) Remove(data []byte) ([]byte, error) {
 	buf := bytes.NewReader(data)
 
-	// Create gzip reader
-	r, err := gzip.NewReader(buf)
+	r, err := zlib.NewReader(buf)
 	if err != nil {
-		return nil, fmt.Errorf("gzip reader creation failed: %w", err)
+		return nil, fmt.Errorf("zlib reader creation failed: %w", err)
 	}
 	defer func() { _ = r.Close() }() // Ignore error in defer
 
 	// Decompress data
 	decompressed, err := io.ReadAll(r)
 	if err != nil {
-		return nil, fmt.Errorf("gzip decompression failed: %w", err)
+		return nil, fmt.Errorf("zlib decompression failed: %w", err)
 	}
 
 	return decompressed, nil

@@ -2,7 +2,6 @@ package hdf5
 
 import (
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -273,13 +272,10 @@ func TestVLenStringAttribute_MixedWithOtherAttrs(t *testing.T) {
 	require.Equal(t, []string{"RGB", "Depth", "IR"}, channels)
 }
 
-// TestVLenStringAttribute_H5dump verifies that h5dump can read the file correctly.
+// TestCInterop_VLenStringAttribute verifies that h5dump can read the file correctly.
 // This test is skipped if h5dump is not available.
-func TestVLenStringAttribute_H5dump(t *testing.T) {
-	h5dumpPath := `C:\Program Files\HDF_Group\HDF5\1.14.6\bin\h5dump.exe`
-	if _, err := os.Stat(h5dumpPath); os.IsNotExist(err) {
-		t.Skip("h5dump not available at", h5dumpPath)
-	}
+func TestCInterop_VLenStringAttribute(t *testing.T) {
+	h5dumpPath := h5tool(t, "h5dump")
 
 	testFile := "test_vlen_string_attr_h5dump.h5"
 	defer func() { _ = os.Remove(testFile) }()
@@ -298,11 +294,7 @@ func TestVLenStringAttribute_H5dump(t *testing.T) {
 	require.NoError(t, err)
 
 	// Run h5dump.
-	cmd := exec.Command(h5dumpPath, testFile)
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "h5dump failed: %s", string(output))
-
-	outputStr := string(output)
+	outputStr := runH5(t, h5dumpPath, testFile)
 
 	// Verify the attribute appears in h5dump output.
 	require.True(t, strings.Contains(outputStr, "topics"),

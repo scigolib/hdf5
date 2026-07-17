@@ -2,6 +2,7 @@ package hdf5
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -320,3 +321,31 @@ func TestResolveSoftLink_NotImplemented(t *testing.T) {
 // - TestSoftLink_ReadAfterCreate
 // - TestCreateSoftLink_ParentNotExists
 // - TestCreateSoftLink_MultipleLinks
+
+// TestCreateSoftLink_TargetForcesHeapExpansion uses a target path larger
+// than the group's initial 4KB local heap, forcing the heap to expand while
+// storing the soft-link target.
+func TestCreateSoftLink_TargetForcesHeapExpansion(t *testing.T) {
+	testFile := filepath.Join(t.TempDir(), "soft_heap_expand.h5")
+
+	fw, err := CreateForWrite(testFile, CreateTruncate)
+	require.NoError(t, err)
+
+	ds, err := fw.CreateDataset("/target", Int32, []uint64{2})
+	require.NoError(t, err)
+	require.NoError(t, ds.Write([]int32{1, 2}))
+
+	// Dangling soft link with a >4KB target path (heap starts at 4096 bytes).
+	longTarget := "/" + strings.Repeat("x", 5000)
+	require.NoError(t, fw.CreateSoftLink("/soft", longTarget))
+	require.NoError(t, fw.Close())
+
+	// File must stay readable and the hard members intact.
+	f, err := Open(testFile)
+	require.NoError(t, err)
+	defer f.Close()
+
+	var paths []string
+	f.Walk(func(path string, _ Object) { paths = append(paths, path) })
+	require.Contains(t, paths, "/target")
+}

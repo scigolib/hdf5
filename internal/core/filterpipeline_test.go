@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"compress/gzip"
 	"compress/zlib"
 	"testing"
 
@@ -35,8 +36,24 @@ func TestApplyDeflate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			// Releases up to v0.14 wrote gzip-wrapped streams instead of
+			// zlib; applyDeflate sniffs the gzip magic to keep them readable.
+			name:    "legacy gzip-wrapped data",
+			input:   gzipCompress(t, []byte("legacy gzip stream")),
+			want:    []byte("legacy gzip stream"),
+			wantErr: false,
+		},
+		{
 			name:    "invalid compressed data",
 			input:   []byte{0x00, 0x01, 0x02, 0x03},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			// gzip magic but corrupt header: the fallback reader must error,
+			// not be misread as zlib.
+			name:    "corrupt gzip-magic data",
+			input:   []byte{0x1f, 0x8b, 0xff, 0xff},
 			want:    nil,
 			wantErr: true,
 		},
@@ -657,6 +674,17 @@ func zlibCompress(t *testing.T, data []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	w := zlib.NewWriter(&buf)
+	_, err := w.Write(data)
+	require.NoError(t, err)
+	err = w.Close()
+	require.NoError(t, err)
+	return buf.Bytes()
+}
+
+func gzipCompress(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
 	_, err := w.Write(data)
 	require.NoError(t, err)
 	err = w.Close()

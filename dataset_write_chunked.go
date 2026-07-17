@@ -140,6 +140,7 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate header: %w", err)
 	}
+	fw.headerAllocs[headerAddress] = headerSize
 
 	writtenSize, err := ohw.WriteTo(fw.writer, headerAddress)
 	if err != nil {
