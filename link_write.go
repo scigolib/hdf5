@@ -168,9 +168,12 @@ func writeV2RefCount(fw *FileWriter, addr uint64, oh *core.ObjectHeader) error {
 		}
 	}
 
-	// Write entire object header back to disk
-	err := core.WriteObjectHeader(fw.writer, addr, oh, fw.file.sb)
-	if err != nil {
+	// Write entire object header back to disk. The RefCount message may have
+	// grown the header past its allocation at the end of the file, so use the
+	// bounds-checked writer that advances the allocator (and thus the
+	// superblock EOA on Close) — a bare WriteObjectHeader left the EOA 8
+	// bytes short and the C library rejected the file ("exceeds EOA").
+	if err := writeOHDRWithBoundsCheck(fw, addr, oh, fw.file.sb); err != nil {
 		return fmt.Errorf("failed to write v2 object header: %w", err)
 	}
 	return nil
@@ -178,18 +181,22 @@ func writeV2RefCount(fw *FileWriter, addr uint64, oh *core.ObjectHeader) error {
 
 // ensureRefCountMessage ensures RefCount message exists and is updated.
 func ensureRefCountMessage(fw *FileWriter, oh *core.ObjectHeader) error {
+	// RefCount message body: version (1 byte, always 0) + 4-byte count.
+	// Reference: H5Orefcount.c - H5O__refcount_decode().
+
 	// Check if RefCount message already exists
 	for _, msg := range oh.Messages {
-		if msg.Type == core.MsgRefCount && len(msg.Data) >= 4 {
-			// Update existing RefCount message data
-			fw.file.sb.Endianness.PutUint32(msg.Data[0:4], oh.ReferenceCount)
+		if msg.Type == core.MsgRefCount && len(msg.Data) >= 5 {
+			// Update existing RefCount message data (skip version byte)
+			fw.file.sb.Endianness.PutUint32(msg.Data[1:5], oh.ReferenceCount)
 			return nil
 		}
 	}
 
 	// Create new RefCount message
-	refCountData := make([]byte, 4)
-	fw.file.sb.Endianness.PutUint32(refCountData, oh.ReferenceCount)
+	refCountData := make([]byte, 5)
+	refCountData[0] = 0 // message version
+	fw.file.sb.Endianness.PutUint32(refCountData[1:], oh.ReferenceCount)
 
 	// Add message to header
 	err := core.AddMessageToObjectHeader(oh, core.MsgRefCount, refCountData)
@@ -265,68 +272,13 @@ func (fw *FileWriter) CreateSoftLink(linkPath, targetPath string) error {
 		}
 	}
 
-	// Create soft link message
-	linkMsg := &core.LinkMessage{
-		Version: 1,
-		Flags:   core.LinkFlagLinkTypeFieldBit | core.LinkFlagCharSetBit, // Bits 3 + 4 set
-		Type:    core.LinkTypeSoft,
-		CharSet: 0, // ASCII
-		Name:    linkName,
-		// LinkValue: target path as bytes (will be set below)
-	}
-
-	// Encode target path as link value
-	// Soft link format: 2-byte length + path string
-	targetPathBytes := []byte(targetPath)
-	if len(targetPathBytes) > 65535 {
-		return fmt.Errorf("target path too long: %d bytes (max 65535)", len(targetPathBytes))
-	}
-	linkValue := make([]byte, 2+len(targetPathBytes))
-	fw.file.sb.Endianness.PutUint16(linkValue[0:2], uint16(len(targetPathBytes))) //nolint:gosec // Validated above
-	copy(linkValue[2:], targetPathBytes)
-	linkMsg.LinkValue = linkValue
-
-	// Encode link message
-	linkMsgData, err := core.EncodeLinkMessage(linkMsg, fw.file.sb)
-	if err != nil {
-		return fmt.Errorf("failed to encode soft link message: %w", err)
-	}
-
-	// Create object header writer for the soft link
-	linkOHW := &core.ObjectHeaderWriter{
-		Version: 2, // Use v2 for modern format
-		Flags:   0,
-		Messages: []core.MessageWriter{
-			{
-				Type: core.MsgLinkMessage, // 0x0006 - Link message
-				Data: linkMsgData,
-			},
-		},
-	}
-
-	// Pre-allocate with padding for future attributes.
-	linkOHW.PadToSize(core.MinOHDRAllocSize)
-
-	// Calculate object header size
-	headerSize, err := calculateObjectHeaderSize(linkOHW)
-	if err != nil {
-		return fmt.Errorf("failed to calculate header size: %w", err)
-	}
-
-	// Allocate space for object header
-	linkAddr, err := fw.writer.Allocate(headerSize)
-	if err != nil {
-		return fmt.Errorf("failed to allocate space for soft link object header: %w", err)
-	}
-
-	// Write object header
-	_, err = linkOHW.WriteTo(fw.writer, linkAddr)
-	if err != nil {
-		return fmt.Errorf("failed to write soft link object header: %w", err)
-	}
-
-	// Add link to parent group's symbol table
-	if err := fw.linkToParent(parent, linkName, linkAddr); err != nil {
+	// In the symbol-table group format a soft link is NOT an object: it is a
+	// symbol table entry with cache type 2 (H5G_CACHED_SLINK), an undefined
+	// object header address, and the target path stored in the parent
+	// group's local heap. (An earlier implementation wrote a standalone
+	// object header holding a Link message — the C library could not
+	// classify that object and rejected the file.)
+	if err := fw.linkEntryToParent(parent, linkName, 0, targetPath); err != nil {
 		return fmt.Errorf("failed to add soft link to parent group: %w", err)
 	}
 

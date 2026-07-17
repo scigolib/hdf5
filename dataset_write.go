@@ -589,6 +589,12 @@ type FileWriter struct {
 	// Example: "/mygroup" → {heapAddr, stNodeAddr, btreeAddr}
 	groups map[string]*GroupMetadata
 
+	// Object header allocation sizes, keyed by header address. Consulted
+	// when a header is rewritten in place (attributes, refcounts): growing
+	// past its allocation must route through a continuation block instead
+	// of overwriting whatever follows.
+	headerAllocs map[uint64]uint64
+
 	// Global heap writer for variable-length data (vlen strings, ragged arrays)
 	globalHeapWriter *globalHeapWriter
 
@@ -613,7 +619,8 @@ func (fw *FileWriter) lookupHeaderAllocSize(objectAddr uint64) uint64 {
 			return meta.headerAllocSz
 		}
 	}
-	return 0
+	// Datasets and other tracked headers.
+	return fw.headerAllocs[objectAddr]
 }
 
 // Superblock version constants for file creation.
@@ -627,7 +634,9 @@ const (
 	// This is the recommended format for new files. Supported by HDF5 1.10+.
 	SuperblockV2 = core.Version2
 
-	// SuperblockV3 (latest format) - Future format, not yet implemented for writing.
+	// SuperblockV3 (latest format) - Same 48-byte structure as v2 with the
+	// file consistency flags byte in use (the format HDF5 2.x writes under
+	// "latest" library version bounds).
 	SuperblockV3 = core.Version3
 )
 
@@ -645,7 +654,7 @@ type FileWriteConfig struct {
 // Available versions:
 //   - SuperblockV0: Legacy format, maximum compatibility with older tools (h5dump, etc.)
 //   - SuperblockV2: Modern format with checksums (default)
-//   - SuperblockV3: Latest format (not yet implemented for writing)
+//   - SuperblockV3: Latest format (what HDF5 2.x writes under "latest" bounds)
 //
 // Default: SuperblockV2 (modern format)
 //
@@ -821,7 +830,8 @@ func CreateForWrite(filename string, mode CreateMode, opts ...interface{}) (*Fil
 		rootStNodeAddr:    rootInfo.stNodeAddr,
 		rootHeaderAllocSz: rootInfo.groupSize,
 		// Initialize groups map for tracking nested groups
-		groups: make(map[string]*GroupMetadata),
+		groups:       make(map[string]*GroupMetadata),
+		headerAllocs: make(map[uint64]uint64),
 		// Copy rebalancing configs from tempFW
 		lazyRebalancingConfig:        tempFW.lazyRebalancingConfig,
 		incrementalRebalancingConfig: tempFW.incrementalRebalancingConfig,
@@ -1009,6 +1019,7 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate space for object header: %w", err)
 	}
+	fw.headerAllocs[headerAddress] = headerSize
 
 	// Write object header
 	writtenSize, err := ohw.WriteTo(fw.writer, headerAddress)
@@ -1184,6 +1195,7 @@ func (fw *FileWriter) CreateCompoundDataset(name string, compoundType *core.Data
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate space for object header: %w", err)
 	}
+	fw.headerAllocs[headerAddress] = headerSize
 
 	// Write object header
 	writtenSize, err := ohw.WriteTo(fw.writer, headerAddress)
@@ -2239,6 +2251,7 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 		rootStNodeAddr:    rootStNodeAddr,
 		rootHeaderAllocSz: rootHeaderAllocSz,
 		groups:            make(map[string]*GroupMetadata),
+		headerAllocs:      make(map[uint64]uint64),
 	}
 
 	fileWriter.globalHeapWriter = newGlobalHeapWriter(fileWriter)

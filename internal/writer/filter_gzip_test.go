@@ -251,7 +251,7 @@ func TestGZIPFilter_Remove_InvalidData(t *testing.T) {
 	invalidData := []byte{1, 2, 3, 4, 5}
 	_, err := filter.Remove(invalidData)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "gzip")
+	require.Contains(t, err.Error(), "zlib")
 }
 
 func TestGZIPFilter_Remove_CorruptedData(t *testing.T) {

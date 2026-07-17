@@ -136,8 +136,14 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 	// Check for RefCount message (V2 only) - overrides default
 	if header.Version == 2 {
 		for _, msg := range header.Messages {
-			if msg.Type == MsgRefCount && len(msg.Data) >= 4 {
-				// RefCount message is just a uint32
+			// RefCount message: version byte (0) + uint32 count.
+			if msg.Type == MsgRefCount && len(msg.Data) >= 5 && msg.Data[0] == 0 {
+				header.ReferenceCount = sb.Endianness.Uint32(msg.Data[1:5])
+				break
+			}
+			if msg.Type == MsgRefCount && len(msg.Data) == 4 {
+				// Files written by this library before v0.15 omitted the
+				// version byte; accept the bare uint32 layout.
 				header.ReferenceCount = sb.Endianness.Uint32(msg.Data[0:4])
 				break
 			}

@@ -478,3 +478,41 @@ func TestDelete_H5dump(t *testing.T) {
 	// For CI this is covered by the existing h5dump validation in the test suite.
 	// The file is created and should be readable by h5dump.
 }
+
+// TestDelete_HardLink_RefCountUpdate deletes one name of a hard-linked
+// dataset: the object must survive under its other name with its RefCount
+// message (version byte + uint32) rewritten, not be cascade-deleted.
+func TestDelete_HardLink_RefCountUpdate(t *testing.T) {
+	testFile := filepath.Join(t.TempDir(), "delete_hardlink.h5")
+
+	fw, err := hdf5.CreateForWrite(testFile, hdf5.CreateTruncate)
+	require.NoError(t, err)
+
+	ds, err := fw.CreateDataset("/target", hdf5.Int32, []uint64{3})
+	require.NoError(t, err)
+	require.NoError(t, ds.Write([]int32{1, 2, 3}))
+	require.NoError(t, fw.CreateHardLink("/alias", "/target"))
+
+	// Deleting one of two names decrements the refcount (writeRefCount path).
+	require.NoError(t, fw.Delete("/alias"))
+	require.NoError(t, fw.Close())
+
+	f, err := hdf5.Open(testFile)
+	require.NoError(t, err)
+	defer f.Close()
+
+	var paths []string
+	f.Walk(func(path string, _ hdf5.Object) { paths = append(paths, path) })
+	require.Contains(t, paths, "/target", "surviving name must still resolve")
+	require.NotContains(t, paths, "/alias", "deleted name must be gone")
+
+	datasets := map[string]*hdf5.Dataset{}
+	f.Walk(func(path string, obj hdf5.Object) {
+		if d, ok := obj.(*hdf5.Dataset); ok {
+			datasets[path] = d
+		}
+	})
+	got, err := datasets["/target"].Read()
+	require.NoError(t, err)
+	require.Equal(t, []float64{1, 2, 3}, got)
+}
