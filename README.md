@@ -400,3 +400,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 *Built with ❤️ by the HDF5 Go community*
 *Recognized by [HDF Group Forum](https://forum.hdfgroup.org/t/pure-go-hdf5-library-production-release-with-hdf5-2-0-0-compatibility/13584)* ⭐
+
+
+## Star History
+
+<a href="https://starhistory.io">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.starhistory.io/png?repos=scigolib/hdf5&style=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.starhistory.io/png?repos=scigolib/hdf5&style=professional" />
+   <img alt="Star History Chart" src="https://api.starhistory.io/png?repos=scigolib/hdf5" width="800" />
+ </picture>
+</a>
