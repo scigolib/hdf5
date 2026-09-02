@@ -108,7 +108,7 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 	}
 
 	// Parse keys and children.
-	node.Keys = make([]ChunkKey, node.EntriesUsed+1) // +1 because there's always 1 more key than children.
+	node.Keys = make([]ChunkKey, int(node.EntriesUsed)+1) // +1 because there's always 1 more key than children.
 	node.Children = make([]uint64, node.EntriesUsed)
 
 	dataOffset := 0
