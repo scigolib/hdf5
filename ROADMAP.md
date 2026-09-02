@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2026-04-05 | **Current Version**: v0.13.19 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.13.19 RELEASED! (2026-04-05) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2026-09-02 | **Current Version**: v0.14.1 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.14.1 RELEASED! (2026-09-02) → v1.0.0 LTS (Q3 2026)
 
 ---
 

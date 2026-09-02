@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.14.1] - 2026-09-02
+
+### Bug Fixes
+
+#### C-Library Write Compatibility — 6 Interoperability Fixes (PR #59)
+
+Files written by the Go library are now fully readable by the official HDF5 C tools
+(`h5dump`, `h5ls`, `h5py`, `h5repack`, `h5diff`). Six spec-compliance bugs were identified
+and fixed, each verified against the C reference implementation source code:
+
+1. **Deflate filter**: wrote gzip (RFC 1952) instead of zlib (RFC 1950) — every compressed
+   dataset was unreadable by the C library. Fixed to use `compress/zlib` matching C's `compress2()`.
+   Reader retains gzip-magic sniff fallback for files written by earlier versions.
+
+2. **Filter pipeline message**: version 2 stamp with version 1 body layout — h5dump reported
+   filter ID 0 ("unknown filter"). Fixed to emit spec-correct v1 with padded names and
+   CD-value alignment.
+
+3. **Enum datatype**: interleaved name/value pairs instead of the spec's all-names-then-all-values
+   layout — h5dump reported "0 length enum name". Version corrected from v3 to v1 to match
+   the padded name encoding.
+
+4. **Hard links**: RefCount message missing its version byte (5 bytes per spec, was 4) and
+   EOA left 8 bytes short. Reader accepts both old bare-uint32 and new versioned layouts.
+
+5. **Soft links**: written as standalone object headers with Link messages — the C library
+   cannot classify such objects. Now written per spec as cache-type-2 symbol table entries
+   with the target path in the parent's local heap. Also fixes SNOD scratch-pad serialization
+   that was silently zeroing cached addresses for nested groups.
+
+6. **In-place header rewrites**: a dataset header growing past its 256-byte allocation could
+   overlap the following data, corrupting checksums. Dataset header allocations are now tracked
+   (`headerAllocs`) so the OCHK continuation path fires correctly.
+
+Contributed by [@rhaist](https://github.com/rhaist).
+
+#### B-tree V1 Panic on Crafted Files (PR #63)
+
+`ParseBTreeV1Node` allocated key slices from the node's `EntriesUsed` field (uint16).
+When `EntriesUsed` is `0xFFFF`, the `+1` wraps to 0 in uint16 arithmetic, causing a
+zero-length slice and subsequent panic. Fixed by computing in `int`:
+`make([]ChunkKey, int(node.EntriesUsed)+1)`.
+
+This prevents a denial-of-service via crafted `.h5` files targeting chunked dataset reads.
+
+Contributed by [@chiliec](https://github.com/chiliec).
+
+### Added
+
+#### C-Library Interop Test Suite (PR #59)
+
+New `TestCInterop_WriteMatrix` (15 cases across all write features) and
+`TestCInterop_RepackRoundTrip` (Go write → C repack → C diff → Go readback) validate
+Go-written files against official HDF5 tools. Tests self-skip when tools are absent.
+New `c-interop` CI job runs on Ubuntu with `hdf5-tools`.
+
+### Changed
+
+- deps: testify v1.11.1 → v1.12.1
+- ci: actions/checkout v4 → v7, actions/setup-go v5 → v7, codecov-action v5 → v7, golangci-lint-action v8 → v9
+
+---
+
 ## [v0.14.0] - 2026-06-25
 
 ### New Feature
