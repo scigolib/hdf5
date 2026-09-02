@@ -324,9 +324,18 @@ func parsePath(path string) (parent, name string) {
 //
 // Returns:
 //   - error: If linking fails
+func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint64) error {
+	return fw.linkEntryToParent(parentPath, childName, childAddr, "")
+}
+
+// linkEntryToParent adds a symbol table entry for childName to the parent
+// group. With a non-empty softTarget, the entry is a soft link: the target
+// path is stored in the parent's local heap and the entry carries cache
+// type 2 with an undefined object address (H5G_CACHED_SLINK) — soft links
+// are not objects and have no object header.
 //
 //nolint:gocognit,gocyclo,cyclop,funlen // Complex but necessary: SNOD split + heap expansion + B-tree update
-func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint64) error {
+func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr uint64, softTarget string) error {
 	// Get parent group metadata.
 	var heapAddr, btreeAddr uint64
 	if parentPath == "" || parentPath == "/" {
@@ -378,6 +387,18 @@ func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint6
 		ObjectAddress:  childAddr,
 		CacheType:      0,
 		Reserved:       0,
+	}
+	if softTarget != "" {
+		targetOffset, addErr := heap.AddString(softTarget)
+		if addErr != nil {
+			heap, heapAddr, targetOffset, addErr = fw.expandHeapAndAdd(heap, heapAddr, parentPath, softTarget)
+			if addErr != nil {
+				return fmt.Errorf("add soft-link target to heap: %w", addErr)
+			}
+		}
+		newEntry.ObjectAddress = 0xFFFFFFFFFFFFFFFF // HADDR_UNDEF: soft links are not objects
+		newEntry.CacheType = structures.CacheTypeSoftLink
+		newEntry.CachedSoftLinkOffset = uint32(targetOffset) //nolint:gosec // G115: local heap offsets fit in uint32
 	}
 	allEntries = append(allEntries, newEntry)
 

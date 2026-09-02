@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/scigolib/hdf5/internal/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -273,4 +274,38 @@ func (bwa *bytesWriterAt) WriteAt(p []byte, off int64) (n int, err error) {
 	copy(data[off:], p)
 
 	return len(p), nil
+}
+
+// TestSymbolTableNode_ScratchPadRoundTrip verifies that cache-type-specific
+// scratch-pad data survives a write→parse round trip: cached STAB addresses
+// (type 1) and soft-link target offsets (type 2). Type 0 keeps zero scratch.
+func TestSymbolTableNode_ScratchPadRoundTrip(t *testing.T) {
+	node := NewSymbolTableNode(8)
+	entries := []SymbolTableEntry{
+		{LinkNameOffset: 8, ObjectAddress: 0x1000, CacheType: 0},
+		{LinkNameOffset: 16, ObjectAddress: 0x2000, CacheType: 1,
+			CachedBTreeAddr: 0x3000, CachedHeapAddr: 0x4000},
+		{LinkNameOffset: 24, ObjectAddress: 0xFFFFFFFFFFFFFFFF,
+			CacheType: CacheTypeSoftLink, CachedSoftLinkOffset: 42},
+	}
+	for _, e := range entries {
+		require.NoError(t, node.AddEntry(e))
+	}
+
+	buf := &bytes.Buffer{}
+	require.NoError(t, node.WriteAt(newBytesWriterAt(buf), 0, 8, 8, binary.LittleEndian))
+
+	sb := &core.Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian}
+	parsed, err := ParseSymbolTableNode(&mockReaderAt{data: buf.Bytes()}, 0, sb)
+	require.NoError(t, err)
+	require.Len(t, parsed.Entries, 3)
+
+	require.Equal(t, entries[0], parsed.Entries[0])
+
+	require.Equal(t, uint32(1), parsed.Entries[1].CacheType)
+	require.Equal(t, uint64(0x3000), parsed.Entries[1].CachedBTreeAddr)
+	require.Equal(t, uint64(0x4000), parsed.Entries[1].CachedHeapAddr)
+
+	require.True(t, parsed.Entries[2].IsSoftLink())
+	require.Equal(t, uint32(42), parsed.Entries[2].CachedSoftLinkOffset)
 }

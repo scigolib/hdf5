@@ -134,22 +134,25 @@ func (fp *FilterPipeline) EncodePipelineMessage() ([]byte, error) {
 		return nil, errors.New("empty filter pipeline")
 	}
 
-	// Pipeline message format (version 2):
-	// Bytes 0:    Version (1 byte) = 2
+	// Pipeline message format (version 1):
+	// Bytes 0:    Version (1 byte) = 1
 	// Bytes 1:    Number of filters (1 byte)
 	// Bytes 2-7:  Reserved (6 bytes, must be 0)
 	//
 	// For each filter:
 	//   Filter ID (2 bytes)
-	//   Name length (2 bytes) - may be 0
+	//   Name length (2 bytes) - padded length, 0 if no name
 	//   Flags (2 bytes)
 	//   Number of CD values (2 bytes)
-	//   Name (variable, padded to 8-byte boundary) - only if name length > 0
-	//   CD values (4 bytes each)
+	//   Name (null-terminated, padded to 8-byte boundary) - only if name length > 0
+	//   CD values (4 bytes each), followed by 4 pad bytes if the count is odd
+	//
+	// Version 2 has a different body layout (no reserved bytes, no name for
+	// filter IDs < 256); version 1 is readable by every HDF5 release.
 
 	buf := make([]byte, 0, 8+len(fp.filters)*32) // Pre-allocate for header + filters
 	header := make([]byte, 8)
-	header[0] = 2                     // Version 2
+	header[0] = 1                     // Version 1
 	header[1] = byte(len(fp.filters)) //nolint:gosec // G115: filter count bounded by HDF5 format
 	// Reserved bytes 2-7 are already zero
 	buf = append(buf, header...)
@@ -168,31 +171,37 @@ func encodeFilter(f Filter) []byte {
 	name := f.Name()
 	nameLen := uint16(len(name)) //nolint:gosec // G115: Filter names are short (<256), always fit in uint16
 
-	// Calculate padded name length (align to 8-byte boundary)
+	// Padded name length: null terminator included, aligned to 8-byte boundary.
+	// Version 1 stores the padded length in the name-length field.
 	var paddedNameLen uint16
 	if nameLen > 0 {
-		paddedNameLen = ((nameLen + 7) / 8) * 8
+		paddedNameLen = ((nameLen + 1 + 7) / 8) * 8
 	}
 
-	// Calculate buffer size
-	bufSize := 8 + int(paddedNameLen) + len(cdValues)*4
+	// CD values are padded to an 8-byte boundary (4 extra bytes if count is odd).
+	cdPad := 0
+	if len(cdValues)%2 != 0 {
+		cdPad = 4
+	}
+
+	bufSize := 8 + int(paddedNameLen) + len(cdValues)*4 + cdPad
 	buf := make([]byte, bufSize)
 
 	// Filter header (8 bytes)
 	binary.LittleEndian.PutUint16(buf[0:2], uint16(f.ID()))
-	binary.LittleEndian.PutUint16(buf[2:4], nameLen)
+	binary.LittleEndian.PutUint16(buf[2:4], paddedNameLen)
 	binary.LittleEndian.PutUint16(buf[4:6], flags)
 	binary.LittleEndian.PutUint16(buf[6:8], uint16(len(cdValues))) //nolint:gosec // G115: HDF5 limits CD values array to uint16
 
 	offset := 8
 
-	// Name (padded to 8-byte boundary)
+	// Name (null-terminated via zeroed padding)
 	if nameLen > 0 {
 		copy(buf[offset:], name)
 		offset += int(paddedNameLen)
 	}
 
-	// CD values (4 bytes each)
+	// CD values (4 bytes each); trailing pad bytes stay zero.
 	for _, val := range cdValues {
 		binary.LittleEndian.PutUint32(buf[offset:], val)
 		offset += 4

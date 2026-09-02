@@ -801,13 +801,13 @@ func EncodeArrayDatatypeMessage(baseType []byte, dims []uint64, arraySize uint32
 //   - Encoded message bytes (full datatype message with enum properties)
 //   - Error if encoding fails
 //
-// Format (version 3):
+// Format (version 1):
 //   - Bytes 0-3: Class (4 bits) | Version (4 bits) | NumMembers (16 bits, in classBitField)
 //   - Bytes 4-7: Size (base type size)
 //   - Following: Base type message
-//   - Following: For each member:
-//   - Name (null-terminated, padded to multiple of 8)
-//   - Value (size bytes)
+//   - Following: ALL member names (each null-terminated, padded to multiple
+//     of 8; v3 would be unpadded), then ALL member values as one array.
+//     Names and values are two separate blocks, NOT interleaved pairs.
 //
 // Reference: HDF5 spec III.C (Datatype Message - Enum class).
 // C Reference: H5Odtype.c - H5O__dtype_encode_helper() for H5T_ENUM.
@@ -823,7 +823,11 @@ func EncodeEnumDatatypeMessage(baseType []byte, names []string, values []byte, e
 	}
 
 	nmembs := uint16(len(names)) //nolint:gosec // Safe: validated above
-	version := uint8(3)
+	// Version 1: member names are null-terminated and padded to a multiple
+	// of 8 — which is the layout written below. Version 3 stores names
+	// WITHOUT padding; stamping 3 here made the C library read the pad
+	// zeros as a next name ("0 length enum name").
+	version := uint8(1)
 
 	// Calculate total message size
 	headerSize := 8
@@ -863,25 +867,19 @@ func EncodeEnumDatatypeMessage(baseType []byte, names []string, values []byte, e
 	copy(buf[offset:], baseType)
 	offset += len(baseType)
 
-	// Names and values
-	for i, name := range names {
-		// Name (null-terminated, padded to multiple of 8)
+	// All names first (null-terminated, each padded to a multiple of 8) —
+	// the C library decodes a names block followed by a values block.
+	for _, name := range names {
 		nameLen := len(name) + 1
 		paddedNameLen := ((nameLen + 7) / 8) * 8
 
 		copy(buf[offset:], name)
-		offset += len(name)
-		buf[offset] = 0 // null terminator
-		offset++
-
-		// Padding (zeros)
-		offset += paddedNameLen - nameLen
-
-		// Value
-		valueOffset := i * int(enumSize)
-		copy(buf[offset:], values[valueOffset:valueOffset+int(enumSize)])
-		offset += int(enumSize)
+		// Null terminator and padding are already zero.
+		offset += paddedNameLen
 	}
+
+	// Then all values as one array.
+	copy(buf[offset:], values[:int(enumSize)*len(names)])
 
 	return buf, nil
 }
