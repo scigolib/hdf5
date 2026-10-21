@@ -99,6 +99,11 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 	keySize := 4 + 4 + ndims*8
 	childSize := int(offsetSize)
 	entrySize := keySize + childSize
+	// dataSize is bounded by the fields read above: EntriesUsed is uint16
+	// (<= 65535) and ndims is the dataspace rank, which comes from the message's
+	// uint8 dimensionality field (<= 255), so the buffer is at most
+	// 65535 * (8 + 255*8 + offsetSize) ≈ 134 MB. That is not an OOM vector, so
+	// the direct read stays; ADR-003 records the bound.
 	dataSize := int(node.EntriesUsed)*entrySize + keySize // +keySize for final key.
 
 	data := make([]byte, dataSize)
