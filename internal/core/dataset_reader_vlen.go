@@ -113,6 +113,17 @@ func ReadDatasetVLenBytes(r io.ReaderAt, header *ObjectHeader, sb *Superblock) (
 	offsetSize := int(sb.OffsetSize)
 	heapIDSize := uint64(datatype.Size) // Typically 16 bytes.
 
+	// On disk a variable-length element is a global heap reference: a 4-byte
+	// sequence length, an offsetSize-byte heap address and a 4-byte object
+	// index (H5Tvlen.c:300; C stores sizeof(hvl_t) = 16 for 8-byte offsets).
+	// The size comes from the file, and a value below the reference makes the
+	// slice below run backwards — one corrupted byte panicked the caller.
+	refSize := uint64(sb.OffsetSize) + 8
+	if heapIDSize < refSize {
+		return nil, fmt.Errorf("vlen element size %d is smaller than a heap reference (%d bytes)",
+			heapIDSize, refSize)
+	}
+
 	// The count is metadata-derived; validate it against the bytes read before
 	// sizing the result slice (ADR-003, same class as parseCompoundData).
 	if err := validateElementStorage(totalElements, heapIDSize, rawData, "vlen data"); err != nil {

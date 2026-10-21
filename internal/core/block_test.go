@@ -235,3 +235,15 @@ func TestReadBlock_BoundedReaderBeatsCorruptEOA(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "read beyond end of file")
 }
+
+// TestDataLimit_PrefersBoundedReaderSize pins the limit order at its source: a
+// reader that reports its own size must win over Superblock.EOFAddress, which
+// is file metadata and can be corrupted. The ReadBlock test above is only a
+// behavior guard (the wrapper's ReadAt enforces the same bound); this one is
+// the reproducer that fails without boundedReader.EndOfFile.
+func TestDataLimit_PrefersBoundedReaderSize(t *testing.T) {
+	bounded := utils.NewBoundedReader(bytes.NewReader(make([]byte, 8)), 8)
+	sb := &Superblock{Version: Version2, OffsetSize: 8, LengthSize: 8, EOFAddress: 1 << 40}
+
+	require.Equal(t, uint64(8), dataLimit(bounded, sb))
+}

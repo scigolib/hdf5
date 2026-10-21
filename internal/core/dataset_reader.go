@@ -268,9 +268,11 @@ func isFloat64Convertible(datatype *DatatypeMessage) bool {
 // read from the file. Both the count and the element size come from file
 // metadata, and a compact or empty layout can carry a huge count with no data
 // at all: sizing the result slice from that count reaches make() with a
-// terabyte request, and the runtime's large-allocation path is not preemptible,
-// so nothing in the caller can even time out (found by FuzzOpenFile:
-// make([]CompoundValue, 3.3e12) from a corrupted dataspace).
+// terabyte request. A failed allocation of that size is a fatal runtime throw
+// that no caller can recover, and where the mapping succeeds the call blocks
+// inside the runtime's allocation path; either way a caller-level timeout cannot
+// help (found by FuzzOpenFile: make([]CompoundValue, 3.3e12) from a corrupted
+// dataspace).
 func validateElementStorage(numElements, elemSize uint64, data []byte, what string) error {
 	if elemSize == 0 {
 		return fmt.Errorf("%s: element size is zero", what)
