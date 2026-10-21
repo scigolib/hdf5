@@ -285,9 +285,11 @@ func parseFractalHeapHeader(r io.ReaderAt, address uint64, sizeofSize, sizeofAdd
 
 	// Compute derived values
 	// Reference: H5HFhdr.c - H5HF__hdr_finish_init_phase1()
-	maxIndexBits := header.MaxHeapSize
-	//nolint:gosec // G115: safe conversion, maxIndexBits is uint16, result < 255
-	header.HeapOffsetSize = uint8((maxIndexBits + 7) / 8)
+	heapOffsetSize, err := core.FractalHeapOffsetSize(header.MaxHeapSize, sizeofSize)
+	if err != nil {
+		return nil, err
+	}
+	header.HeapOffsetSize = heapOffsetSize
 
 	// Heap length size is minimum of max direct block offset size and encoded max managed size
 	maxDirBlockOffsetSize := computeOffsetSize(header.MaxDirectBlockSize)

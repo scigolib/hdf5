@@ -785,10 +785,13 @@ func readFractalHeapHeaderRaw(r io.ReaderAt, addr uint64, sb *Superblock) (*frac
 	}
 	header.MaxHeapSize = sb.Endianness.Uint16(buf[offset : offset+2])
 
-	// Compute HeapOffsetSize from MaxHeapSize
-	// HeapOffsetSize = ceil(MaxHeapSize / 8)
-	//nolint:gosec // G115: MaxHeapSize is bounded by format specification
-	header.HeapOffsetSize = uint8((header.MaxHeapSize + 7) / 8)
+	// Compute HeapOffsetSize from MaxHeapSize; the parser rejects a heap size
+	// the file's length field cannot address instead of truncating it.
+	heapOffsetSize, err := FractalHeapOffsetSize(header.MaxHeapSize, sb.LengthSize)
+	if err != nil {
+		return nil, err
+	}
+	header.HeapOffsetSize = heapOffsetSize
 
 	// Compute HeapLengthSize
 	// HeapLengthSize = min(offsetSize(MaxDirectBlockSize), offsetSize(MaxManagedObjSize))

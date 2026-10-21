@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks and still described the retired `develop` branch flow; those checks now live in the
   maintainer's release tooling.
 
+### Fixed
+
+- A corrupt fractal heap header could claim a maximum heap size that the file's length field cannot
+  address: the offset width was computed in 16-bit arithmetic, so 65535 bits wrapped to a
+  zero-byte offset instead of failing. Both heap-header parsers now reject the value, matching the
+  C decoder's requirement that the size is non-zero and no wider than `8 × sizeof_size`.
+
 ## [v0.14.2] - 2026-10-21
 
 ### Security
