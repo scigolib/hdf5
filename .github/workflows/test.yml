@@ -148,7 +148,12 @@ jobs:
       run: go mod download
 
     - name: Run ${{ matrix.target }}
-      run: go test -run=^$ -fuzz=${{ matrix.target }} -fuzztime=60s ${{ matrix.package }}
+      # Minimization is off on purpose: Go also queues coverage-expanding inputs
+      # for minimization (internal/fuzz/fuzz.go), and its default budget equals
+      # this job's fuzz time, so a run can spend the whole 60 s minimizing a
+      # handful of inputs with the exec counter frozen. With 0, coverage results
+      # are admitted immediately and a crasher is saved unminimized.
+      run: go test -run=^$ -fuzz=${{ matrix.target }} -fuzztime=60s -fuzzminimizetime=0 ${{ matrix.package }}
 
     - name: Upload fuzz corpus
       if: failure()
