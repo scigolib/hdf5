@@ -118,6 +118,49 @@ jobs:
     - name: Vet linux/386
       run: GOOS=linux GOARCH=386 go vet ./...
 
+  # Native Go fuzzing - the safety net for issue #68 (ADR-003): a corrupted
+  # byte must produce an error, never a panic or a fatal allocation.
+  # Non-blocking until the targets prove stable; a crash uploads its reproducer.
+  fuzz:
+    name: Fuzz - ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    continue-on-error: true  # Non-blocking until the targets prove stable
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: .
+            target: FuzzOpenFile
+          - package: ./internal/core
+            target: FuzzParseAttributeMessage
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Set up Go
+      uses: actions/setup-go@v7
+      with:
+        go-version: '1.25'
+        cache: true
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run ${{ matrix.target }}
+      run: go test -run=^$ -fuzz=${{ matrix.target }} -fuzztime=60s ${{ matrix.package }}
+
+    - name: Upload fuzz corpus
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: fuzz-corpus-${{ matrix.target }}
+        path: |
+          testdata/fuzz
+          internal/core/testdata/fuzz
+        if-no-files-found: ignore
+        retention-days: 7
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
