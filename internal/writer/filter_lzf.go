@@ -246,8 +246,6 @@ func appendBackref(output []byte, offset, length int) []byte {
 //  3. If RRR != 111: short backref (3-8 bytes, offset from 13 bits)
 //  4. If 111: long backref (9-264 bytes, offset from 13 bits, length from next byte)
 //  5. Backrefs copy from (current_pos - offset) for specified length
-//
-//nolint:nestif,gocognit // LZF decompression algorithm has inherent complexity; refactor in TASK-055
 func lzfDecompress(input []byte) ([]byte, error) {
 	inLen := len(input)
 	if inLen == 0 {
@@ -258,69 +256,83 @@ func lzfDecompress(input []byte) ([]byte, error) {
 	// so we estimate 2x the input size as a starting point.
 	output := make([]byte, 0, inLen*2)
 
-	inPos := 0
-
-	for inPos < inLen {
-		// Read control byte.
+	for inPos := 0; inPos < inLen; {
+		// Read control byte; its top 3 bits select the segment type.
 		ctrl := input[inPos]
 		inPos++
 
-		// Check segment type based on top 3 bits.
 		if (ctrl & 0xE0) == 0 {
-			// Literal run: 000LLLLL
-			// RunLength = L + 1 (1-32 bytes).
-			runLen := int(ctrl) + 1
-
-			if inPos+runLen > inLen {
-				return nil, errors.New("lzf: truncated literal run")
+			literal, next, err := lzfLiteralRun(ctrl, input, inPos)
+			if err != nil {
+				return nil, err
 			}
-
-			output = append(output, input[inPos:inPos+runLen]...)
-			inPos += runLen
-		} else {
-			// Backreference (short or long).
-			if inPos >= inLen {
-				return nil, errors.New("lzf: truncated backreference")
-			}
-
-			// Read offset (13 bits across 2 bytes).
-			offsetHigh := int(ctrl & 0x1F) // Low 5 bits of control byte
-			offsetLow := int(input[inPos])
-			inPos++
-
-			offset := (offsetHigh << 8) | offsetLow
-			offset++ // Offset is 1-based in encoding
-
-			// Determine run length.
-			var runLen int
-			if (ctrl & 0xE0) == 0xE0 {
-				// Long backreference: 111OXXXX XXXXXXXX RRRRRRRR
-				// RunLength = R + 9 (9-264 bytes).
-				if inPos >= inLen {
-					return nil, errors.New("lzf: truncated long backreference")
-				}
-				runLen = int(input[inPos]) + 9
-				inPos++
-			} else {
-				// Short backreference: RRROXXXX XXXXXXXX
-				// RunLength = R + 2 (3-8 bytes).
-				runBits := (ctrl >> 5) & 0x07
-				runLen = int(runBits) + 2
-			}
-
-			// Validate offset.
-			if offset > len(output) {
-				return nil, fmt.Errorf("lzf: invalid offset %d (output size: %d)", offset, len(output))
-			}
-
-			// Copy from earlier position in output.
-			// Note: source and destination may overlap (for run-length encoding).
-			srcPos := len(output) - offset
-			for i := 0; i < runLen; i++ {
-				output = append(output, output[srcPos+i])
-			}
+			output = append(output, literal...)
+			inPos = next
+			continue
 		}
+
+		offset, runLen, next, err := lzfBackref(ctrl, input, inPos)
+		if err != nil {
+			return nil, err
+		}
+		inPos = next
+
+		if offset > len(output) {
+			return nil, fmt.Errorf("lzf: invalid offset %d (output size: %d)", offset, len(output))
+		}
+		output = appendBackrefRun(output, offset, runLen)
 	}
 
 	return output, nil
+}
+
+// lzfLiteralRun decodes a literal segment (000LLLLL): L+1 bytes that follow
+// the control byte. It returns those bytes and the position after them.
+func lzfLiteralRun(ctrl byte, input []byte, inPos int) ([]byte, int, error) {
+	runLen := int(ctrl) + 1 // 1-32 bytes.
+	if inPos+runLen > len(input) {
+		return nil, 0, errors.New("lzf: truncated literal run")
+	}
+
+	return input[inPos : inPos+runLen], inPos + runLen, nil
+}
+
+// lzfBackref decodes a short or long backreference and returns its offset, run
+// length and the position after the bytes it consumes.
+//
+//	Short: RRROXXXX XXXXXXXX          -> 3-8 bytes from offset 1-8192
+//	Long:  111OXXXX XXXXXXXX RRRRRRRR -> 9-264 bytes from offset 1-8192
+func lzfBackref(ctrl byte, input []byte, inPos int) (offset, runLen, next int, err error) {
+	if inPos >= len(input) {
+		return 0, 0, 0, errors.New("lzf: truncated backreference")
+	}
+
+	// Offset: 13 bits across the control byte and the next one, 1-based.
+	offset = (int(ctrl&0x1F) << 8) | int(input[inPos])
+	offset++
+	inPos++
+
+	if (ctrl & 0xE0) == 0xE0 {
+		if inPos >= len(input) {
+			return 0, 0, 0, errors.New("lzf: truncated long backreference")
+		}
+		runLen = int(input[inPos]) + 9 // Long: R+9, 9-264 bytes.
+		inPos++
+	} else {
+		runLen = int((ctrl>>5)&0x07) + 2 // Short: R+2, 3-8 bytes.
+	}
+
+	return offset, runLen, inPos, nil
+}
+
+// appendBackrefRun appends runLen bytes copied from offset bytes back in
+// output. Source and destination overlap by design: reading the bytes this
+// call has just appended is what turns a short pattern into a long run.
+func appendBackrefRun(output []byte, offset, runLen int) []byte {
+	srcPos := len(output) - offset
+	for i := 0; i < runLen; i++ {
+		output = append(output, output[srcPos+i])
+	}
+
+	return output
 }

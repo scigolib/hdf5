@@ -468,84 +468,21 @@ func writeAttributeWithCachedHeader(fw *FileWriter, objectAddr uint64, oh *core.
 // instead of searching for it in the object header.
 func writeDenseAttributeWithInfo(fw *FileWriter, _ uint64, _ *core.ObjectHeader,
 	attrInfo *core.AttributeInfoMessage, name string, value interface{}, sb *core.Superblock) error {
-	// Load existing fractal heap from file
-	heap := structures.NewWritableFractalHeap(64 * 1024)
-	err := heap.LoadFromFile(fw.writer.Reader(), attrInfo.FractalHeapAddr, sb)
+	heap, btree, err := loadDenseStorage(fw, attrInfo, sb)
 	if err != nil {
-		return fmt.Errorf("failed to load fractal heap: %w", err)
+		return err
 	}
 
-	// Load existing B-tree v2 from file
-	btree := structures.NewWritableBTreeV2(4096)
-	err = btree.LoadFromFile(fw.writer.Reader(), attrInfo.BTreeNameIndexAddr, sb)
+	attr, attrMsg, err := encodeDenseAttribute(fw, name, value, sb)
 	if err != nil {
-		return fmt.Errorf("failed to load B-tree: %w", err)
+		return err
 	}
 
-	// Prepare new attribute (handles []string via Global Heap).
-	datatype, dataspace, data, err := inferAndEncodeAttributeValue(fw, value)
-	if err != nil {
-		return fmt.Errorf("failed to infer/encode attribute: %w", err)
+	if err := upsertDenseRecord(heap, btree, name, attr, attrMsg); err != nil {
+		return err
 	}
 
-	attr := &core.Attribute{
-		Name:      name,
-		Datatype:  datatype,
-		Dataspace: dataspace,
-		Data:      data,
-	}
-
-	// Encode attribute message
-	attrMsg, err := core.EncodeAttributeFromStruct(attr, sb)
-	if err != nil {
-		return fmt.Errorf("failed to encode attribute: %w", err)
-	}
-
-	// Check if attribute already exists (upsert semantics)
-	_, exists := btree.SearchRecord(name)
-
-	if exists { //nolint:nestif // Clear upsert logic
-		// Modify existing attribute (Phase 2)
-		// Set the encoded data in attr for ModifyDenseAttribute
-		attr.Data = attrMsg
-		err = core.ModifyDenseAttribute(heap, btree, name, attr)
-		if err != nil {
-			return fmt.Errorf("failed to modify existing dense attribute: %w", err)
-		}
-	} else {
-		// Create new attribute (Phase 3 - original RMW code)
-
-		// Insert into fractal heap
-		heapIDBytes, insertErr := heap.InsertObject(attrMsg)
-		if insertErr != nil {
-			return fmt.Errorf("failed to insert into heap: %w", insertErr)
-		}
-
-		// Convert heap ID to uint64 for B-tree
-		if len(heapIDBytes) != 8 {
-			return fmt.Errorf("unexpected heap ID length: %d bytes", len(heapIDBytes))
-		}
-		heapID := binary.LittleEndian.Uint64(heapIDBytes)
-
-		// Insert into B-tree
-		err = btree.InsertRecord(name, heapID)
-		if err != nil {
-			return fmt.Errorf("failed to insert into B-tree: %w", err)
-		}
-	}
-
-	// Write updated structures back to file (IN-PLACE using WriteAt)
-	err = heap.WriteAt(fw.writer, sb)
-	if err != nil {
-		return fmt.Errorf("failed to write updated heap: %w", err)
-	}
-
-	err = btree.WriteAt(fw.writer, sb)
-	if err != nil {
-		return fmt.Errorf("failed to write updated B-tree: %w", err)
-	}
-
-	return nil
+	return flushDenseStorage(fw, heap, btree, sb)
 }
 
 // deleteAttribute is the internal implementation for deleting attributes.
@@ -734,46 +671,73 @@ func deleteDenseAttributeImpl(fw *FileWriter, attrInfo *core.AttributeInfoMessag
 // (i.e., files that were created, closed, and reopened).
 //
 // Reference: H5Adense.c - H5A__dense_insert().
-//
-//nolint:gocyclo,cyclop,gocognit // Complex RMW logic with multiple verification steps; refactor in TASK-055
 func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
-	// Step 1: Find Attribute Info Message
-	var attrInfo *core.AttributeInfoMessage
+	attrInfo, err := findDenseAttributeInfo(oh, sb)
+	if err != nil {
+		return err
+	}
+
+	heap, btree, err := loadDenseStorage(fw, attrInfo, sb)
+	if err != nil {
+		return err
+	}
+
+	attr, attrMsg, err := encodeDenseAttribute(fw, name, value, sb)
+	if err != nil {
+		return err
+	}
+
+	if err := upsertDenseRecord(heap, btree, name, attr, attrMsg); err != nil {
+		return err
+	}
+
+	return flushDenseStorage(fw, heap, btree, sb)
+}
+
+// findDenseAttributeInfo parses the Attribute Info message that points at an
+// object's dense attribute storage.
+func findDenseAttributeInfo(oh *core.ObjectHeader, sb *core.Superblock) (*core.AttributeInfoMessage, error) {
 	for _, msg := range oh.Messages {
-		if msg.Type == core.MsgAttributeInfo {
-			// Parse the message data
-			parsed, err := core.ParseAttributeInfoMessage(msg.Data, sb)
-			if err != nil {
-				return fmt.Errorf("failed to parse attribute info message: %w", err)
-			}
-			attrInfo = parsed
-			break
+		if msg.Type != core.MsgAttributeInfo {
+			continue
 		}
+
+		attrInfo, err := core.ParseAttributeInfoMessage(msg.Data, sb)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse attribute info message: %w", err)
+		}
+
+		return attrInfo, nil
 	}
 
-	if attrInfo == nil {
-		return fmt.Errorf("attribute info message not found (dense storage not initialized)")
-	}
+	return nil, fmt.Errorf("attribute info message not found (dense storage not initialized)")
+}
 
-	// Step 2: Load existing fractal heap from file
+// loadDenseStorage loads the fractal heap and name-index B-tree backing an
+// object's dense attributes.
+func loadDenseStorage(fw *FileWriter, attrInfo *core.AttributeInfoMessage,
+	sb *core.Superblock) (*structures.WritableFractalHeap, *structures.WritableBTreeV2, error) {
 	heap := structures.NewWritableFractalHeap(64 * 1024) // Match size from dense attribute writer
-	err := heap.LoadFromFile(fw.writer.Reader(), attrInfo.FractalHeapAddr, sb)
-	if err != nil {
-		return fmt.Errorf("failed to load fractal heap: %w", err)
+	if err := heap.LoadFromFile(fw.writer.Reader(), attrInfo.FractalHeapAddr, sb); err != nil {
+		return nil, nil, fmt.Errorf("failed to load fractal heap: %w", err)
 	}
 
-	// Step 3: Load existing B-tree v2 from file
 	btree := structures.NewWritableBTreeV2(4096) // Match size from dense attribute writer
-	err = btree.LoadFromFile(fw.writer.Reader(), attrInfo.BTreeNameIndexAddr, sb)
-	if err != nil {
-		return fmt.Errorf("failed to load B-tree: %w", err)
+	if err := btree.LoadFromFile(fw.writer.Reader(), attrInfo.BTreeNameIndexAddr, sb); err != nil {
+		return nil, nil, fmt.Errorf("failed to load B-tree: %w", err)
 	}
 
-	// Step 4: Prepare new attribute (handles []string via Global Heap).
+	return heap, btree, nil
+}
+
+// encodeDenseAttribute prepares the value and encodes the attribute message.
+// The encoded message is what ModifyDenseAttribute stores for an existing name.
+func encodeDenseAttribute(fw *FileWriter, name string, value interface{},
+	sb *core.Superblock) (*core.Attribute, []byte, error) {
 	datatype, dataspace, data, err := inferAndEncodeAttributeValue(fw, value)
 	if err != nil {
-		return fmt.Errorf("failed to infer/encode attribute: %w", err)
+		return nil, nil, fmt.Errorf("failed to infer/encode attribute: %w", err)
 	}
 
 	attr := &core.Attribute{
@@ -783,57 +747,54 @@ func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 		Data:      data,
 	}
 
-	// Encode attribute message
 	attrMsg, err := core.EncodeAttributeFromStruct(attr, sb)
 	if err != nil {
-		return fmt.Errorf("failed to encode attribute: %w", err)
+		return nil, nil, fmt.Errorf("failed to encode attribute: %w", err)
 	}
 
-	// Check if attribute already exists (upsert semantics)
-	_, exists := btree.SearchRecord(name)
+	return attr, attrMsg, nil
+}
 
-	if exists { //nolint:nestif // Clear upsert logic
-		// Modify existing attribute (Phase 2)
+// upsertDenseRecord modifies the attribute when the name index already holds
+// it and appends a new heap object and B-tree record otherwise.
+func upsertDenseRecord(heap *structures.WritableFractalHeap, btree *structures.WritableBTreeV2,
+	name string, attr *core.Attribute, attrMsg []byte) error {
+	if _, exists := btree.SearchRecord(name); exists {
 		attr.Data = attrMsg
-		err = core.ModifyDenseAttribute(heap, btree, name, attr)
-		if err != nil {
+		if err := core.ModifyDenseAttribute(heap, btree, name, attr); err != nil {
 			return fmt.Errorf("failed to modify existing dense attribute: %w", err)
 		}
-	} else {
-		// Create new attribute (Phase 3 - original code)
 
-		// Insert into fractal heap
-		heapIDBytes, insertErr := heap.InsertObject(attrMsg)
-		if insertErr != nil {
-			return fmt.Errorf("failed to insert into heap: %w", insertErr)
-		}
-
-		// Convert heap ID to uint64 for B-tree
-		if len(heapIDBytes) != 8 {
-			return fmt.Errorf("unexpected heap ID length: %d bytes", len(heapIDBytes))
-		}
-		heapID := binary.LittleEndian.Uint64(heapIDBytes)
-
-		// Insert into B-tree
-		err = btree.InsertRecord(name, heapID)
-		if err != nil {
-			return fmt.Errorf("failed to insert into B-tree: %w", err)
-		}
+		return nil
 	}
 
-	// Step 5: Write updated structures back to file (IN-PLACE using WriteAt)
-	// NOTE: WriteAt() writes to the addresses where structures were loaded from
-	// This is true Read-Modify-Write - no new allocations!
-
-	// Write heap in-place at loaded address
-	err = heap.WriteAt(fw.writer, sb)
+	// Insert into fractal heap.
+	heapIDBytes, err := heap.InsertObject(attrMsg)
 	if err != nil {
+		return fmt.Errorf("failed to insert into heap: %w", err)
+	}
+
+	// Convert heap ID to uint64 for B-tree.
+	if len(heapIDBytes) != 8 {
+		return fmt.Errorf("unexpected heap ID length: %d bytes", len(heapIDBytes))
+	}
+
+	if err := btree.InsertRecord(name, binary.LittleEndian.Uint64(heapIDBytes)); err != nil {
+		return fmt.Errorf("failed to insert into B-tree: %w", err)
+	}
+
+	return nil
+}
+
+// flushDenseStorage writes the heap and B-tree back in place, at the addresses
+// they were loaded from: a true read-modify-write, no new allocations.
+func flushDenseStorage(fw *FileWriter, heap *structures.WritableFractalHeap,
+	btree *structures.WritableBTreeV2, sb *core.Superblock) error {
+	if err := heap.WriteAt(fw.writer, sb); err != nil {
 		return fmt.Errorf("failed to write updated heap: %w", err)
 	}
 
-	// Write B-tree in-place at loaded address
-	err = btree.WriteAt(fw.writer, sb)
-	if err != nil {
+	if err := btree.WriteAt(fw.writer, sb); err != nil {
 		return fmt.Errorf("failed to write updated B-tree: %w", err)
 	}
 
