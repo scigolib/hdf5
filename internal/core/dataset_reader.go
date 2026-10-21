@@ -81,12 +81,9 @@ func ReadDatasetFloat64(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]
 		rawData = layout.CompactData
 
 	case layout.IsContiguous():
-		// Data is stored contiguously at specific address.
-		dataSize := totalElements * uint64(datatype.Size)
-		rawData = make([]byte, dataSize)
-
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		_, err := r.ReadAt(rawData, int64(layout.DataAddress))
+		// The size and the region both come from file metadata, so they are
+		// validated before the buffer is allocated (ADR-003, cf. H5D__contig_check).
+		rawData, err = readContiguousDatasetData(r, sb, layout, totalElements, uint64(datatype.Size))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read contiguous data: %w", err)
 		}
@@ -117,6 +114,28 @@ func ConvertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uin
 
 // convertToFloat64 converts raw bytes to float64 array based on datatype.
 func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uint64) ([]float64, error) {
+	// ADR-003 (issue #68): numElements comes from the dataspace, i.e. from file
+	// metadata, so the result buffer sized from it is validated before it is
+	// allocated — a failed Go allocation is a fatal runtime error, unlike the C
+	// library's recoverable NULL malloc. The support check comes first so an
+	// unsupported datatype keeps its own error instead of a size mismatch; it
+	// also guarantees that every path reaching the allocation is one where
+	// datatype.Size is the converter's element width and the guard below is
+	// therefore meaningful.
+	if !isFloat64Convertible(datatype) {
+		return nil, fmt.Errorf("unsupported datatype for conversion to float64: %s", datatype)
+	}
+
+	required, err := utils.SafeMultiply(numElements, uint64(datatype.Size))
+	if err != nil {
+		return nil, fmt.Errorf("data size overflow (convert to float64): %w", err)
+	}
+
+	if required > uint64(len(rawData)) {
+		return nil, fmt.Errorf("data truncated: need %d bytes for %d elements, have %d",
+			required, numElements, len(rawData))
+	}
+
 	result := make([]float64, numElements)
 	byteOrder := datatype.GetByteOrder()
 
@@ -224,6 +243,54 @@ func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uin
 	return result, nil
 }
 
+// isFloat64Convertible reports whether convertToFloat64 can convert the
+// datatype. It mirrors the switch in convertToFloat64 so the allocation guard
+// runs only where Size is the converter's element width (1/2/4/8-byte
+// fixed-point, 4/8-byte float).
+func isFloat64Convertible(datatype *DatatypeMessage) bool {
+	if datatype.IsFloat64() || datatype.IsFloat32() {
+		return true
+	}
+
+	if !datatype.IsFixedPoint() {
+		return false
+	}
+
+	switch datatype.Size {
+	case 1, 2, 4, 8:
+		return true
+	default:
+		return false
+	}
+}
+
+// validateElementStorage rejects an element count that cannot fit in the bytes
+// read from the file. Both the count and the element size come from file
+// metadata, and a compact or empty layout can carry a huge count with no data
+// at all: sizing the result slice from that count reaches make() with a
+// terabyte request. A failed allocation of that size is a fatal runtime throw
+// that no caller can recover, and where the mapping succeeds the call blocks
+// inside the runtime's allocation path; either way a caller-level timeout cannot
+// help (found by FuzzOpenFile: make([]CompoundValue, 3.3e12) from a corrupted
+// dataspace).
+func validateElementStorage(numElements, elemSize uint64, data []byte, what string) error {
+	if elemSize == 0 {
+		return fmt.Errorf("%s: element size is zero", what)
+	}
+
+	required, err := utils.SafeMultiply(numElements, elemSize)
+	if err != nil {
+		return fmt.Errorf("%s: size overflow: %w", what, err)
+	}
+
+	if required > uint64(len(data)) {
+		return fmt.Errorf("%s: data size mismatch: need %d bytes for %d elements, have %d",
+			what, required, numElements, len(data))
+	}
+
+	return nil
+}
+
 // ReadDatasetInfo returns dataset metadata without reading actual data.
 func ReadDatasetInfo(header *ObjectHeader, sb *Superblock) (*DatasetInfo, error) {
 	var datatypeMsg, dataspaceMsg, layoutMsg *HeaderMessage
@@ -288,6 +355,23 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 	// Note: chunk dimensions may include an extra dimension for datatype size.
 	// (HDF5 stores "fastest-varying dimension" as bytes, see H5Dbtree.c comments).
 	ndims := len(layout.ChunkSize)
+
+	// The chunk grid must cover the dataspace rank: the per-chunk copy below
+	// slices the chunk dimensions and scaled coordinates by the dataspace rank,
+	// so a shorter chunk grid panics (review finding).
+	if ndims < len(dataspace.Dimensions) {
+		return nil, fmt.Errorf("chunk rank %d is smaller than dataspace rank %d",
+			ndims, len(dataspace.Dimensions))
+	}
+
+	// Only the version 1 B-tree index is read here. A version 4 layout can name
+	// a fixed/extensible array or a v2 B-tree; the address in that case points
+	// at a different structure, so reading it as a B-tree would return garbage.
+	if layout.ChunkIndexType != ChunkIndexBTREE {
+		return nil, fmt.Errorf("unsupported chunk index type %d: only the v1 B-tree index is supported",
+			layout.ChunkIndexType)
+	}
+
 	btree, err := ParseBTreeV1Node(r, layout.DataAddress, sb.OffsetSize, ndims, layout.ChunkSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse B-tree: %w", err)

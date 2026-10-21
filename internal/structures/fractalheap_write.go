@@ -10,6 +10,7 @@ import (
 	"io"
 
 	"github.com/scigolib/hdf5/internal/core"
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // Fractal heap write constants.
@@ -705,9 +706,17 @@ func (fh *WritableFractalHeap) writeDirectBlockAt(writer Writer, addr uint64, sb
 	checksumSize := 4
 
 	// Total size is FULL block size (not just used portion!)
-	// This matches HDF5 C library behavior - blocks are fixed size
-	//nolint:gosec // G115: block size from header, max ~2GB
-	totalSize := int(fh.DirectBlock.Size)
+	// This matches HDF5 C library behavior - blocks are fixed size.
+	//
+	// In the read-modify-write path Size is the header's StartingBlockSize and
+	// LoadFromFile has already bounded it through the block funnel; a fresh heap
+	// takes it from the caller of NewWritableFractalHeap. SafeInt keeps the
+	// conversion sound for both: a size that does not fit in int could never
+	// size a Go slice anyway.
+	totalSize, err := utils.SafeInt(fh.DirectBlock.Size, "fractal heap direct block")
+	if err != nil {
+		return err
+	}
 
 	buf := make([]byte, totalSize)
 	offset := 0
@@ -745,18 +754,42 @@ func (fh *WritableFractalHeap) writeDirectBlockAt(writer Writer, addr uint64, sb
 //
 // Reference: H5HFdblock.c - H5HF__cache_dblock_deserialize().
 func (fh *WritableFractalHeap) readDirectBlockFromFile(reader io.ReaderAt, address, blockSize uint64,
-	heapOffsetSize, fileOffsetSize uint8, endianness binary.ByteOrder, headerAddr uint64) (*DirectBlock, error) {
+	heapOffsetSize, fileOffsetSize uint8, endianness binary.ByteOrder, headerAddr, maxDirectBlockSize uint64) (*DirectBlock, error) {
 	if address == 0 || address == ^uint64(0) {
 		return nil, fmt.Errorf("invalid direct block address: 0x%X", address)
 	}
 
-	// Read entire block (header + data)
-	//nolint:gosec // G115: safe conversion, blockSize from HDF5 header (max ~2GB per block)
-	totalSize := int(blockSize)
-	buf := make([]byte, totalSize)
-	//nolint:gosec // G115: uint64 to int64 conversion safe for file offsets
-	if _, err := reader.ReadAt(buf, int64(address)); err != nil {
+	// ADR-003: blockSize is the heap header's StartingBlockSize, i.e. file
+	// metadata, and it used to size the buffer unchecked — on a 32-bit target a
+	// value above math.MaxInt32 wraps negative, and on any target a corrupt
+	// value asks for an impossible allocation, which in Go is a fatal throw
+	// rather than the C library's recoverable malloc failure. The header's own
+	// MaxDirectBlockSize is the authoritative bound (the read-only path in
+	// FractalHeap.readDirectBlock applies the same one); utils.MaxChunkSize is
+	// the outer cap when the header reports no maximum.
+	maxSize := uint64(utils.MaxChunkSize)
+	if maxDirectBlockSize != 0 {
+		if blockSize > maxDirectBlockSize {
+			return nil, fmt.Errorf("direct block size %d exceeds MaxDirectBlockSize %d",
+				blockSize, maxDirectBlockSize)
+		}
+		maxSize = maxDirectBlockSize
+	}
+
+	// Read entire block (header + data) through the block funnel, which also
+	// rejects an unrepresentable size, an undefined address and a region
+	// outside the file.
+	buf, err := core.ReadBlock(reader, nil, address, blockSize, maxSize, "fractal heap direct block")
+	if err != nil {
 		return nil, fmt.Errorf("failed to read direct block: %w", err)
+	}
+	totalSize := len(buf)
+
+	// The fields below are decoded by direct indexing, and the block is assumed
+	// to carry its trailing checksum, so the buffer must hold the whole header.
+	headerSize := 4 + 1 + int(fileOffsetSize) + int(heapOffsetSize) + 4
+	if totalSize < headerSize {
+		return nil, fmt.Errorf("direct block too short: %d bytes, need %d", totalSize, headerSize)
 	}
 
 	dblock := &DirectBlock{}
@@ -845,7 +878,8 @@ func (fh *WritableFractalHeap) LoadFromFile(reader io.ReaderAt, address uint64, 
 
 	// Read the direct block manually (readDirectBlock is private)
 	dblock, err := fh.readDirectBlockFromFile(reader, readHeap.Header.RootBlockAddr, readHeap.Header.StartingBlockSize,
-		readHeap.Header.HeapOffsetSize, sb.OffsetSize, sb.Endianness, readHeap.headerAddr)
+		readHeap.Header.HeapOffsetSize, sb.OffsetSize, sb.Endianness, readHeap.headerAddr,
+		readHeap.Header.MaxDirectBlockSize)
 	if err != nil {
 		return fmt.Errorf("failed to read direct block: %w", err)
 	}

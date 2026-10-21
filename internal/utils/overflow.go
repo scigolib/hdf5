@@ -28,6 +28,38 @@ func SafeMultiply(a, b uint64) (uint64, error) {
 	return a * b, nil
 }
 
+// SafeAdd adds two uint64 values and returns the result if no overflow occurs.
+// Returns 0 and an error if the sum would wrap.
+func SafeAdd(a, b uint64) (uint64, error) {
+	if a > math.MaxUint64-b {
+		return 0, fmt.Errorf("addition overflow: %d + %d exceeds uint64 max", a, b)
+	}
+
+	return a + b, nil
+}
+
+// SafeInt converts a size read from file metadata to int, rejecting values the
+// platform cannot represent.
+//
+// On a 32-bit target int is 32 bits, so a uint64 or uint32 size above
+// math.MaxInt32 wraps negative, and a bounds check of the form
+// offset+int(size) > len(data) then passes because the sum has turned small.
+// The slice expression that follows panics; where the value sizes an
+// allocation, make() does. The comparison is written against math.MaxInt, so
+// it is evaluated in the target's own width and accepts exactly the values
+// that fit.
+//
+// This is a representability guard, not a policy cap: a caller that allocates
+// from the result still applies its own semantic bound (ValidateBufferSize for
+// heap sizes, or ReadBlock for block reads).
+func SafeInt(size uint64, what string) (int, error) {
+	if size > uint64(math.MaxInt) {
+		return 0, fmt.Errorf("%s: size %d exceeds the platform limit", what, size)
+	}
+
+	return int(size), nil
+}
+
 // CalculateChunkSize safely calculates the total chunk size by multiplying dimensions and element size.
 // Returns an error if overflow would occur.
 func CalculateChunkSize(dimensions []uint32, elementSize uint64) (uint64, error) {
@@ -117,6 +149,13 @@ const (
 
 	// MaxHyperslabElements limits hyperslab selection to 1 billion elements.
 	MaxHyperslabElements = 1_000_000_000
+
+	// MaxChunkCoordinates limits the number of chunk descriptors one call may
+	// materialize. Each descriptor costs a slice header plus the rank in uint64,
+	// so 10 million descriptors is on the order of a gigabyte — the point where
+	// a caller should iterate with ChunkIterator instead of asking for one list
+	// (ADR-003: one policy, stated where it applies).
+	MaxChunkCoordinates = 10_000_000
 )
 
 // ValidateHyperslabBounds validates hyperslab selection bounds.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/scigolib/hdf5/internal/core"
 	"github.com/scigolib/hdf5/internal/utils"
 )
 
@@ -417,7 +418,11 @@ func (fh *FractalHeap) readManagedObject(id *HeapID) ([]byte, error) {
 		return nil, fmt.Errorf("object offset 0x%X beyond block data (size: %d)", relativeOffset, len(dblock.Data))
 	}
 
-	if relativeOffset+id.Length > uint64(len(dblock.Data)) {
+	// id.Length comes from the heap ID. The subtraction form keeps the check
+	// overflow-free, and passing it bounds the allocation below by an in-memory
+	// buffer (the direct block's data area) rather than by a number read from
+	// the file.
+	if id.Length > uint64(len(dblock.Data))-relativeOffset {
 		return nil, fmt.Errorf("object extends beyond block data (offset: 0x%X, length: %d, block size: %d)",
 			relativeOffset, id.Length, len(dblock.Data))
 	}
@@ -453,17 +458,35 @@ func (fh *FractalHeap) readDirectBlock(address, blockSize uint64) (*DirectBlock,
 		return nil, fmt.Errorf("invalid direct block address: 0x%X", address)
 	}
 
-	// Calculate header size (currently not used but kept for documentation)
-	// Signature (4) + Version (1) + Heap Header Address (sizeof_addr) + Block Offset (heap_off_size)
-	_ = 5 + int(fh.sizeofAddr) + int(fh.Header.HeapOffsetSize) // headerSize calculated but not used yet
+	// Header size: signature (4) + version (1) + heap header address
+	// (sizeof_addr) + block offset (heap_off_size). Matches the parse below.
+	headerSize := 5 + int(fh.sizeofAddr) + int(fh.Header.HeapOffsetSize)
 
-	// Read entire block (header + data)
-	//nolint:gosec // G115: safe conversion, blockSize from HDF5 header (max ~2GB per block)
-	totalSize := int(blockSize)
-	buf := make([]byte, totalSize)
-	//nolint:gosec // G115: uint64 to int64 conversion safe for file offsets
-	if _, err := fh.reader.ReadAt(buf, int64(address)); err != nil {
+	// ADR-003: blockSize comes from the heap header (StartingBlockSize for the
+	// root direct block), and it used to size the allocation unchecked. The
+	// heap's own MaxDirectBlockSize is the authoritative bound — the C cache
+	// (H5HF__cache_dblock_deserialize) never reads more than the doubling table
+	// allows — and utils.MaxChunkSize stays the outer cap when the header does
+	// not report one (zero).
+	maxSize := uint64(utils.MaxChunkSize)
+	if fh.Header.MaxDirectBlockSize != 0 {
+		if blockSize > fh.Header.MaxDirectBlockSize {
+			return nil, fmt.Errorf("direct block size %d exceeds MaxDirectBlockSize %d",
+				blockSize, fh.Header.MaxDirectBlockSize)
+		}
+		maxSize = fh.Header.MaxDirectBlockSize
+	}
+
+	// Read entire block (header + data). The C library survives a corrupt size
+	// only because malloc returns NULL; ReadBlock is the Go equivalent of that
+	// plus the file region check (ADR-003, documented deviation).
+	buf, err := core.ReadBlock(fh.reader, nil, address, blockSize, maxSize, "fractal heap direct block")
+	if err != nil {
 		return nil, fmt.Errorf("failed to read direct block: %w", err)
+	}
+
+	if len(buf) < headerSize {
+		return nil, fmt.Errorf("direct block too short: %d bytes, need %d", len(buf), headerSize)
 	}
 
 	dblock := &DirectBlock{}
@@ -506,10 +529,17 @@ func (fh *FractalHeap) readDirectBlock(address, blockSize uint64) (*DirectBlock,
 	// dblock.Checksum = fh.endianness.Uint32(buf[totalSize-4 : totalSize])
 
 	// Data (remaining bytes, excluding checksum if present)
-	dataEnd := totalSize
+	dataEnd := len(buf)
 	if fh.Header.ChecksumDirectBlocks {
 		dataEnd -= 4
 	}
+
+	// The header-size check above guarantees the header fits; this one covers a
+	// checksum that would otherwise move dataEnd before the end of the header.
+	if dataEnd < offset {
+		return nil, fmt.Errorf("direct block too short for header and checksum: %d bytes", len(buf))
+	}
+
 	dblock.Data = make([]byte, dataEnd-offset)
 	copy(dblock.Data, buf[offset:dataEnd])
 

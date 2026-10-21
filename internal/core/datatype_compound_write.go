@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 )
 
 // CompoundFieldDef defines a field for compound datatype creation.
@@ -45,9 +46,11 @@ func EncodeCompoundDatatypeV3(totalSize uint32, fields []CompoundFieldDef) ([]by
 		return nil, errors.New("compound datatype size cannot be 0")
 	}
 
-	// Validate field count fits in uint32 (version 3 uses uint32)
-	if len(fields) > 0xFFFFFFFF {
-		return nil, fmt.Errorf("too many fields: %d (max: %d)", len(fields), 0xFFFFFFFF)
+	// Validate field count fits in uint32 (version 3 uses uint32).
+	// Compare via uint64 so the check compiles on 32-bit targets, where len
+	// cannot exceed math.MaxInt32 and the branch is therefore dead but valid.
+	if uint64(len(fields)) > math.MaxUint32 {
+		return nil, fmt.Errorf("too many fields: %d (max: %d)", len(fields), uint64(math.MaxUint32))
 	}
 
 	// Calculate properties size (all member definitions)

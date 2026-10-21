@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/scigolib/hdf5/internal/core"
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // IndirectBlock represents a fractal heap indirect block (read-only).
@@ -246,16 +247,42 @@ func (wb *WritableIndirectBlock) WriteAt(writer Writer, sb *core.Superblock, hea
 //
 // Reference: H5HFcache.c - H5HF__cache_iblock_serialize().
 func (wb *WritableIndirectBlock) writeAt(writer Writer, address uint64, sb *core.Superblock, heapOffsetSize uint8) error {
-	// Calculate size
+	// Calculate size. Every term is computed in uint64: a wrapped sum could stay
+	// positive (entriesSize wrapping into [-17,-1] cancels part of the header on
+	// a 32-bit target), pass the cap check and leave an undersized buffer that
+	// panics in the copy below (review finding).
 	numEntries := len(wb.ChildAddresses)
-	headerSize := 5 + int(sb.OffsetSize) + int(heapOffsetSize)
-	entriesSize := numEntries * int(sb.OffsetSize)
-	checksumSize := 0
+	headerSize := uint64(5) + uint64(sb.OffsetSize) + uint64(heapOffsetSize)
+	checksumSize := uint64(0)
 	if wb.Header.ChecksumEnabled {
 		checksumSize = 4
 	}
 
-	totalSize := headerSize + entriesSize + checksumSize
+	entriesSize, err := utils.SafeMultiply(uint64(numEntries), uint64(sb.OffsetSize))
+	if err != nil {
+		return fmt.Errorf("fractal heap indirect block: %w", err)
+	}
+
+	total, err := utils.SafeAdd(headerSize, entriesSize)
+	if err != nil {
+		return fmt.Errorf("fractal heap indirect block: %w", err)
+	}
+
+	total, err = utils.SafeAdd(total, checksumSize)
+	if err != nil {
+		return fmt.Errorf("fractal heap indirect block: %w", err)
+	}
+
+	if err := utils.ValidateBufferSize(total, utils.MaxChunkSize,
+		"fractal heap indirect block"); err != nil {
+		return err
+	}
+
+	totalSize, err := utils.SafeInt(total, "fractal heap indirect block")
+	if err != nil {
+		return err
+	}
+
 	buf := make([]byte, totalSize)
 	offset := 0
 
@@ -314,19 +341,70 @@ func ParseIndirectBlock(reader io.ReaderAt, address uint64, numRows, tableWidth 
 		return nil, fmt.Errorf("invalid indirect block address: 0x%X", address)
 	}
 
-	// Calculate block size
-	numEntries := int(numRows) * int(tableWidth)
-	headerSize := 5 + int(sizeofAddr) + int(heapOffsetSize)
-	entriesSize := numEntries * int(sizeofAddr)
-	// Assume checksum present (common case)
-	totalSize := headerSize + entriesSize + 4
+	// Calculate block size. numRows and tableWidth are uint16 fields from the
+	// heap header, so their product exceeds int on a 32-bit platform;
+	// SafeMultiply keeps the arithmetic in uint64 until ReadBlock bounds it.
+	numEntries, err := utils.SafeMultiply(uint64(numRows), uint64(tableWidth))
+	if err != nil {
+		return nil, fmt.Errorf("indirect block entry count: %w", err)
+	}
 
-	// Read block data
-	buf := make([]byte, totalSize)
-	//nolint:gosec // G115: uint64 to int64 conversion safe for file offsets
-	if _, err := reader.ReadAt(buf, int64(address)); err != nil {
+	headerSize := 5 + int(sizeofAddr) + int(heapOffsetSize)
+	entriesSize, err := utils.SafeMultiply(numEntries, uint64(sizeofAddr))
+	if err != nil {
+		return nil, fmt.Errorf("indirect block entry size: %w", err)
+	}
+
+	// The metadata body (prefix + child addresses) is the part whose size is
+	// computed from the doubling table; the checksum is an optional tail, read
+	// separately below.
+	//nolint:gosec // G115: headerSize is bounded by 5+255+255, well within uint64
+	bodySize := uint64(headerSize) + entriesSize
+
+	// ADR-003: an indirect block has no self-describing size; it is computed
+	// from the doubling table, whose uint16 fields allow a claim of tens of
+	// gigabytes. The heap header's log2 MaxHeapSize is not available here, so
+	// utils.MaxChunkSize is the outer cap. In C the same size reaches malloc,
+	// which returns NULL on failure; Go's allocator would kill the process.
+	buf, err := core.ReadBlock(reader, nil, address, bodySize, utils.MaxChunkSize,
+		"fractal heap indirect block")
+	if err != nil {
 		return nil, fmt.Errorf("failed to read indirect block: %w", err)
 	}
+
+	if len(buf) < headerSize {
+		return nil, fmt.Errorf("indirect block too short: %d bytes, need %d", len(buf), headerSize)
+	}
+
+	// The format always stores a metadata checksum after the child addresses:
+	// H5HF_MAN_INDIRECT_SIZE includes it (H5HFpkg.h:119-133) and
+	// H5HF__cache_iblock_deserialize decodes it unconditionally (H5HFcache.c).
+	// This library's MVP writer, however, leaves
+	// WritableIndirectBlockHeader.ChecksumEnabled false and emits no checksum,
+	// so the tail is probed: four readable bytes after the body set the flag.
+	// A successful probe only proves those bytes exist — it cannot tell which
+	// writer produced the block, and the flag is advisory — while the body
+	// above, not the probe, is what bounds the allocation.
+	var checksumPresent bool
+	if probeAddr, addErr := utils.SafeAdd(address, bodySize); addErr == nil {
+		if _, probeErr := core.ReadBlock(reader, nil, probeAddr, 4, utils.MaxChunkSize,
+			"fractal heap indirect block checksum"); probeErr == nil {
+			checksumPresent = true
+		}
+	}
+
+	// The on-disk table holds sizeofAddr bytes per entry, but Entries widens
+	// every address to a uint64, so bound the in-memory table by the same 1 GB
+	// ceiling before materializing it.
+	if numEntries > 0 {
+		if err := utils.ValidateBufferSize(numEntries*8, utils.MaxChunkSize,
+			"fractal heap indirect block entries"); err != nil {
+			return nil, err
+		}
+	}
+
+	//nolint:gosec // G115: numEntries*8 was just capped at MaxChunkSize, so it fits in int on every platform
+	numEntriesInt := int(numEntries)
 
 	offset := 0
 	iblock := &IndirectBlock{}
@@ -366,15 +444,15 @@ func ParseIndirectBlock(reader io.ReaderAt, address uint64, numRows, tableWidth 
 	iblock.Header.TableWidth = tableWidth
 
 	// Child Block Addresses (K×M entries, sizeof_addr each)
-	iblock.Entries = make([]uint64, numEntries)
-	for i := 0; i < numEntries; i++ {
+	iblock.Entries = make([]uint64, numEntriesInt)
+	for i := 0; i < numEntriesInt; i++ {
 		iblock.Entries[i] = readUint(buf[offset:offset+int(sizeofAddr)], int(sizeofAddr), endianness)
 		offset += int(sizeofAddr)
 	}
 
 	// Checksum (4 bytes) - validate if present
 	// For MVP: skip validation, just note presence
-	iblock.Header.ChecksumPresent = (totalSize == headerSize+entriesSize+4)
+	iblock.Header.ChecksumPresent = checksumPresent
 
 	return iblock, nil
 }

@@ -247,7 +247,7 @@ func appendBackref(output []byte, offset, length int) []byte {
 //  4. If 111: long backref (9-264 bytes, offset from 13 bits, length from next byte)
 //  5. Backrefs copy from (current_pos - offset) for specified length
 //
-//nolint:nestif // LZF decompression algorithm has inherent complexity
+//nolint:nestif,gocognit // LZF decompression algorithm has inherent complexity; refactor in TASK-055
 func lzfDecompress(input []byte) ([]byte, error) {
 	inLen := len(input)
 	if inLen == 0 {

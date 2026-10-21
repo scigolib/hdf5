@@ -86,6 +86,86 @@ jobs:
     - name: Run C interop tests
       run: go test -v -run TestCInterop .
 
+  # 32-bit cross-build - the library must compile on Raspberry Pi (arm) and 386
+  cross-build:
+    name: Cross-Build 32-bit
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 0
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Set up Go
+      uses: actions/setup-go@v7
+      with:
+        go-version: '1.25'
+        cache: true
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Build linux/386
+      run: GOOS=linux GOARCH=386 go build ./...
+
+    - name: Build linux/arm GOARM=6
+      run: GOOS=linux GOARCH=arm GOARM=6 go build ./...
+
+    - name: Build windows/386
+      run: GOOS=windows GOARCH=386 go build ./...
+
+    - name: Vet linux/386
+      run: GOOS=linux GOARCH=386 go vet ./...
+
+  # Native Go fuzzing - the safety net for issue #68 (ADR-003): a corrupted
+  # byte must produce an error, never a panic or a fatal allocation.
+  # Non-blocking until the targets prove stable; a crash uploads its reproducer.
+  fuzz:
+    name: Fuzz - ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    continue-on-error: true  # Non-blocking until the targets prove stable
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: .
+            target: FuzzOpenFile
+          - package: ./internal/core
+            target: FuzzParseAttributeMessage
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Set up Go
+      uses: actions/setup-go@v7
+      with:
+        go-version: '1.25'
+        cache: true
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run ${{ matrix.target }}
+      # Minimization is off on purpose: Go also queues coverage-expanding inputs
+      # for minimization (internal/fuzz/fuzz.go), and its default budget equals
+      # this job's fuzz time, so a run can spend the whole 60 s minimizing a
+      # handful of inputs with the exec counter frozen. With 0, coverage results
+      # are admitted immediately and a crasher is saved unminimized.
+      run: go test -run=^$ -fuzz=${{ matrix.target }} -fuzztime=60s -fuzzminimizetime=0 ${{ matrix.package }}
+
+    - name: Upload fuzz corpus
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: fuzz-corpus-${{ matrix.target }}
+        path: |
+          testdata/fuzz
+          internal/core/testdata/fuzz
+        if-no-files-found: ignore
+        retention-days: 7
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

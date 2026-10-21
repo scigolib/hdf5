@@ -20,6 +20,7 @@ vendor/
 .gode
 .goco
 .claude
+.mcp.json
 
 # Private development docs (not for release)
 /docs/dev/

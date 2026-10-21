@@ -624,6 +624,10 @@ func TestMetricsCollector_Performance(t *testing.T) {
 		t.Skip("Skipping performance test in short mode")
 	}
 
+	if raceEnabled {
+		t.Skip("timing thresholds are not meaningful under the race detector")
+	}
+
 	mc := NewMetricsCollector()
 
 	const iterations = 100000

@@ -2209,6 +2209,13 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 		return nil, fmt.Errorf("failed to create writer: %w", err)
 	}
 
+	// The read-side File must see the file through the writer. Its allocator is
+	// the live end of the address space (the H5FD_get_eoa analog), while the
+	// bounded reader created by Open froze the size at open and the superblock
+	// EOF address is only refreshed on close. Read paths such as OpenDataset
+	// walk the file after it has grown (ADR-003).
+	f.reader = fw
+
 	// Step 3: Extract root group information from existing file
 	rootGroupAddr := f.sb.RootGroup
 	rootBTreeAddr := f.sb.RootBTreeAddr // v0: cached in superblock

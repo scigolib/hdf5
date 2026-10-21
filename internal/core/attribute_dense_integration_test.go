@@ -421,7 +421,9 @@ func TestReadValue_FixedStringDataTooShort(t *testing.T) {
 
 	_, err := attr.ReadValue()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "data too short for string element")
+	// ADR-003: the size guard rejects the claimed 50 bytes before the element
+	// slice is allocated; the per-element loop is no longer reached for this input.
+	require.Contains(t, err.Error(), "attribute data size mismatch")
 }
 
 func TestReadValue_VarLenStringDataTooShort(t *testing.T) {

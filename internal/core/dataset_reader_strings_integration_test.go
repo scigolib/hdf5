@@ -228,6 +228,8 @@ func TestConvertToStrings_DataTruncation(t *testing.T) {
 	// Should return error about truncation
 	result, err := convertToStrings(rawData, datatype, 2)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "data truncated")
+	// The byte-count guard rejects the short buffer before the per-element loop
+	// is reached; the intent (truncated data is rejected) is unchanged.
+	require.Contains(t, err.Error(), "data size mismatch")
 	require.Nil(t, result)
 }

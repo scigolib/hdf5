@@ -92,10 +92,9 @@ func ReadDatasetCompound(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([
 		rawData = layout.CompactData
 
 	case layout.IsContiguous():
-		dataSize := totalElements * uint64(datatype.Size)
-		rawData = make([]byte, dataSize)
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		_, err := r.ReadAt(rawData, int64(layout.DataAddress))
+		// Size and region come from file metadata; validate before allocating
+		// (ADR-003, cf. H5D__contig_check).
+		rawData, err = readContiguousDatasetData(r, sb, layout, totalElements, uint64(datatype.Size))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read contiguous data: %w", err)
 		}
@@ -116,8 +115,16 @@ func ReadDatasetCompound(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([
 
 // parseCompoundData parses raw bytes into array of compound values.
 func parseCompoundData(rawData []byte, compoundType *CompoundType, numElements uint64, r io.ReaderAt, sb *Superblock) ([]CompoundValue, error) {
-	result := make([]CompoundValue, numElements)
 	structSize := uint64(compoundType.Size)
+
+	// The count comes from the dataspace and the element size from the
+	// datatype; neither is bounded by the bytes actually read, and a compact or
+	// empty layout supplies none (ADR-003; found by FuzzOpenFile).
+	if err := validateElementStorage(numElements, structSize, rawData, "compound data"); err != nil {
+		return nil, err
+	}
+
+	result := make([]CompoundValue, numElements)
 
 	for i := uint64(0); i < numElements; i++ {
 		structOffset := i * structSize
@@ -131,6 +138,15 @@ func parseCompoundData(rawData []byte, compoundType *CompoundType, numElements u
 
 		// Parse each member.
 		for _, member := range compoundType.Members {
+			// member.Offset comes from the compound datatype properties, i.e.
+			// from file metadata. A value beyond the struct size used to panic
+			// the slice expression below (found by TestCorruptionCorpus), so it
+			// is validated first (ADR-003).
+			if uint64(member.Offset) > structSize {
+				return nil, fmt.Errorf("member %s offset %d exceeds compound size %d",
+					member.Name, member.Offset, structSize)
+			}
+
 			memberData := structData[member.Offset:]
 
 			memberValue, err := parseMemberValue(memberData, member.Type, r, sb)

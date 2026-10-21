@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // GlobalHeapSignature is the magic signature for global heap collections (4 bytes ASCII "GCOL").
@@ -80,15 +82,21 @@ func ReadGlobalHeapCollection(r io.ReaderAt, address uint64, offsetSize int) (*G
 		collectionSize = uint64(binary.LittleEndian.Uint32(headerBuf[8:12]))
 	}
 
-	//nolint:gosec // G115: Safe conversion for HDF5 structure sizes
+	//nolint:gosec // G115: headerSize is 12 or 16, a positive int well within uint64.
 	if collectionSize < uint64(headerSize) {
 		return nil, fmt.Errorf("invalid collection size: %d (too small)", collectionSize)
 	}
 
 	// Read entire collection into memory for easier parsing.
-	collectionData := make([]byte, collectionSize)
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	if _, err := r.ReadAt(collectionData, int64(address)); err != nil {
+	//
+	// ADR-003: collectionSize comes straight from the GCOL header. The C
+	// library's H5HG__hdr_deserialize (H5HGcache.c:105) reads the same field
+	// and survives a corrupt one only because malloc returns NULL; a failed Go
+	// allocation is a fatal runtime throw instead, so the size is checked
+	// against the reader and capped at utils.MaxChunkSize before the make
+	// inside ReadBlock.
+	collectionData, err := ReadBlock(r, nil, address, collectionSize, utils.MaxChunkSize, "global heap collection")
+	if err != nil {
 		return nil, fmt.Errorf("failed to read global heap collection: %w", err)
 	}
 
@@ -126,6 +134,18 @@ func ReadGlobalHeapCollection(r io.ReaderAt, address uint64, offsetSize int) (*G
 		}
 
 		// Object ID 0 is the free space object, skip it.
+		//
+		// objSize is a uint64 from the file and the code below converts it to
+		// int to advance the offset and to slice the collection. No object can
+		// be larger than the collection that holds it, so reject the claim here:
+		// a corrupt size would wrap the conversion negative (both here and on a
+		// 32-bit platform) and index the buffer out of range. C relies on
+		// malloc returning NULL for this case; Go needs the explicit check.
+		if objSize > uint64(len(collectionData)) {
+			return nil, fmt.Errorf("object %d size %d exceeds collection size %d",
+				objID, objSize, len(collectionData))
+		}
+
 		if objID == 0 {
 			// Free space - just advance.
 			offset += objHeaderSize
@@ -134,20 +154,20 @@ func ReadGlobalHeapCollection(r io.ReaderAt, address uint64, offsetSize int) (*G
 			if alignedSize%8 != 0 {
 				alignedSize += 8 - (alignedSize % 8)
 			}
-			//nolint:gosec // G115: Safe conversion for HDF5 structure sizes
+			//nolint:gosec // G115: objSize was rejected above if it exceeds len(collectionData), so alignedSize fits in int.
 			offset += int(alignedSize)
 			continue
 		}
 
 		// Read object data.
 		dataStart := offset + objHeaderSize
-		//nolint:gosec // G115: Safe conversion for HDF5 object sizes
+		//nolint:gosec // G115: objSize was rejected above if it exceeds len(collectionData), so it fits in int.
 		if dataStart+int(objSize) > len(collectionData) {
 			return nil, fmt.Errorf("object %d data extends beyond collection", objID)
 		}
 
 		objData := make([]byte, objSize)
-		//nolint:gosec // G115: Safe conversion for HDF5 object sizes
+		//nolint:gosec // G115: objSize was rejected above if it exceeds len(collectionData), so it fits in int.
 		copy(objData, collectionData[dataStart:dataStart+int(objSize)])
 
 		obj := GlobalHeapObject{
@@ -164,7 +184,7 @@ func ReadGlobalHeapCollection(r io.ReaderAt, address uint64, offsetSize int) (*G
 		if alignedSize%8 != 0 {
 			alignedSize += 8 - (alignedSize % 8)
 		}
-		//nolint:gosec // G115: Safe conversion for HDF5 structure sizes
+		//nolint:gosec // G115: objSize was rejected above if it exceeds len(collectionData), so alignedSize fits in int.
 		offset += objHeaderSize + int(alignedSize)
 	}
 
@@ -174,6 +194,9 @@ func ReadGlobalHeapCollection(r io.ReaderAt, address uint64, offsetSize int) (*G
 // GetObject retrieves an object from the collection by index.
 func (gc *GlobalHeapCollection) GetObject(index uint32) (*GlobalHeapObject, error) {
 	for i := range gc.Objects {
+		// Index is the object ID, which the format stores in two bytes, so an
+		// index above 65535 can never match; on a 32-bit target a wrapped
+		// negative simply misses every entry and the loop reports not-found.
 		if gc.Objects[i].Index == int(index) {
 			return &gc.Objects[i], nil
 		}

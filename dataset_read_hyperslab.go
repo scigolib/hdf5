@@ -60,7 +60,7 @@ type HyperslabSelection struct {
 //   - error: Error if selection is invalid or reading fails
 func (d *Dataset) ReadSlice(start, count []uint64) (interface{}, error) {
 	// Read object header to get dataset metadata
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read object header: %w", err)
 	}
@@ -138,7 +138,7 @@ func (d *Dataset) ReadSlice(start, count []uint64) (interface{}, error) {
 //   - error: Error if selection is invalid or reading fails
 func (d *Dataset) ReadHyperslab(selection *HyperslabSelection) (interface{}, error) {
 	// Read object header to get dataset metadata
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read object header: %w", err)
 	}
@@ -484,7 +484,7 @@ func (d *Dataset) readContiguousOptimized(
 		fileOffset := layout.DataAddress + startOffset
 
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		_, err := d.file.osFile.ReadAt(rawData, int64(fileOffset))
+		_, err := d.file.reader.ReadAt(rawData, int64(fileOffset))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read 1D contiguous data: %w", err)
 		}
@@ -504,7 +504,7 @@ func (d *Dataset) readContiguousOptimized(
 	fileOffset := layout.DataAddress + startByteOffset
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	_, err := d.file.osFile.ReadAt(outputData, int64(fileOffset))
+	_, err := d.file.reader.ReadAt(outputData, int64(fileOffset))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read contiguous data: %w", err)
 	}
@@ -560,7 +560,7 @@ func (d *Dataset) readContiguousRowByRow(
 	fileOffset := layout.DataAddress + startOffset
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	_, err := d.file.osFile.ReadAt(rawData, int64(fileOffset))
+	_, err := d.file.reader.ReadAt(rawData, int64(fileOffset))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read bounding box: %w", err)
 	}
@@ -619,7 +619,7 @@ func (d *Dataset) readContiguous2DOptimized(
 
 					// Read single element
 					//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-					_, err := d.file.osFile.ReadAt(
+					_, err := d.file.reader.ReadAt(
 						outputData[outputIdx*elementSize:(outputIdx+1)*elementSize],
 						int64(byteOffset),
 					)
@@ -652,6 +652,13 @@ func (d *Dataset) readHyperslabChunked(
 	dims := dataspace.Dimensions
 	chunkDims := layout.ChunkSize
 
+	// Only the version 1 B-tree index is read here; a version 4 layout can name
+	// a different index structure at the same address (see readChunkedData).
+	if layout.ChunkIndexType != core.ChunkIndexBTREE {
+		return nil, fmt.Errorf("unsupported chunk index type %d: only the v1 B-tree index is supported",
+			layout.ChunkIndexType)
+	}
+
 	// Calculate output size
 	outputElements := calculateHyperslabOutputSize(selection)
 	if outputElements == 0 {
@@ -659,7 +666,10 @@ func (d *Dataset) readHyperslabChunked(
 	}
 
 	// Find which chunks overlap with the selection
-	overlappingChunks := findOverlappingChunks(selection, chunkDims, dims)
+	overlappingChunks, err := findOverlappingChunks(selection, chunkDims, dims)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute overlapping chunks: %w", err)
+	}
 
 	if len(overlappingChunks) == 0 {
 		// No chunks overlap (empty selection)
@@ -668,7 +678,7 @@ func (d *Dataset) readHyperslabChunked(
 
 	// Parse B-tree to get chunk addresses
 	btreeNode, err := core.ParseBTreeV1Node(
-		d.file.osFile,
+		d.file.reader,
 		layout.DataAddress,
 		d.file.sb.OffsetSize,
 		len(chunkDims),
@@ -680,7 +690,7 @@ func (d *Dataset) readHyperslabChunked(
 
 	// Build chunk index (scaled coordinates -> file address)
 	chunkIndex := make(map[string]chunkIndexEntry)
-	allChunks, err := btreeNode.CollectAllChunks(d.file.osFile, d.file.sb.OffsetSize, chunkDims)
+	allChunks, err := btreeNode.CollectAllChunks(d.file.reader, d.file.sb.OffsetSize, chunkDims)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get chunk index: %w", err)
 	}
@@ -725,8 +735,25 @@ type chunkIndexEntry struct {
 
 // findOverlappingChunks identifies all chunks that overlap with the hyperslab selection.
 // Returns chunk coordinates (scaled chunk indices, not element indices).
-func findOverlappingChunks(sel *HyperslabSelection, chunkDims, datasetDims []uint64) [][]uint64 {
+func findOverlappingChunks(sel *HyperslabSelection, chunkDims, datasetDims []uint64) ([][]uint64, error) {
 	ndims := len(sel.Start)
+
+	// The selection and the dataset must agree on the rank, and the chunk grid
+	// must cover it: HDF5 stores the fastest-varying dimension in bytes, so the
+	// chunk grid may carry one extra dimension (see readChunkedData). A grid
+	// SHORTER than the rank is indexed past its end (review finding); zero
+	// dimensions are rejected at layout parse, but the check is cheap and keeps
+	// this function safe on its own.
+	if len(datasetDims) != ndims || len(chunkDims) < ndims {
+		return nil, fmt.Errorf("rank mismatch: selection %d, chunk %d, dataset %d",
+			ndims, len(chunkDims), len(datasetDims))
+	}
+
+	for i, dim := range chunkDims {
+		if dim == 0 {
+			return nil, fmt.Errorf("chunk dimension %d is zero", i)
+		}
+	}
 
 	// Calculate first and last chunk indices for each dimension
 	firstChunk := make([]uint64, ndims)
@@ -753,16 +780,41 @@ func findOverlappingChunks(sel *HyperslabSelection, chunkDims, datasetDims []uin
 }
 
 // generateChunkCoordinates generates all chunk coordinates in the range [first, last].
-func generateChunkCoordinates(first, last []uint64) [][]uint64 {
+//
+// The spans come from dataset dimensions and the selection, i.e. from file
+// metadata, so the total is computed in uint64 and converted through SafeInt:
+// on a 32-bit target a large span used to wrap int, and on any target an
+// overflowing product turned the pre-allocation capacity negative and panicked
+// in make (ADR-003).
+func generateChunkCoordinates(first, last []uint64) ([][]uint64, error) {
 	ndims := len(first)
 	if ndims == 0 {
-		return nil
+		return nil, nil
 	}
 
-	// Calculate total number of chunks
-	totalChunks := 1
+	total := uint64(1)
 	for i := 0; i < ndims; i++ {
-		totalChunks *= int(last[i] - first[i] + 1) //nolint:gosec // G115: chunk count bounded by dataset dimensions
+		span := last[i] - first[i] + 1
+
+		var err error
+		total, err = utils.SafeMultiply(total, span)
+		if err != nil {
+			return nil, fmt.Errorf("chunk count at dimension %d: %w", i, err)
+		}
+	}
+
+	totalChunks, err := utils.SafeInt(total, "hyperslab chunk count")
+	if err != nil {
+		return nil, err
+	}
+
+	// A representable count is not automatically a reasonable one: each chunk
+	// descriptor costs a slice header plus its coordinates, so the policy limit
+	// is checked before any allocation (ADR-003).
+	if total > 0 {
+		if err := utils.ValidateBufferSize(total, utils.MaxChunkCoordinates, "hyperslab chunk count"); err != nil {
+			return nil, err
+		}
 	}
 
 	result := make([][]uint64, 0, totalChunks)
@@ -772,7 +824,7 @@ func generateChunkCoordinates(first, last []uint64) [][]uint64 {
 	// Recursively generate coordinates
 	generateChunkCoordsRecursive(first, last, current, 0, &result)
 
-	return result
+	return result, nil
 }
 
 // generateChunkCoordsRecursive recursively generates chunk coordinates.
@@ -827,10 +879,12 @@ func (d *Dataset) extractFromChunk(
 
 	elementSize := uint64(datatype.Size)
 
-	// Read chunk data (use nbytes from index)
-	chunkData := make([]byte, chunkInfo.nbytes)
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	_, err := d.file.osFile.ReadAt(chunkData, int64(chunkInfo.address))
+	// Read chunk data (use nbytes from index). The size is a uint32 from the
+	// B-tree key, i.e. file metadata, so it goes through the block funnel: the
+	// sibling whole-dataset path validates the same field (review finding), and
+	// on a 32-bit target make() would panic above MaxInt.
+	chunkData, err := core.ReadBlock(d.file.reader, d.file.sb, chunkInfo.address,
+		chunkInfo.nbytes, utils.MaxChunkSize, "chunk data")
 	if err != nil {
 		return fmt.Errorf("failed to read chunk data: %w", err)
 	}
