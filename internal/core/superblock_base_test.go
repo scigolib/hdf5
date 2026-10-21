@@ -83,6 +83,44 @@ func TestReadSuperblockRejectsStoredBaseBeyondFile(t *testing.T) {
 	require.Contains(t, err.Error(), "base address")
 }
 
+// TestReadSuperblockV0FourByteOffsets covers a v0 superblock with 4-byte
+// addresses, which old writers produced and the C decoder reads
+// (H5F__super_decode_v0 decodes every variable-width field with the sizes from
+// the superblock). The fields after the fixed 24-byte header are packed by
+// sizeof_addr: base, free space, end-of-file, driver info, then the root group
+// symbol table entry.
+func TestReadSuperblockV0FourByteOffsets(t *testing.T) {
+	const offsetSize = 4
+
+	img := make([]byte, 4096)
+	copy(img[0:8], Signature)
+	img[8] = Version0
+	img[13] = offsetSize
+	img[14] = offsetSize
+
+	put := func(off int, v uint32) {
+		binary.LittleEndian.PutUint32(img[off:off+4], v)
+	}
+
+	put(24, 0)          // base address
+	put(28, 0)          // free-space index
+	put(32, 4096)       // end-of-file
+	put(36, ^uint32(0)) // driver info (undefined)
+	put(40, 0)          // root entry: link name offset
+	put(44, 0x100)      // root entry: object header address
+	put(48, 1)          // cache type: H5G_CACHED_STAB
+	put(52, 0)          // reserved
+	put(56, 0x200)      // scratch pad: B-tree address
+	put(60, 0x300)      // scratch pad: local heap address
+
+	sb, err := ReadSuperblock(bytes.NewReader(img))
+	require.NoError(t, err)
+	require.Equal(t, uint64(4096), sb.EOFAddress)
+	require.Equal(t, uint64(0x100), sb.RootGroup)
+	require.Equal(t, uint64(0x200), sb.RootBTreeAddr)
+	require.Equal(t, uint64(0x300), sb.RootHeapAddr)
+}
+
 func TestReadSuperblockV0ParsesStoredBase(t *testing.T) {
 	img := make([]byte, 4096)
 	copy(img[0:8], Signature)

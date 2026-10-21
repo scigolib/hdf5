@@ -27,7 +27,8 @@ The test suite attempts to:
 
 ## Expected Results
 
-All 57 files should pass the reference tests. Any failures indicate:
+All files should pass the reference tests, except those the test classifies as requiring a special
+file driver or an old data layout version (skipped with a reason). Any other failure indicates:
 1. Incomplete format support
 2. Parsing bugs
 3. Edge cases not yet handled

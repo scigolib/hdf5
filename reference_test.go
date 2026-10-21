@@ -31,8 +31,7 @@ func classifyFile(name string) fileClassification {
 
 		// Files requiring special file drivers not yet implemented.
 		requiresSpecialDriver: (strings.Contains(name, "family_v16-") && name != "family_v16-000000.h5") ||
-			(strings.Contains(name, "multi_file_v16") && name != "multi_file_v16-s.h5") ||
-			name == "tsizeslheap.h5",
+			(strings.Contains(name, "multi_file_v16") && name != "multi_file_v16-s.h5"),
 
 		// Files with older data layout versions (v1-v2, HDF5 1.6 era).
 		requiresOldLayoutVersion: name == "btree_idx_1_6.h5" ||

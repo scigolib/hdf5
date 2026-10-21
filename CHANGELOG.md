@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Version 0 superblocks are decoded with the field widths they declare instead of assuming 8-byte
+  addresses. Old writers produced files with 4-byte offsets (`tsizeslheap.h5` in the official
+  suite); such files previously failed to load, and now open and walk.
 - A corrupt fractal heap header could claim a maximum heap size that the file's length field cannot
   address: the offset width was computed in 16-bit arithmetic, so 65535 bits wrapped to a
   zero-byte offset instead of failing. Both heap-header parsers now reject the value, matching the
