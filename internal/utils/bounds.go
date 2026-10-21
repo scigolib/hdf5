@@ -11,19 +11,24 @@ import (
 // ReaderSize reports the total size of r when the reader can tell. Returns
 // (0, false) when the size is unknown.
 //
-// This mirrors H5FD_get_eof in the C library: a driver can report the real end
-// of file, and every later region check is only as good as that number. Only
-// the two shapes the library actually uses are recognized: *os.File via
-// Stat(), and *bytes.Reader / io.SectionReader via Size(). A negative size is
-// treated as unknown because it cannot describe a byte range.
+// This mirrors H5FD_get_eof in the C library, whose driver knows the current
+// end of the file — including space the writer has allocated but not yet
+// committed, which is why a logical EndOfFile (the writer's allocator) is
+// preferred over the operating system's view. Next come the two shapes the
+// library actually uses: *os.File via Stat(), and *bytes.Reader /
+// io.SectionReader via Size(). A negative size is treated as unknown because it
+// cannot describe a byte range.
 func ReaderSize(r io.ReaderAt) (uint64, bool) {
 	if isNilReader(r) {
 		return 0, false
 	}
 
-	// Stat first: a driver-backed reader reports the size of the underlying
-	// file, which is what region checks must compare against.
+	// A growing file must be measured by its logical end, not by what is on
+	// disk at this instant: a read-modify-write session allocates space, points
+	// metadata at it and writes it in a later step (the H5FD_set_eoa model).
 	switch s := r.(type) {
+	case interface{ EndOfFile() uint64 }:
+		return s.EndOfFile(), true
 	case interface{ Stat() (fs.FileInfo, error) }:
 		info, err := s.Stat()
 		if err != nil || info == nil {

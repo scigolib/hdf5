@@ -31,6 +31,18 @@ func (negativeSizeReader) ReadAt([]byte, int64) (int, error) { return 0, io.EOF 
 
 func (negativeSizeReader) Size() int64 { return -1 }
 
+// logicalEOFReader models a writer: the file is allocated to eof but the
+// physical view may be shorter. EndOfFile must win over Size.
+type logicalEOFReader struct {
+	eof uint64
+}
+
+func (logicalEOFReader) ReadAt([]byte, int64) (int, error) { return 0, io.EOF }
+
+func (logicalEOFReader) Size() int64 { return 1 }
+
+func (r logicalEOFReader) EndOfFile() uint64 { return r.eof }
+
 func TestReaderSize(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "size.bin")
 	if err := os.WriteFile(path, []byte("0123456789"), 0o600); err != nil {
@@ -114,6 +126,18 @@ func TestReaderSize(t *testing.T) {
 			r:      negativeSizeReader{},
 			want:   0,
 			wantOK: false,
+		},
+		{
+			name:   "logical end of file wins over the physical size",
+			r:      logicalEOFReader{eof: 4096},
+			want:   4096,
+			wantOK: true,
+		},
+		{
+			name:   "logical end of file of zero is a known size",
+			r:      logicalEOFReader{eof: 0},
+			want:   0,
+			wantOK: true,
 		},
 		{
 			name:   "nil reader is unknown",
