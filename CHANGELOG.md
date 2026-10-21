@@ -7,28 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [v0.14.2] - 2026-10-21
 
 ### Security
 
 **Bounds on every allocation sized from file metadata (issue #68).** A corrupted metadata byte
 could make the library request terabytes and die with a fatal out-of-memory error, which Go cannot
 recover from. Every such allocation is now validated against the bytes actually present before it
-happens: contiguous dataset reads, fixed-length and variable-length attributes, the float64
-conversion buffer, the local heap, the global heap and the fractal-heap direct and indirect blocks.
+happens: contiguous dataset reads, the float64 conversion buffer, fixed-length and variable-length
+attributes, the compound, string and variable-length dataset readers, the local heap, the global
+heap, the fractal-heap direct and indirect blocks, and hyperslab chunk reads.
+
 Block reads go through one funnel that mirrors the C library's `H5F_block_read` and
-`H5D__contig_check`; the file limit is the reader's live end-of-file (the writer's allocator during a
-modify session), falling back to the superblock End-of-File address. The new fuzz harness found two
-further panics, both fixed: `ParseDataspaceMessage` read past a truncated header, and
-`parseCompoundData` sliced at a compound member offset taken from the file.
+`H5D__contig_check`; the file limit is the reader's live end-of-file (the writer's allocator during
+a modify session), falling back to the superblock End-of-File address. The reader returned by
+`File.Reader()` reports its own size, so a corrupt superblock End-of-File address can no longer
+widen the readable region.
+
+Further defects found by the new fuzz harness and the review, all fixed:
+
+- `ParseDataspaceMessage` read past a truncated header (fatal panic on a corrupted attribute).
+- `parseCompoundData` sliced at a compound member offset taken from the file.
+- The compound, string and variable-length readers sized their result slice before checking the
+  bytes read; a compact layout claiming 3.3·10¹² elements reached the allocator.
+- A variable-length datatype size below a heap reference (`offsetSize + 8` bytes) made the element
+  slice run backwards.
+- A link name length near `MaxInt64` wrapped an integer bounds check.
+- A 65535-byte version 1 filter name rounded to zero in `uint16`.
 
 ### Bug Fixes
 
 - **32-bit targets compile again (issue #66).** Two untyped constants overflowed `int` on
   `GOARCH=arm` and `GOARCH=386`; both now compare in a width-independent way. A new CI job builds
   `linux/386`, `linux/arm` (`GOARM=6`) and `windows/386` and runs `go vet` for 386.
+- Version 4 chunked layouts are parsed correctly (flags, encoded dimension width, index type and
+  its creation parameters, then the address). Six reference files were previously read with an
+  empty chunk grid; a chunk index the library cannot traverse (fixed array, extensible array,
+  v2 B-tree) now returns a clear error instead of being read as a v1 B-tree.
+- Version 4 chunk layout bodies are validated as the C decoder does: unknown flag bits, a rank
+  above `H5O_LAYOUT_NDIMS`, a zero or oversized encoded dimension width, a zero chunk dimension and
+  truncated bodies are rejected.
 - Hyperslab chunk iteration validates the chunk-count span before sizing its result; an
-  unrepresentable span used to panic.
+  unrepresentable span used to panic. Chunk reads validate the size from the B-tree key instead of
+  allocating it unchecked.
 - The LZF padding buffer and the read-modify-write fractal-heap direct block are bounded like every
   other chunk-sized allocation.
 
@@ -1983,4 +2004,4 @@ See [ROADMAP.md](ROADMAP.md) for detailed future plans:
 
 ---
 
-*Last Updated: 2025-10-29*
+*Last Updated: 2026-10-21*
