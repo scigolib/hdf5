@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2026-09-02 | **Current Version**: v0.14.1 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.14.1 RELEASED! (2026-09-02) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2026-10-21 | **Current Version**: v0.14.2 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.14.2 RELEASED! (2026-10-21) → v1.0.0 LTS (Q3 2026)
 
 ---
 
@@ -76,8 +76,14 @@ v0.13.17 (BUGFIX - chunked B-tree h5dump interop) ✅ RELEASED 2026-03-30
 v0.13.18 (BUGFIX - multi-level chunk B-tree) ✅ RELEASED 2026-03-31
          ↓ (OHDR continuation + VLen string attrs)
 v0.13.19 (BUGFIX - OHDR continuation + []string attrs) ✅ RELEASED 2026-04-05
+         ↓ (deletion support, dense links)
+v0.14.0 (FEATURE - deletion, dense links, NetCDF-4) ✅ RELEASED 2026-06-25
+         ↓ (C-interop write fixes)
+v0.14.1 (BUGFIX - write compatibility, B-tree panic) ✅ RELEASED 2026-09-02
+         ↓ (metadata bounds / security hardening)
+v0.14.2 (SECURITY - bound metadata-sized allocations, 32-bit builds) ✅ RELEASED 2026-10-21
          ↓ (maintenance continues)
-v0.13.x (maintenance phase) → Stable maintenance, bug fixes, minor enhancements
+v0.14.x (maintenance phase) → Stable maintenance, bug fixes, minor enhancements
          ↓ (6-9 months production validation)
 v1.0.0 LTS → Long-term support release (Q3 2026)
 ```
