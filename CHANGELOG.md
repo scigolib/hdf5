@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A corrupt file whose group links back to an address on its own load path no longer hangs the
+  reader: object loading detects the cycle and returns an error. Found by `FuzzOpenFile`; the
+  input is kept as a seed.
 - Version 0 superblocks are decoded with the field widths they declare instead of assuming 8-byte
   addresses. Old writers produced files with 4-byte offsets (`tsizeslheap.h5` in the official
   suite); such files previously failed to load, and now open and walk.

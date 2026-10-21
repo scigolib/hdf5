@@ -566,6 +566,20 @@ func (g *Group) loadChildren() error {
 }
 
 func loadObject(file *File, address uint64, name string) (Object, error) {
+	// A corrupt file can link a group back to an address that is already on the
+	// load path; the loader builds the tree eagerly, so without this guard the
+	// recursion never ends (FuzzOpenFile: a v0 symbol table node pointing at
+	// itself). The tree cannot represent a cycle, so it is reported instead of
+	// hung on.
+	if file.loadingObjects == nil {
+		file.loadingObjects = make(map[uint64]bool)
+	}
+	if file.loadingObjects[address] {
+		return nil, fmt.Errorf("object graph cycle at address 0x%X", address)
+	}
+	file.loadingObjects[address] = true
+	defer delete(file.loadingObjects, address)
+
 	// Check signature first - SNOD means traditional group format.
 	sig := readSignature(file.reader, address)
 	if sig == SignatureSNOD {
