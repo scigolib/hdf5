@@ -336,7 +336,9 @@ func TestParseCompoundData_DataTruncation(t *testing.T) {
 
 	result, err := parseCompoundData(rawData, compoundType, 2, emptyReader, sb)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "data truncated")
+	// The byte-count guard rejects the short buffer before the per-element loop
+	// is reached; the intent (truncated data is rejected) is unchanged.
+	require.Contains(t, err.Error(), "data size mismatch")
 	require.Nil(t, result)
 }
 

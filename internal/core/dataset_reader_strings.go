@@ -112,35 +112,44 @@ func ReadDatasetStrings(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]
 
 // convertToStrings converts raw bytes to string array based on string datatype.
 func convertToStrings(rawData []byte, datatype *DatatypeMessage, numElements uint64) ([]string, error) {
+	// Reject an unsupported string class before the storage guard: a zero Size
+	// would otherwise surface as "element size is zero" and hide the type error.
+	if !datatype.IsFixedString() && !datatype.IsVariableString() {
+		return nil, errors.New("unknown string type")
+	}
+
+	// The count is metadata-derived; validate it against the bytes read before
+	// sizing the result slice (ADR-003, same class as parseCompoundData).
+	if err := validateElementStorage(numElements, uint64(datatype.Size), rawData, "string data"); err != nil {
+		return nil, err
+	}
+
 	result := make([]string, numElements)
 
-	//nolint:gocritic // ifElseChain: method call conditions, not suitable for switch
-	if datatype.IsFixedString() {
-		// Fixed-length strings.
-		stringSize := uint64(datatype.Size)
-		paddingType := datatype.GetStringPadding()
-
-		// CVE-2025-2926 fix: Validate string size before processing.
-		if err := utils.ValidateBufferSize(stringSize, utils.MaxStringSize, "string element"); err != nil {
-			return nil, fmt.Errorf("string element too large: %w", err)
-		}
-
-		for i := uint64(0); i < numElements; i++ {
-			offset := i * stringSize
-			if offset+stringSize > uint64(len(rawData)) {
-				return nil, errors.New("data truncated (fixed string)")
-			}
-
-			stringBytes := rawData[offset : offset+stringSize]
-			result[i] = decodeFixedString(stringBytes, paddingType)
-		}
-	} else if datatype.IsVariableString() {
+	if !datatype.IsFixedString() {
 		// Variable-length strings.
 		// Format: each element is (global_heap_id, size, index).
 		// For now, return error - variable-length strings require global heap support.
 		return nil, errors.New("variable-length strings not yet supported")
-	} else {
-		return nil, errors.New("unknown string type")
+	}
+
+	// Fixed-length strings.
+	stringSize := uint64(datatype.Size)
+	paddingType := datatype.GetStringPadding()
+
+	// CVE-2025-2926 fix: Validate string size before processing.
+	if err := utils.ValidateBufferSize(stringSize, utils.MaxStringSize, "string element"); err != nil {
+		return nil, fmt.Errorf("string element too large: %w", err)
+	}
+
+	for i := uint64(0); i < numElements; i++ {
+		offset := i * stringSize
+		if offset+stringSize > uint64(len(rawData)) {
+			return nil, errors.New("data truncated (fixed string)")
+		}
+
+		stringBytes := rawData[offset : offset+stringSize]
+		result[i] = decodeFixedString(stringBytes, paddingType)
 	}
 
 	return result, nil

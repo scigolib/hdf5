@@ -115,8 +115,16 @@ func ReadDatasetCompound(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([
 
 // parseCompoundData parses raw bytes into array of compound values.
 func parseCompoundData(rawData []byte, compoundType *CompoundType, numElements uint64, r io.ReaderAt, sb *Superblock) ([]CompoundValue, error) {
-	result := make([]CompoundValue, numElements)
 	structSize := uint64(compoundType.Size)
+
+	// The count comes from the dataspace and the element size from the
+	// datatype; neither is bounded by the bytes actually read, and a compact or
+	// empty layout supplies none (ADR-003; found by FuzzOpenFile).
+	if err := validateElementStorage(numElements, structSize, rawData, "compound data"); err != nil {
+		return nil, err
+	}
+
+	result := make([]CompoundValue, numElements)
 
 	for i := uint64(0); i < numElements; i++ {
 		structOffset := i * structSize

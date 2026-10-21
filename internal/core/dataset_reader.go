@@ -264,6 +264,31 @@ func isFloat64Convertible(datatype *DatatypeMessage) bool {
 	}
 }
 
+// validateElementStorage rejects an element count that cannot fit in the bytes
+// read from the file. Both the count and the element size come from file
+// metadata, and a compact or empty layout can carry a huge count with no data
+// at all: sizing the result slice from that count reaches make() with a
+// terabyte request, and the runtime's large-allocation path is not preemptible,
+// so nothing in the caller can even time out (found by FuzzOpenFile:
+// make([]CompoundValue, 3.3e12) from a corrupted dataspace).
+func validateElementStorage(numElements, elemSize uint64, data []byte, what string) error {
+	if elemSize == 0 {
+		return fmt.Errorf("%s: element size is zero", what)
+	}
+
+	required, err := utils.SafeMultiply(numElements, elemSize)
+	if err != nil {
+		return fmt.Errorf("%s: size overflow: %w", what, err)
+	}
+
+	if required > uint64(len(data)) {
+		return fmt.Errorf("%s: data size mismatch: need %d bytes for %d elements, have %d",
+			what, required, numElements, len(data))
+	}
+
+	return nil
+}
+
 // ReadDatasetInfo returns dataset metadata without reading actual data.
 func ReadDatasetInfo(header *ObjectHeader, sb *Superblock) (*DatasetInfo, error) {
 	var datatypeMsg, dataspaceMsg, layoutMsg *HeaderMessage

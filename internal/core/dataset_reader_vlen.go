@@ -112,6 +112,13 @@ func ReadDatasetVLenBytes(r io.ReaderAt, header *ObjectHeader, sb *Superblock) (
 	// 7. Dereference global heap IDs to retrieve actual data.
 	offsetSize := int(sb.OffsetSize)
 	heapIDSize := uint64(datatype.Size) // Typically 16 bytes.
+
+	// The count is metadata-derived; validate it against the bytes read before
+	// sizing the result slice (ADR-003, same class as parseCompoundData).
+	if err := validateElementStorage(totalElements, heapIDSize, rawData, "vlen data"); err != nil {
+		return nil, err
+	}
+
 	result := make([][]byte, totalElements)
 
 	// Cache global heap collections to avoid re-reading the same collection.
