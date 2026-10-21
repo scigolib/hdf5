@@ -16,7 +16,7 @@ import (
 // File represents an open HDF5 file with its metadata and root group.
 type File struct {
 	osFile        *os.File
-	reader        io.ReaderAt // Bounded by the file size where it is known.
+	reader        io.ReaderAt // Read source: size-bounded at open, or the live writer in a write session (ADR-003).
 	sb            *core.Superblock
 	root          *Group
 	visitedBTrees map[uint64]bool // Track visited B-tree addresses to prevent cycles
