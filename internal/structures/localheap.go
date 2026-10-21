@@ -3,6 +3,7 @@ package structures
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/scigolib/hdf5/internal/core"
@@ -71,7 +72,17 @@ func LoadLocalHeap(r io.ReaderAt, address uint64, sb *core.Superblock) (*LocalHe
 	}
 	pos += int(sb.LengthSize)
 
-	// Free list offset (lengthSize bytes) - skip for now
+	// Free list head (lengthSize bytes): H5HL_FREE_NULL when the segment has no
+	// free blocks, otherwise an offset inside the data segment.
+	var freeListHead uint64
+	switch sb.LengthSize {
+	case 2:
+		freeListHead = uint64(sb.Endianness.Uint16(headerBuf[pos : pos+2]))
+	case 4:
+		freeListHead = uint64(sb.Endianness.Uint32(headerBuf[pos : pos+4]))
+	case 8:
+		freeListHead = sb.Endianness.Uint64(headerBuf[pos : pos+8])
+	}
 	pos += int(sb.LengthSize)
 
 	// Data segment address (offsetSize bytes)
@@ -85,19 +96,55 @@ func LoadLocalHeap(r io.ReaderAt, address uint64, sb *core.Superblock) (*LocalHe
 		dataSegmentAddr = sb.Endianness.Uint64(headerBuf[pos : pos+8])
 	}
 
+	if err := validateLocalHeapHeader(freeListHead, dataSegmentSize, dataSegmentAddr); err != nil {
+		return nil, err
+	}
+
 	heap := &LocalHeap{
 		//nolint:gosec // G115: headerSize is calculated from small values (LengthSize, OffsetSize <= 8)
 		HeaderSize: uint64(headerSize),
+		FreeList:   freeListHead,
 	}
 
-	// Allocate and read data segment from the ACTUAL address in the header
-	heap.Data = make([]byte, dataSegmentSize)
-	if _, err := r.ReadAt(heap.Data, int64(dataSegmentAddr)); err != nil {
+	// The data segment size comes straight from the file, so the read goes
+	// through core.ReadBlock, which validates the size against the reader and
+	// applies the hard cap before allocating. The cap has no C analog: C
+	// survives a corrupt size because malloc returns NULL, while a failed Go
+	// allocation kills the process (ADR-003, "Documented deviation").
+	data, err := core.ReadBlock(r, sb, dataSegmentAddr, dataSegmentSize, utils.MaxChunkSize, "local heap data")
+	if err != nil {
 		return nil, utils.WrapError("local heap data read failed", err)
 	}
+	heap.Data = data
 
 	return heap, nil
 }
+
+// validateLocalHeapHeader enforces the two header invariants of
+// H5HL__hdr_deserialize: a free-list head other than H5HL_FREE_NULL must point
+// inside the data segment (H5HLcache.c:189-190), and the data block address
+// must be defined (H5HLcache.c:200-201). ReadBlock rejects the same sentinel
+// address, but this error names which structure is corrupt.
+func validateLocalHeapHeader(freeListHead, dataSegmentSize, dataSegmentAddr uint64) error {
+	if freeListHead != h5hlFreeNull && freeListHead >= dataSegmentSize {
+		return fmt.Errorf("invalid local heap: free list head %d outside data segment (size %d)",
+			freeListHead, dataSegmentSize)
+	}
+
+	if dataSegmentAddr == undefinedAddress {
+		return errors.New("invalid local heap: undefined data segment address")
+	}
+
+	return nil
+}
+
+// h5hlFreeNull is H5HL_FREE_NULL (H5HLpkg.h:54): the free-list head value that
+// means the data segment has no free blocks.
+const h5hlFreeNull uint64 = 1
+
+// undefinedAddress is HDF5's undefined-address sentinel: HADDR_UNDEF, the
+// 64-bit all-ones value that the C check H5_addr_defined rejects.
+const undefinedAddress uint64 = 0xFFFFFFFFFFFFFFFF
 
 // GetString retrieves a null-terminated string from the heap at the given offset.
 // The offset is relative to the start of the data segment (after the 32-byte header).
