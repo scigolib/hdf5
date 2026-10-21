@@ -50,9 +50,11 @@ type Superblock struct {
 
 // minimumSuperblockSize returns the minimum on-disk size in bytes of the
 // superblock header for the given version.
-func minimumSuperblockSize(version uint8) uint64 {
+func minimumSuperblockSize(version, offsetSize uint8) uint64 {
 	if version == Version0 {
-		return minSuperblockSizeV0
+		// 24 fixed bytes + four address-width fields + the root group symbol
+		// table entry (two addresses, 8 fixed bytes, a 16-byte scratch pad).
+		return 48 + 6*uint64(offsetSize)
 	}
 	return minSuperblockSizeV2
 }
@@ -180,35 +182,36 @@ func readSuperblockAt(r io.ReaderAt, addr, size uint64, sizeKnown bool) (*Superb
 	// validated, but the effective base is the superblock position: the C
 	// library rewrites a disagreeing value the same way (H5Fsuper.c:475-485).
 	if version == Version0 {
-		storedBase, baseErr := readValue(24, offsetSize)
+		// A v0 superblock is a fixed 24-byte header followed by fields whose
+		// width is sizeof_addr: base address, free-space index, end-of-file,
+		// driver info, then the root group symbol table entry. The entry itself
+		// is link name offset, object header address, a 4-byte cache type, 4
+		// reserved bytes, and a 16-byte scratch pad holding the B-tree and local
+		// heap addresses. Offsets are computed, not assumed 8-byte wide: old
+		// writers produced files with sizeof_addr = 4 (H5F__super_decode_v0
+		// decodes every variable-width field with the sizes in the superblock).
+		addrSize := int(offsetSize)
+		baseOff := 24
+		eofOff := baseOff + 2*addrSize // skips the free-space index
+		rootSymOff := eofOff + 2*addrSize
+		rootOff := rootSymOff + addrSize // skips the link name offset
+		btreeOff := rootOff + addrSize + 8
+		heapOff := btreeOff + addrSize
+
+		storedBase, baseErr := readValue(baseOff, offsetSize)
 		if baseErr != nil {
 			return nil, utils.WrapError("base address read failed", baseErr)
 		}
 		if err := validateStoredBaseAddress(storedBase, size, sizeKnown); err != nil {
 			return nil, err
 		}
-		// Version 0 superblock structure:
-		// Offset 24-31: Base address
-		// Offset 32-39: Free space index
-		// Offset 40-47: End-of-File address (NOT root group!)
-		// Offset 48-55: Driver info block
-		// Offset 56-95: Root group symbol table entry (40 bytes total):
-		//   56-63: Link name offset (8 bytes)
-		//   64-71: Object header address (8 bytes)
-		//   72-75: Cache type (4 bytes) - 1 = H5G_CACHED_STAB
-		//   76-79: Reserved (4 bytes)
-		//   80-87: B-tree address (8 bytes) - for cached symbol table
-		//   88-95: Local heap address (8 bytes) - for cached symbol table
 
-		// End-of-file address at offset 40 (C reference H5Fsuper_cache.c:528
-		// decodes base address, superblock extension, EOF, then driver info).
-		sb.EOFAddress, err = readValue(40, offsetSize)
+		sb.EOFAddress, err = readValue(eofOff, offsetSize)
 		if err != nil {
 			return nil, utils.WrapError("end-of-file address read failed", err)
 		}
 
-		// Read object header address at offset 64
-		sb.RootGroup, err = readValue(64, offsetSize)
+		sb.RootGroup, err = readValue(rootOff, offsetSize)
 		if err != nil {
 			return nil, utils.WrapError("root group address read failed", err)
 		}
@@ -216,12 +219,12 @@ func readSuperblockAt(r io.ReaderAt, addr, size uint64, sizeKnown bool) (*Superb
 		// ALWAYS read cached B-tree and Heap addresses for v0 files
 		// These are stored in the scratch-pad area when cache type = 1 (H5G_CACHED_STAB)
 		// Even if object header address is non-zero, the symbol table may use these
-		sb.RootBTreeAddr, err = readValue(80, offsetSize)
+		sb.RootBTreeAddr, err = readValue(btreeOff, offsetSize)
 		if err != nil {
 			return nil, utils.WrapError("b-tree address read failed", err)
 		}
 
-		sb.RootHeapAddr, err = readValue(88, offsetSize)
+		sb.RootHeapAddr, err = readValue(heapOff, offsetSize)
 		if err != nil {
 			return nil, utils.WrapError("heap address read failed", err)
 		}
@@ -260,7 +263,7 @@ func readSuperblockAt(r io.ReaderAt, addr, size uint64, sizeKnown bool) (*Superb
 		// The HDF5 C library also doesn't enforce checksum validation on read
 	}
 
-	if err := validateEOFAddress(version, addr, sb.EOFAddress, size, sizeKnown); err != nil {
+	if err := validateEOFAddress(version, offsetSize, addr, sb.EOFAddress, size, sizeKnown); err != nil {
 		return nil, err
 	}
 
@@ -329,8 +332,8 @@ func parseSuperblockSizes(version uint8, buf []byte) (binary.ByteOrder, uint8, u
 // header itself: the file's address space cannot end inside the superblock that
 // defines it, so such a value means truncation or corruption (cf. the stored_eof
 // check in H5F__super_read, H5Fsuper.c:573).
-func validateEOFAddress(version uint8, superAddr, eofAddress, size uint64, sizeKnown bool) error {
-	minSize := minimumSuperblockSize(version)
+func validateEOFAddress(version, offsetSize uint8, superAddr, eofAddress, size uint64, sizeKnown bool) error {
+	minSize := minimumSuperblockSize(version, offsetSize)
 	headerEnd := superAddr + minSize
 	if eofAddress != 0 && eofAddress < headerEnd {
 		return fmt.Errorf("invalid superblock: EOF address %d is smaller than the superblock header (%d bytes)",

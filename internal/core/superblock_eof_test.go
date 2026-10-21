@@ -241,7 +241,8 @@ func TestReadSuperblockEOFAddressFixtures(t *testing.T) {
 // TestMinimumSuperblockSize verifies the per-version header sizes used by the
 // EOF address sanity check.
 func TestMinimumSuperblockSize(t *testing.T) {
-	require.Equal(t, uint64(96), minimumSuperblockSize(Version0))
-	require.Equal(t, uint64(48), minimumSuperblockSize(Version2))
-	require.Equal(t, uint64(48), minimumSuperblockSize(Version3))
+	require.Equal(t, uint64(96), minimumSuperblockSize(Version0, 8))
+	require.Equal(t, uint64(72), minimumSuperblockSize(Version0, 4))
+	require.Equal(t, uint64(48), minimumSuperblockSize(Version2, 8))
+	require.Equal(t, uint64(48), minimumSuperblockSize(Version3, 8))
 }

@@ -126,13 +126,15 @@ features we don't yet support.
 - `h5stat_tsohm.h5` - Uses shared object header optimization
 - Advanced feature for reducing file size
 
-**Non-default Sizes** (1 file):
-- `tsizeslheap.h5` - sizeof_addr=4, sizeof_size=4 (non-standard)
-- We currently require sizeof_addr=8, sizeof_size=8
+**Non-default Sizes** — now supported for v0 superblocks:
+- `tsizeslheap.h5` - sizeof_addr=4, sizeof_size=4. The v0 superblock field offsets are computed
+  from the widths declared in the header instead of assuming 8-byte fields.
 
-**FSM Persistence** (2 files):
+**FSM Persistence** (2 files) — these open and walk:
 - `h5clear_fsm_persist_user_equal.h5` - Free-space manager persistence
 - `h5clear_fsm_persist_user_less.h5` - Free-space manager persistence
+- Free-space manager persistence itself is not exercised by the suite; the files are read as
+  ordinary HDF5 files.
 
 **MDC Image** (1 file, counted above):
 - `h5clear_mdc_image.h5` - Metadata cache image
