@@ -114,6 +114,28 @@ func ConvertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uin
 
 // convertToFloat64 converts raw bytes to float64 array based on datatype.
 func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uint64) ([]float64, error) {
+	// ADR-003 (issue #68): numElements comes from the dataspace, i.e. from file
+	// metadata, so the result buffer sized from it is validated before it is
+	// allocated — a failed Go allocation is a fatal runtime error, unlike the C
+	// library's recoverable NULL malloc. The support check comes first so an
+	// unsupported datatype keeps its own error instead of a size mismatch; it
+	// also guarantees that every path reaching the allocation is one where
+	// datatype.Size is the converter's element width and the guard below is
+	// therefore meaningful.
+	if !isFloat64Convertible(datatype) {
+		return nil, fmt.Errorf("unsupported datatype for conversion to float64: %s", datatype)
+	}
+
+	required, err := utils.SafeMultiply(numElements, uint64(datatype.Size))
+	if err != nil {
+		return nil, fmt.Errorf("data size overflow (convert to float64): %w", err)
+	}
+
+	if required > uint64(len(rawData)) {
+		return nil, fmt.Errorf("data truncated: need %d bytes for %d elements, have %d",
+			required, numElements, len(rawData))
+	}
+
 	result := make([]float64, numElements)
 	byteOrder := datatype.GetByteOrder()
 
@@ -219,6 +241,27 @@ func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uin
 	}
 
 	return result, nil
+}
+
+// isFloat64Convertible reports whether convertToFloat64 can convert the
+// datatype. It mirrors the switch in convertToFloat64 so the allocation guard
+// runs only where Size is the converter's element width (1/2/4/8-byte
+// fixed-point, 4/8-byte float).
+func isFloat64Convertible(datatype *DatatypeMessage) bool {
+	if datatype.IsFloat64() || datatype.IsFloat32() {
+		return true
+	}
+
+	if !datatype.IsFixedPoint() {
+		return false
+	}
+
+	switch datatype.Size {
+	case 1, 2, 4, 8:
+		return true
+	default:
+		return false
+	}
 }
 
 // ReadDatasetInfo returns dataset metadata without reading actual data.

@@ -283,6 +283,23 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 
 		stringSize := uint64(a.Datatype.Size)
 		paddingType := a.Datatype.GetStringPadding()
+
+		// ADR-003 (issue #68): totalElements comes from the attribute dataspace,
+		// i.e. from file metadata, so the byte count is validated before the
+		// slice is allocated — a failed Go allocation is a fatal runtime error,
+		// not a recoverable NULL like the C library's malloc. Mirrors
+		// H5O__attr_decode, where the overflow check and H5_IS_BUFFER_OVERFLOW
+		// run before H5FL_BLK_MALLOC (H5Oattr.c:274-283).
+		totalBytes, err := utils.SafeMultiply(totalElements, stringSize)
+		if err != nil {
+			return nil, fmt.Errorf("attribute size overflow (string): %w", err)
+		}
+
+		if totalBytes > uint64(len(a.Data)) {
+			return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
+				totalBytes, len(a.Data))
+		}
+
 		values := make([]string, totalElements)
 
 		for i := uint64(0); i < totalElements; i++ {
