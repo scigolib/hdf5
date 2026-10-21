@@ -407,7 +407,7 @@ func TestChunkedDatasetBinaryPatterns(t *testing.T) {
 	data := make([]uint32, 10000)
 	for i := range data {
 		// Pattern with high byte similarity (good for shuffle)
-		data[i] = uint32(0xFF00_0000 | (i & 0xFF))
+		data[i] = uint32(0xFF00_0000) | uint32(i&0xFF)
 	}
 
 	err = ds.Write(data)
