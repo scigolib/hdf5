@@ -2,7 +2,8 @@
 
 **Source**: `D:\projects\scigolibs\hdf5c\test\testfiles\`
 **Copied**: 2025-10-29
-**Count**: 57 files
+**Count**: 58 files (57 from the C test suite plus `userblock-512.h5`, generated locally
+with `h5repack -b 512` from `aggr.h5` to cover a 512-byte user block)
 **Purpose**: Comprehensive testing against official HDF5 C library test suite
 
 ## File List

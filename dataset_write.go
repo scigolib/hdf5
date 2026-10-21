@@ -2189,6 +2189,14 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
 
+	// The write path still addresses the file absolutely: enabling it for a
+	// user block requires the allocator and every write call to apply the base
+	// address too. Refuse instead of corrupting the file.
+	if base := f.sb.BaseAddress; base != 0 {
+		_ = f.Close()
+		return nil, fmt.Errorf("opening a file with a user block (base address %d) for writing is not supported yet", base)
+	}
+
 	// Step 2: Create low-level writer for RMW operations
 	var writerMode writer.CreateMode
 	if mode == OpenReadWrite {

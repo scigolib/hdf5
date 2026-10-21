@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Reading files with a user block. The superblock is located the way the C library locates it —
+  at offset 0 or at a power of two starting at 512 — and its position becomes the file's base
+  address; metadata addresses are resolved relative to it at the I/O boundary. Official-suite
+  files `twithub.h5`, `twithub513.h5` and two `h5clear_fsm_persist_user_*` files now read.
+  Writing to such a file is refused with a clear error until the write path applies the base too.
+
 ### Removed
 
 - `scripts/pre-release-check.sh`, a maintainer-only validation script. It duplicated the release
