@@ -58,7 +58,7 @@ func (d *Dataset) Address() uint64 {
 
 // Attributes returns all attributes attached to this dataset.
 func (d *Dataset) Attributes() ([]*core.Attribute, error) {
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return nil, err
 	}
@@ -101,13 +101,13 @@ func (d *Dataset) ReadAttribute(name string) (interface{}, error) {
 // All values are converted to float64 for convenience.
 func (d *Dataset) Read() ([]float64, error) {
 	// Read object header for this dataset.
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return nil, err
 	}
 
 	// Use the dataset reader to get values.
-	return core.ReadDatasetFloat64(d.file.osFile, header, d.file.sb)
+	return core.ReadDatasetFloat64(d.file.reader, header, d.file.sb)
 }
 
 // ReadStrings reads string dataset values and returns them as string array.
@@ -115,13 +115,13 @@ func (d *Dataset) Read() ([]float64, error) {
 // Variable-length strings are not yet supported.
 func (d *Dataset) ReadStrings() ([]string, error) {
 	// Read object header for this dataset.
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return nil, err
 	}
 
 	// Use the string dataset reader.
-	return core.ReadDatasetStrings(d.file.osFile, header, d.file.sb)
+	return core.ReadDatasetStrings(d.file.reader, header, d.file.sb)
 }
 
 // ReadCompound reads compound dataset values and returns them as array of maps.
@@ -129,13 +129,13 @@ func (d *Dataset) ReadStrings() ([]string, error) {
 // Supports nested compound types, numeric types, and fixed-length strings.
 func (d *Dataset) ReadCompound() ([]core.CompoundValue, error) {
 	// Read object header for this dataset.
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return nil, err
 	}
 
 	// Use the compound dataset reader.
-	return core.ReadDatasetCompound(d.file.osFile, header, d.file.sb)
+	return core.ReadDatasetCompound(d.file.reader, header, d.file.sb)
 }
 
 // ReadVLenBytes reads a variable-length dataset and returns values as [][]byte.
@@ -147,18 +147,18 @@ func (d *Dataset) ReadCompound() ([]core.CompoundValue, error) {
 // to the base element type and byte order.
 func (d *Dataset) ReadVLenBytes() ([][]byte, error) {
 	// Read object header for this dataset.
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return nil, err
 	}
 
 	// Use the variable-length dataset reader.
-	return core.ReadDatasetVLenBytes(d.file.osFile, header, d.file.sb)
+	return core.ReadDatasetVLenBytes(d.file.reader, header, d.file.sb)
 }
 
 // Info returns metadata about the dataset without reading actual values.
 func (d *Dataset) Info() (string, error) {
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return "", err
 	}
@@ -201,7 +201,7 @@ func (g *Group) Attributes() ([]*core.Attribute, error) {
 	}
 
 	// Read object header to get attributes.
-	header, err := core.ReadObjectHeader(g.file.osFile, g.address, g.file.sb)
+	header, err := core.ReadObjectHeader(g.file.reader, g.address, g.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read object header: %w", err)
 	}
@@ -220,7 +220,7 @@ func loadGroup(file *File, address uint64) (*Group, error) {
 	}
 
 	// Check signature to determine group format.
-	sig := readSignature(file.osFile, address)
+	sig := readSignature(file.reader, address)
 
 	// SNOD always means traditional format.
 	if sig == SignatureSNOD {
@@ -233,7 +233,7 @@ func loadGroup(file *File, address uint64) (*Group, error) {
 }
 
 func loadModernGroup(file *File, address uint64) (*Group, error) {
-	r := file.osFile
+	r := file.reader
 	sb := file.sb
 
 	header, err := core.ReadObjectHeader(r, address, sb)
@@ -303,7 +303,7 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 				if !linkInfo.HasFractalHeap() || !linkInfo.HasNameBTree() {
 					continue
 				}
-				heapObjects, err := core.ReadDenseHeapObjects(file.osFile,
+				heapObjects, err := core.ReadDenseHeapObjects(file.reader,
 					linkInfo.NameBTreeAddress,
 					linkInfo.FractalHeapAddress,
 					sb,
@@ -386,7 +386,7 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 
 func loadTraditionalGroup(file *File, address uint64) (*Group, error) {
 	// Parse the Symbol Table Node (SNOD).
-	node, err := structures.ParseSymbolTableNode(file.osFile, address, file.sb)
+	node, err := structures.ParseSymbolTableNode(file.reader, address, file.sb)
 	if err != nil {
 		return nil, utils.WrapError("symbol table node parse failed", err)
 	}
@@ -404,13 +404,13 @@ func loadTraditionalGroup(file *File, address uint64) (*Group, error) {
 	var heap *structures.LocalHeap
 
 	// Read root object header to get heap address.
-	rootHeader, err := core.ReadObjectHeader(file.osFile, file.sb.RootGroup, file.sb)
+	rootHeader, err := core.ReadObjectHeader(file.reader, file.sb.RootGroup, file.sb)
 	if err == nil {
 		// Find symbol table message.
 		for _, msg := range rootHeader.Messages {
 			if msg.Type == core.MsgSymbolTable && len(msg.Data) >= 16 {
 				heapAddr := file.sb.Endianness.Uint64(msg.Data[8:16])
-				heap, err = structures.LoadLocalHeap(file.osFile, heapAddr, file.sb)
+				heap, err = structures.LoadLocalHeap(file.reader, heapAddr, file.sb)
 				if err != nil {
 					return nil, utils.WrapError("local heap load failed", err)
 				}
@@ -468,22 +468,22 @@ func (g *Group) loadChildren() error {
 	}
 	g.file.visitedBTrees[btreeAddr] = true
 
-	heap, err := structures.LoadLocalHeap(g.file.osFile, g.symbolTable.HeapAddress, g.file.sb)
+	heap, err := structures.LoadLocalHeap(g.file.reader, g.symbolTable.HeapAddress, g.file.sb)
 	if err != nil {
 		return utils.WrapError("local heap load failed", err)
 	}
 
 	// Detect B-tree format by reading signature.
-	btreeSig := readSignature(g.file.osFile, btreeAddr)
+	btreeSig := readSignature(g.file.reader, btreeAddr)
 
 	var entries []structures.BTreeEntry
 	switch btreeSig {
 	case "TREE": //nolint:goconst // HDF5 B-tree signature used across multiple packages
 		// v1 B-tree format (used in v0 files and some v1 files).
-		entries, err = structures.ReadGroupBTreeEntries(g.file.osFile, btreeAddr, g.file.sb)
+		entries, err = structures.ReadGroupBTreeEntries(g.file.reader, btreeAddr, g.file.sb)
 	case "BTRE":
 		// Modern B-tree format.
-		entries, err = structures.ReadBTreeEntries(g.file.osFile, btreeAddr, g.file.sb)
+		entries, err = structures.ReadBTreeEntries(g.file.reader, btreeAddr, g.file.sb)
 	default:
 		return fmt.Errorf("unknown B-tree signature: %q at address 0x%X", btreeSig, btreeAddr)
 	}
@@ -504,10 +504,10 @@ func (g *Group) loadChildren() error {
 		// Check if this is an unnamed SNOD (offset 0 AND object is SNOD) - means we should inline its children.
 		// Note: offset 0 alone is NOT sufficient - it's a valid offset for the first string in the heap!
 		// We must verify the object at the address is actually a SNOD, not a regular object with name at offset 0.
-		sig := readSignature(g.file.osFile, entry.ObjectAddress)
+		sig := readSignature(g.file.reader, entry.ObjectAddress)
 		if entry.LinkNameOffset == 0 && sig == SignatureSNOD {
 			// This is an unnamed SNOD container - load its children directly.
-			node, err := structures.ParseSymbolTableNode(g.file.osFile, entry.ObjectAddress, g.file.sb)
+			node, err := structures.ParseSymbolTableNode(g.file.reader, entry.ObjectAddress, g.file.sb)
 			if err != nil {
 				return utils.WrapError("SNOD parse failed", err)
 			}
@@ -567,13 +567,13 @@ func (g *Group) loadChildren() error {
 
 func loadObject(file *File, address uint64, name string) (Object, error) {
 	// Check signature first - SNOD means traditional group format.
-	sig := readSignature(file.osFile, address)
+	sig := readSignature(file.reader, address)
 	if sig == SignatureSNOD {
 		// SNOD is a symbol table node - it might be:
 		// 1. A true group with multiple children.
 		// 2. A redirect node with single entry (v0 files).
 
-		node, err := structures.ParseSymbolTableNode(file.osFile, address, file.sb)
+		node, err := structures.ParseSymbolTableNode(file.reader, address, file.sb)
 		if err != nil {
 			return nil, err
 		}
@@ -581,7 +581,7 @@ func loadObject(file *File, address uint64, name string) (Object, error) {
 		// If SNOD has single entry, it's likely a redirect - load the target directly.
 		if len(node.Entries) == 1 {
 			// Get heap from root to read the name.
-			rootHeader, err := core.ReadObjectHeader(file.osFile, file.sb.RootGroup, file.sb)
+			rootHeader, err := core.ReadObjectHeader(file.reader, file.sb.RootGroup, file.sb)
 			if err != nil {
 				return nil, err
 			}
@@ -590,7 +590,7 @@ func loadObject(file *File, address uint64, name string) (Object, error) {
 			for _, msg := range rootHeader.Messages {
 				if msg.Type == core.MsgSymbolTable && len(msg.Data) >= 16 {
 					heapAddr := file.sb.Endianness.Uint64(msg.Data[8:16])
-					heap, err = structures.LoadLocalHeap(file.osFile, heapAddr, file.sb)
+					heap, err = structures.LoadLocalHeap(file.reader, heapAddr, file.sb)
 					if err != nil {
 						return nil, err
 					}
@@ -621,7 +621,7 @@ func loadObject(file *File, address uint64, name string) (Object, error) {
 	}
 
 	// Try reading object header (works for both v1 and v2).
-	header, err := core.ReadObjectHeader(file.osFile, address, file.sb)
+	header, err := core.ReadObjectHeader(file.reader, address, file.sb)
 	if err != nil {
 		return nil, err
 	}

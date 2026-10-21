@@ -16,6 +16,7 @@ import (
 // File represents an open HDF5 file with its metadata and root group.
 type File struct {
 	osFile        *os.File
+	reader        io.ReaderAt // Bounded by the file size where it is known.
 	sb            *core.Superblock
 	root          *Group
 	visitedBTrees map[uint64]bool // Track visited B-tree addresses to prevent cycles
@@ -44,6 +45,16 @@ func Open(filename string) (*File, error) {
 	}
 	fileSize := fi.Size()
 
+	// Bound every internal read to the real file size — the Go counterpart of
+	// the VFD's get_eof contract (ADR-003). The size is already at hand from the
+	// stat above, so no second syscall is needed. A non-positive size cannot
+	// describe a byte range, and the per-site checks still apply without the
+	// backstop.
+	reader := io.ReaderAt(f)
+	if fileSize > 0 {
+		reader = utils.NewBoundedReader(f, uint64(fileSize))
+	}
+
 	sb, err := core.ReadSuperblock(f)
 	if err != nil {
 		_ = f.Close()
@@ -52,6 +63,7 @@ func Open(filename string) (*File, error) {
 
 	file := &File{
 		osFile:        f,
+		reader:        reader,
 		sb:            sb,
 		visitedBTrees: make(map[uint64]bool),
 	}
@@ -134,9 +146,13 @@ func (f *File) Superblock() *core.Superblock {
 	return f.sb
 }
 
-// Reader returns the underlying file reader for low-level access.
+// Reader returns a read-only view of the file for low-level access.
+//
+// Reads outside the file's bounds return an error instead of the platform
+// reader's short read, because the returned reader is bounded by the file size
+// (ADR-003). Close still releases the underlying file.
 func (f *File) Reader() io.ReaderAt {
-	return f.osFile
+	return f.reader
 }
 
 // readSignature reads 4 bytes at address and returns string.

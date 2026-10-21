@@ -60,7 +60,7 @@ type HyperslabSelection struct {
 //   - error: Error if selection is invalid or reading fails
 func (d *Dataset) ReadSlice(start, count []uint64) (interface{}, error) {
 	// Read object header to get dataset metadata
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read object header: %w", err)
 	}
@@ -138,7 +138,7 @@ func (d *Dataset) ReadSlice(start, count []uint64) (interface{}, error) {
 //   - error: Error if selection is invalid or reading fails
 func (d *Dataset) ReadHyperslab(selection *HyperslabSelection) (interface{}, error) {
 	// Read object header to get dataset metadata
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read object header: %w", err)
 	}
@@ -484,7 +484,7 @@ func (d *Dataset) readContiguousOptimized(
 		fileOffset := layout.DataAddress + startOffset
 
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		_, err := d.file.osFile.ReadAt(rawData, int64(fileOffset))
+		_, err := d.file.reader.ReadAt(rawData, int64(fileOffset))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read 1D contiguous data: %w", err)
 		}
@@ -504,7 +504,7 @@ func (d *Dataset) readContiguousOptimized(
 	fileOffset := layout.DataAddress + startByteOffset
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	_, err := d.file.osFile.ReadAt(outputData, int64(fileOffset))
+	_, err := d.file.reader.ReadAt(outputData, int64(fileOffset))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read contiguous data: %w", err)
 	}
@@ -560,7 +560,7 @@ func (d *Dataset) readContiguousRowByRow(
 	fileOffset := layout.DataAddress + startOffset
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	_, err := d.file.osFile.ReadAt(rawData, int64(fileOffset))
+	_, err := d.file.reader.ReadAt(rawData, int64(fileOffset))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read bounding box: %w", err)
 	}
@@ -619,7 +619,7 @@ func (d *Dataset) readContiguous2DOptimized(
 
 					// Read single element
 					//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-					_, err := d.file.osFile.ReadAt(
+					_, err := d.file.reader.ReadAt(
 						outputData[outputIdx*elementSize:(outputIdx+1)*elementSize],
 						int64(byteOffset),
 					)
@@ -668,7 +668,7 @@ func (d *Dataset) readHyperslabChunked(
 
 	// Parse B-tree to get chunk addresses
 	btreeNode, err := core.ParseBTreeV1Node(
-		d.file.osFile,
+		d.file.reader,
 		layout.DataAddress,
 		d.file.sb.OffsetSize,
 		len(chunkDims),
@@ -680,7 +680,7 @@ func (d *Dataset) readHyperslabChunked(
 
 	// Build chunk index (scaled coordinates -> file address)
 	chunkIndex := make(map[string]chunkIndexEntry)
-	allChunks, err := btreeNode.CollectAllChunks(d.file.osFile, d.file.sb.OffsetSize, chunkDims)
+	allChunks, err := btreeNode.CollectAllChunks(d.file.reader, d.file.sb.OffsetSize, chunkDims)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get chunk index: %w", err)
 	}
@@ -830,7 +830,7 @@ func (d *Dataset) extractFromChunk(
 	// Read chunk data (use nbytes from index)
 	chunkData := make([]byte, chunkInfo.nbytes)
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	_, err := d.file.osFile.ReadAt(chunkData, int64(chunkInfo.address))
+	_, err := d.file.reader.ReadAt(chunkData, int64(chunkInfo.address))
 	if err != nil {
 		return fmt.Errorf("failed to read chunk data: %w", err)
 	}

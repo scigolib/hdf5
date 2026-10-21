@@ -65,7 +65,7 @@ func (d *Dataset) ChunkIterator() (*ChunkIterator, error) {
 //	}
 func (d *Dataset) ChunkIteratorWithContext(ctx context.Context) (*ChunkIterator, error) {
 	// Read object header to get layout info.
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read object header: %w", err)
 	}
@@ -133,7 +133,7 @@ func (d *Dataset) ChunkIteratorWithContext(ctx context.Context) (*ChunkIterator,
 func (d *Dataset) collectChunkCoordinates(layout *core.DataLayoutMessage, dataspace *core.DataspaceMessage) ([][]uint64, error) {
 	// Parse B-tree to get all chunks.
 	btreeNode, err := core.ParseBTreeV1Node(
-		d.file.osFile,
+		d.file.reader,
 		layout.DataAddress,
 		d.file.sb.OffsetSize,
 		len(layout.ChunkSize),
@@ -143,7 +143,7 @@ func (d *Dataset) collectChunkCoordinates(layout *core.DataLayoutMessage, datasp
 		return nil, fmt.Errorf("failed to parse chunk B-tree: %w", err)
 	}
 
-	allChunks, err := btreeNode.CollectAllChunks(d.file.osFile, d.file.sb.OffsetSize, layout.ChunkSize)
+	allChunks, err := btreeNode.CollectAllChunks(d.file.reader, d.file.sb.OffsetSize, layout.ChunkSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to collect chunks: %w", err)
 	}
