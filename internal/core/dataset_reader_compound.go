@@ -130,6 +130,15 @@ func parseCompoundData(rawData []byte, compoundType *CompoundType, numElements u
 
 		// Parse each member.
 		for _, member := range compoundType.Members {
+			// member.Offset comes from the compound datatype properties, i.e.
+			// from file metadata. A value beyond the struct size used to panic
+			// the slice expression below (found by TestCorruptionCorpus), so it
+			// is validated first (ADR-003).
+			if uint64(member.Offset) > structSize {
+				return nil, fmt.Errorf("member %s offset %d exceeds compound size %d",
+					member.Name, member.Offset, structSize)
+			}
+
 			memberData := structData[member.Offset:]
 
 			memberValue, err := parseMemberValue(memberData, member.Type, r, sb)
