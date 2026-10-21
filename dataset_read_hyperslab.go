@@ -652,6 +652,13 @@ func (d *Dataset) readHyperslabChunked(
 	dims := dataspace.Dimensions
 	chunkDims := layout.ChunkSize
 
+	// Only the version 1 B-tree index is read here; a version 4 layout can name
+	// a different index structure at the same address (see readChunkedData).
+	if layout.ChunkIndexType != core.ChunkIndexBTREE {
+		return nil, fmt.Errorf("unsupported chunk index type %d: only the v1 B-tree index is supported",
+			layout.ChunkIndexType)
+	}
+
 	// Calculate output size
 	outputElements := calculateHyperslabOutputSize(selection)
 	if outputElements == 0 {
@@ -731,6 +738,23 @@ type chunkIndexEntry struct {
 func findOverlappingChunks(sel *HyperslabSelection, chunkDims, datasetDims []uint64) ([][]uint64, error) {
 	ndims := len(sel.Start)
 
+	// The selection and the dataset must agree on the rank, and the chunk grid
+	// must cover it: HDF5 stores the fastest-varying dimension in bytes, so the
+	// chunk grid may carry one extra dimension (see readChunkedData). A grid
+	// SHORTER than the rank is indexed past its end (review finding); zero
+	// dimensions are rejected at layout parse, but the check is cheap and keeps
+	// this function safe on its own.
+	if len(datasetDims) != ndims || len(chunkDims) < ndims {
+		return nil, fmt.Errorf("rank mismatch: selection %d, chunk %d, dataset %d",
+			ndims, len(chunkDims), len(datasetDims))
+	}
+
+	for i, dim := range chunkDims {
+		if dim == 0 {
+			return nil, fmt.Errorf("chunk dimension %d is zero", i)
+		}
+	}
+
 	// Calculate first and last chunk indices for each dimension
 	firstChunk := make([]uint64, ndims)
 	lastChunk := make([]uint64, ndims)
@@ -782,6 +806,15 @@ func generateChunkCoordinates(first, last []uint64) ([][]uint64, error) {
 	totalChunks, err := utils.SafeInt(total, "hyperslab chunk count")
 	if err != nil {
 		return nil, err
+	}
+
+	// A representable count is not automatically a reasonable one: each chunk
+	// descriptor costs a slice header plus its coordinates, so the policy limit
+	// is checked before any allocation (ADR-003).
+	if total > 0 {
+		if err := utils.ValidateBufferSize(total, utils.MaxChunkCoordinates, "hyperslab chunk count"); err != nil {
+			return nil, err
+		}
 	}
 
 	result := make([][]uint64, 0, totalChunks)
@@ -846,10 +879,12 @@ func (d *Dataset) extractFromChunk(
 
 	elementSize := uint64(datatype.Size)
 
-	// Read chunk data (use nbytes from index)
-	chunkData := make([]byte, chunkInfo.nbytes)
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	_, err := d.file.reader.ReadAt(chunkData, int64(chunkInfo.address))
+	// Read chunk data (use nbytes from index). The size is a uint32 from the
+	// B-tree key, i.e. file metadata, so it goes through the block funnel: the
+	// sibling whole-dataset path validates the same field (review finding), and
+	// on a 32-bit target make() would panic above MaxInt.
+	chunkData, err := core.ReadBlock(d.file.reader, d.file.sb, chunkInfo.address,
+		chunkInfo.nbytes, utils.MaxChunkSize, "chunk data")
 	if err != nil {
 		return fmt.Errorf("failed to read chunk data: %w", err)
 	}

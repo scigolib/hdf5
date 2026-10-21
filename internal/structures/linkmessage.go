@@ -142,19 +142,21 @@ func ParseLinkMessage(data []byte, sb *core.Superblock) (*LinkMessage, error) {
 
 	// Name (N bytes).
 	//
-	// nameLen can be encoded in up to 8 bytes, so a corrupt message can claim a
-	// size that does not fit in int. Convert with the platform check first: a
-	// value that wrapped negative would make the bounds check below pass (the
-	// sum turns small) and the slice expression panic.
+	// Compare in uint64, not int: nameLen can be any 8-byte value and current
+	// is positive, so an int addition of the two wraps negative, passes the
+	// check and the slice expression panics (found in review). The subtraction
+	// form has no overflow of its own, and the conversion to int below is then
+	// guaranteed to succeed.
+	if current < 0 || current > len(data) || nameLen > uint64(len(data))-uint64(current) {
+		return nil, fmt.Errorf("unexpected end of data reading name (need %d bytes, have %d)",
+			nameLen, len(data)-current)
+	}
+
 	nameLengthInt, err := utils.SafeInt(nameLen, "link name length")
 	if err != nil {
 		return nil, err
 	}
 
-	if current+nameLengthInt > len(data) {
-		return nil, fmt.Errorf("unexpected end of data reading name (need %d bytes, have %d)",
-			nameLen, len(data)-current)
-	}
 	msg.Name = string(data[current : current+nameLengthInt])
 	current += nameLengthInt
 

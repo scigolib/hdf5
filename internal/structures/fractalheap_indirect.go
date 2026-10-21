@@ -247,25 +247,39 @@ func (wb *WritableIndirectBlock) WriteAt(writer Writer, sb *core.Superblock, hea
 //
 // Reference: H5HFcache.c - H5HF__cache_iblock_serialize().
 func (wb *WritableIndirectBlock) writeAt(writer Writer, address uint64, sb *core.Superblock, heapOffsetSize uint8) error {
-	// Calculate size
+	// Calculate size. Every term is computed in uint64: a wrapped sum could stay
+	// positive (entriesSize wrapping into [-17,-1] cancels part of the header on
+	// a 32-bit target), pass the cap check and leave an undersized buffer that
+	// panics in the copy below (review finding).
 	numEntries := len(wb.ChildAddresses)
-	headerSize := 5 + int(sb.OffsetSize) + int(heapOffsetSize)
-	entriesSize := numEntries * int(sb.OffsetSize)
-	checksumSize := 0
+	headerSize := uint64(5) + uint64(sb.OffsetSize) + uint64(heapOffsetSize)
+	checksumSize := uint64(0)
 	if wb.Header.ChecksumEnabled {
 		checksumSize = 4
 	}
 
-	totalSize := headerSize + entriesSize + checksumSize
+	entriesSize, err := utils.SafeMultiply(uint64(numEntries), uint64(sb.OffsetSize))
+	if err != nil {
+		return fmt.Errorf("fractal heap indirect block: %w", err)
+	}
 
-	// ADR-003: this buffer mirrors an in-memory child table, so its size is
-	// already bounded by the allocation that produced that table. The check is
-	// defense in depth against entriesSize wrapping int on a 32-bit platform:
-	// the negative product becomes a huge uint64 here, which is what we want —
-	// ValidateBufferSize then rejects it before the make below.
-	//nolint:gosec // G115: a negative totalSize intentionally becomes a huge uint64 and is rejected below
-	if err := utils.ValidateBufferSize(uint64(totalSize), utils.MaxChunkSize,
+	total, err := utils.SafeAdd(headerSize, entriesSize)
+	if err != nil {
+		return fmt.Errorf("fractal heap indirect block: %w", err)
+	}
+
+	total, err = utils.SafeAdd(total, checksumSize)
+	if err != nil {
+		return fmt.Errorf("fractal heap indirect block: %w", err)
+	}
+
+	if err := utils.ValidateBufferSize(total, utils.MaxChunkSize,
 		"fractal heap indirect block"); err != nil {
+		return err
+	}
+
+	totalSize, err := utils.SafeInt(total, "fractal heap indirect block")
+	if err != nil {
 		return err
 	}
 
@@ -367,13 +381,16 @@ func ParseIndirectBlock(reader io.ReaderAt, address uint64, numRows, tableWidth 
 	// H5HF__cache_iblock_deserialize decodes it unconditionally (H5HFcache.c).
 	// This library's MVP writer, however, leaves
 	// WritableIndirectBlockHeader.ChecksumEnabled false and emits no checksum,
-	// so the tail is probed rather than demanded: a failed read here means the
-	// block was written by that writer, not that it is corrupt — the body was
-	// already fully validated above, which is what bounds the allocation.
+	// so the tail is probed: four readable bytes after the body set the flag.
+	// A successful probe only proves those bytes exist — it cannot tell which
+	// writer produced the block, and the flag is advisory — while the body
+	// above, not the probe, is what bounds the allocation.
 	var checksumPresent bool
-	if _, err := core.ReadBlock(reader, nil, address+bodySize, 4, utils.MaxChunkSize,
-		"fractal heap indirect block checksum"); err == nil {
-		checksumPresent = true
+	if probeAddr, addErr := utils.SafeAdd(address, bodySize); addErr == nil {
+		if _, probeErr := core.ReadBlock(reader, nil, probeAddr, 4, utils.MaxChunkSize,
+			"fractal heap indirect block checksum"); probeErr == nil {
+			checksumPresent = true
+		}
 	}
 
 	// The on-disk table holds sizeofAddr bytes per entry, but Entries widens

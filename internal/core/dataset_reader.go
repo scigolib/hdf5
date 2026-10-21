@@ -328,6 +328,23 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 	// Note: chunk dimensions may include an extra dimension for datatype size.
 	// (HDF5 stores "fastest-varying dimension" as bytes, see H5Dbtree.c comments).
 	ndims := len(layout.ChunkSize)
+
+	// The chunk grid must cover the dataspace rank: the per-chunk copy below
+	// slices the chunk dimensions and scaled coordinates by the dataspace rank,
+	// so a shorter chunk grid panics (review finding).
+	if ndims < len(dataspace.Dimensions) {
+		return nil, fmt.Errorf("chunk rank %d is smaller than dataspace rank %d",
+			ndims, len(dataspace.Dimensions))
+	}
+
+	// Only the version 1 B-tree index is read here. A version 4 layout can name
+	// a fixed/extensible array or a v2 B-tree; the address in that case points
+	// at a different structure, so reading it as a B-tree would return garbage.
+	if layout.ChunkIndexType != ChunkIndexBTREE {
+		return nil, fmt.Errorf("unsupported chunk index type %d: only the v1 B-tree index is supported",
+			layout.ChunkIndexType)
+	}
+
 	btree, err := ParseBTreeV1Node(r, layout.DataAddress, sb.OffsetSize, ndims, layout.ChunkSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse B-tree: %w", err)

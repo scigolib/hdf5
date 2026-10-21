@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/scigolib/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,6 +20,33 @@ func TestGenerateChunkCoordinates_RejectsUnrepresentableSpan(t *testing.T) {
 	_, err := generateChunkCoordinates(first, last)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "platform limit")
+}
+
+// TestGenerateChunkCoordinates_RejectsChunkCountAbovePolicy covers the policy
+// cap: a representable but enormous chunk count would allocate gigabytes of
+// descriptors before the loop even starts.
+func TestGenerateChunkCoordinates_RejectsChunkCountAbovePolicy(t *testing.T) {
+	first := []uint64{0}
+	last := []uint64{utils.MaxChunkCoordinates} // span = cap + 1
+
+	_, err := generateChunkCoordinates(first, last)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "exceeds maximum")
+}
+
+// TestFindOverlappingChunks_RankMismatch covers the review finding that a chunk
+// grid shorter than the selection rank was indexed past its end.
+func TestFindOverlappingChunks_RankMismatch(t *testing.T) {
+	sel := &HyperslabSelection{
+		Start:  []uint64{0, 0},
+		Count:  []uint64{1, 1},
+		Stride: []uint64{1, 1},
+		Block:  []uint64{1, 1},
+	}
+
+	_, err := findOverlappingChunks(sel, []uint64{4}, []uint64{10, 10})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "rank mismatch")
 }
 
 // TestGenerateChunkCoordinates_RegularRange pins the behavior the guard must

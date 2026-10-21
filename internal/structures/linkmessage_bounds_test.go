@@ -24,6 +24,10 @@ func TestParseLinkMessage_NameLengthBounds(t *testing.T) {
 	}{
 		{name: "empty name is rejected", length: 0, wantErr: true},
 		{name: "size above platform int", length: math.MaxUint64, wantErr: true},
+		// Exactly MaxInt64 passes SafeInt on a 64-bit target; the old int
+		// addition of current+length then wrapped negative and the check passed,
+		// which is the band the first version of this test missed.
+		{name: "max int64 wraps the int addition", length: math.MaxInt64, wantErr: true},
 		{name: "valid short name", length: 3, wantErr: false},
 	}
 
