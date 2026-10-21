@@ -924,10 +924,10 @@ func readHeapObject(r io.ReaderAt, blockAddr, offset, length uint64, sb *Superbl
 
 	// ADR-003: length comes from the heap ID and used to size the allocation
 	// unchecked. For a managed object the heap header supplies two authoritative
-	// bounds: the object cannot exceed MaxManagedObjSize (H5HF_MAN_OBJ_MAX_SIZE,
-	// H5HFpkg.h) and it cannot exceed the direct block that holds it. A zero
-	// field means the header did not report a bound; the ReadBlock cap below
-	// still applies.
+	// bounds: the object cannot exceed MaxManagedObjSize (the header's
+	// max_man_size field, H5HFcache.c:478) and it cannot exceed the direct
+	// block that holds it. A zero field means the header did not report a
+	// bound; the ReadBlock cap below still applies.
 	if header.MaxManagedObjSize != 0 {
 		if maxObj := uint64(header.MaxManagedObjSize); length > maxObj {
 			return nil, fmt.Errorf("heap object length %d exceeds MaxManagedObjSize %d", length, maxObj)

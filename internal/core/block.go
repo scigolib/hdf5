@@ -21,13 +21,17 @@ const undefinedAddress uint64 = 0xFFFFFFFFFFFFFFFF
 const maxDatasetSize uint64 = utils.MaxChunkSize * 1024
 
 // dataLimit resolves the end of the readable address space for r, in the order
-// ADR-003 prescribes: the physical reader size when known, otherwise the
-// superblock EOF address, otherwise 0 (unknown, so callers skip the region
-// check and keep only the hard cap).
+// ADR-003 prescribes: the reader's own size when known (utils.ReaderSize: a
+// logical EndOfFile first, then Stat/Size), otherwise the superblock EOF
+// address, otherwise 0 (unknown, so callers skip the region check and keep only
+// the hard cap).
 //
-// The physical size wins when both are known because a read-modify-write
-// session can leave EOFAddress stale, while the reader's size cannot be. This
-// is the Go counterpart of H5F_get_eoa / H5FD_get_eof in the C library.
+// The reader's size wins over EOFAddress because the superblock's EOA is only
+// refreshed when the file is written and closed: during a read-modify-write
+// session it is stale the moment the allocator grows the file. A writer reports
+// its live end through EndOfFile, which is exactly the H5FD_get_eoa value the
+// C library checks against; a plain *os.File reports what is on disk. This is
+// the Go counterpart of H5F_get_eoa / H5FD_get_eof in the C library.
 func dataLimit(r io.ReaderAt, sb *Superblock) uint64 {
 	if size, ok := utils.ReaderSize(r); ok {
 		return size

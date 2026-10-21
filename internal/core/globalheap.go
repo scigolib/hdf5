@@ -90,7 +90,7 @@ func ReadGlobalHeapCollection(r io.ReaderAt, address uint64, offsetSize int) (*G
 	// Read entire collection into memory for easier parsing.
 	//
 	// ADR-003: collectionSize comes straight from the GCOL header. The C
-	// library's H5HG__cache_deserialize (H5HGcache.c) allocates the same size
+	// library's H5HG__hdr_deserialize (H5HGcache.c:105) reads the same field
 	// and survives a corrupt one only because malloc returns NULL; a failed Go
 	// allocation is a fatal runtime throw instead, so the size is checked
 	// against the reader and capped at utils.MaxChunkSize before the make
