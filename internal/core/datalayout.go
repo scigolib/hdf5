@@ -30,9 +30,25 @@ const (
 	ChunkIndexBT2    uint8 = 5 // v2 B-tree.
 )
 
-// chunkLayoutFlagSingleWithFilter marks a single-chunk index that stores the
-// chunk size and filter mask in the layout message (H5Oprivate.h:404).
-const chunkLayoutFlagSingleWithFilter = 0x02
+// Chunk layout flags and the rank ceiling, from H5Oprivate.h:400-406.
+const (
+	// chunkLayoutFlagDontFilterPartial marks chunks that must not be filtered
+	// when only part of them is written (H5Oprivate.h:403).
+	chunkLayoutFlagDontFilterPartial = 0x01
+
+	// chunkLayoutFlagSingleWithFilter marks a single-chunk index that stores the
+	// chunk size and filter mask in the layout message (H5Oprivate.h:404).
+	chunkLayoutFlagSingleWithFilter = 0x02
+
+	// chunkLayoutFlagAll is the mask of flags the format defines; the C decoder
+	// rejects any other bit (H5Olayout.c:321).
+	chunkLayoutFlagAll = chunkLayoutFlagDontFilterPartial | chunkLayoutFlagSingleWithFilter
+
+	// maxChunkLayoutDims is H5O_LAYOUT_NDIMS = H5S_MAX_RANK + 1 (H5Oprivate.h:400).
+	// The chunk grid has one more dimension than the dataspace: the last one is
+	// the element size in bytes.
+	maxChunkLayoutDims = 33
+)
 
 // DataLayoutMessage represents HDF5 data layout message.
 type DataLayoutMessage struct {
@@ -136,8 +152,8 @@ func parseLayoutV3(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLa
 		}
 
 		dimensionality := data[2]
-		if dimensionality == 0 {
-			return nil, errors.New("chunked layout has zero dimensionality")
+		if err := validateChunkDimensionality(dimensionality); err != nil {
+			return nil, err
 		}
 
 		offset := 3
@@ -217,6 +233,23 @@ func parseLayoutV4(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLa
 	return parseLayoutV3(data, sb, msg)
 }
 
+// validateChunkDimensionality rejects a chunk grid that cannot describe a
+// dataset. Zero dimensions never occur in a valid file, and the format caps the
+// grid at H5O_LAYOUT_NDIMS; the C decoder applies both checks to version 3 and
+// version 4 messages (H5Olayout.c:276, :335).
+func validateChunkDimensionality(ndims uint8) error {
+	if ndims == 0 {
+		return errors.New("chunked layout has zero dimensionality")
+	}
+
+	if ndims > maxChunkLayoutDims {
+		return fmt.Errorf("chunked layout dimensionality %d exceeds the maximum %d",
+			ndims, maxChunkLayoutDims)
+	}
+
+	return nil
+}
+
 // parseChunkedLayoutV4 parses a version 4 chunked layout body.
 //
 // Layout: version(1) class(1) flags(1) ndims(1) enc_bytes_per_dim(1)
@@ -232,8 +265,15 @@ func parseChunkedLayoutV4(data []byte, sb *Superblock, msg *DataLayoutMessage) (
 	ndims := data[3]
 	encBytes := int(data[4])
 
-	if ndims == 0 {
-		return nil, errors.New("chunked layout has zero dimensionality")
+	// The C decoder rejects any bit outside the two defined flags
+	// (H5Olayout.c:321): an unknown flag means the body is corrupt or a future
+	// feature this parser would silently misread.
+	if flags&^uint8(chunkLayoutFlagAll) != 0 {
+		return nil, fmt.Errorf("chunked layout has unknown flags: 0x%02x", flags)
+	}
+
+	if err := validateChunkDimensionality(ndims); err != nil {
+		return nil, err
 	}
 
 	if encBytes == 0 || encBytes > 8 {

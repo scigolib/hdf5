@@ -40,6 +40,18 @@ func TestParseDataLayout_RejectsInvalidChunkGrid(t *testing.T) {
 		require.Contains(t, err.Error(), "dimension 0 is zero")
 	})
 
+	t.Run("dimensionality above the format maximum", func(t *testing.T) {
+		d := make([]byte, 3+8+4)
+		d[0] = 3
+		d[1] = byte(LayoutChunked)
+		d[2] = maxChunkLayoutDims + 1
+		binary.LittleEndian.PutUint64(d[3:11], 0x1000)
+
+		_, err := ParseDataLayoutMessage(d, sb)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "exceeds the maximum")
+	})
+
 	t.Run("valid chunk grid", func(t *testing.T) {
 		d := make([]byte, 3+8+8)
 		d[0] = 3
@@ -101,4 +113,67 @@ func TestParseDataLayout_V4Chunked(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "is zero")
 	})
+}
+
+// TestParseDataLayout_V4ChunkedMalformed covers damaged version 4 chunked
+// bodies. The encoded dimension width drives every offset that follows it, so a
+// corrupt value must be rejected here: reading past it would size the grid and
+// the address from the wrong bytes.
+func TestParseDataLayout_V4ChunkedMalformed(t *testing.T) {
+	sb := &Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian}
+
+	tests := []struct {
+		name    string
+		data    []byte
+		wantErr string
+	}{
+		{
+			name:    "unknown layout flag",
+			data:    []byte{4, byte(LayoutChunked), 0x04, 1, 1},
+			wantErr: "unknown flags",
+		},
+		{
+			name:    "dimensionality above the format maximum",
+			data:    []byte{4, byte(LayoutChunked), 0, maxChunkLayoutDims + 1, 1},
+			wantErr: "exceeds the maximum",
+		},
+		{
+			name:    "zero encoded dimension width",
+			data:    []byte{4, byte(LayoutChunked), 0, 1, 0},
+			wantErr: "invalid dimension width",
+		},
+		{
+			name:    "encoded dimension width above eight bytes",
+			data:    []byte{4, byte(LayoutChunked), 0, 1, 9, 1},
+			wantErr: "invalid dimension width",
+		},
+		{
+			name:    "grid truncated inside the dimensions",
+			data:    []byte{4, byte(LayoutChunked), 0, 2, 1, 5},
+			wantErr: "dimensions truncated",
+		},
+		{
+			name:    "missing chunk index type",
+			data:    []byte{4, byte(LayoutChunked), 0, 1, 1, 2},
+			wantErr: "missing chunk index type",
+		},
+		{
+			name:    "index creation parameters truncated",
+			data:    []byte{4, byte(LayoutChunked), 0, 1, 1, 2, ChunkIndexEArray},
+			wantErr: "index data truncated",
+		},
+		{
+			name:    "unknown chunk index type",
+			data:    []byte{4, byte(LayoutChunked), 0, 1, 1, 2, 6},
+			wantErr: "unsupported chunk index type",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseDataLayoutMessage(tt.data, sb)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
