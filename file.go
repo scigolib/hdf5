@@ -31,12 +31,6 @@ func Open(filename string) (*File, error) {
 		return nil, utils.WrapError("file open failed", err)
 	}
 
-	// Verify HDF5 signature before reading superblock.
-	if !isHDF5File(f) {
-		_ = f.Close()
-		return nil, errors.New("not an HDF5 file")
-	}
-
 	// Get file size for address validation.
 	fi, err := f.Stat()
 	if err != nil {
@@ -50,15 +44,24 @@ func Open(filename string) (*File, error) {
 	// stat above, so no second syscall is needed. A non-positive size cannot
 	// describe a byte range, and the per-site checks still apply without the
 	// backstop.
+	sb, err := core.ReadSuperblock(f)
+	if err != nil {
+		_ = f.Close()
+		if errors.Is(err, core.ErrNoSignature) {
+			return nil, errors.New("not an HDF5 file")
+		}
+		return nil, utils.WrapError("superblock read failed", err)
+	}
+
+	// Every read below is bounded by the real file size (ADR-003) and, for a
+	// file with a user block, shifted by the base address: HDF5 metadata stores
+	// addresses relative to the superblock position (H5FDint.c:267).
 	reader := io.ReaderAt(f)
 	if fileSize > 0 {
 		reader = utils.NewBoundedReader(f, uint64(fileSize))
 	}
-
-	sb, err := core.ReadSuperblock(f)
-	if err != nil {
-		_ = f.Close()
-		return nil, utils.WrapError("superblock read failed", err)
+	if sb.BaseAddress > 0 {
+		reader = utils.NewBaseReader(reader, sb.BaseAddress)
 	}
 
 	file := &File{
@@ -68,12 +71,13 @@ func Open(filename string) (*File, error) {
 		visitedBTrees: make(map[uint64]bool),
 	}
 
-	// Validate root group address.
-	//nolint:gosec // G115: File size is always positive, safe to convert int64 to uint64
-	if sb.RootGroup >= uint64(fileSize) {
+	// Validate the root group address. It is relative to the base address, so
+	// the check compares the absolute position with the file size.
+	//nolint:gosec // G115: os.FileInfo.Size is non-negative for a regular file
+	if !regionInFile(sb.BaseAddress, sb.RootGroup, 1, uint64(fileSize)) {
 		_ = f.Close()
-		return nil, fmt.Errorf("root group address %d beyond file size %d",
-			sb.RootGroup, fileSize)
+		return nil, fmt.Errorf("root group address %d (base %d) beyond file size %d",
+			sb.RootGroup, sb.BaseAddress, fileSize)
 	}
 
 	// For all versions, sb.RootGroup now contains the correct object header address.
@@ -89,15 +93,17 @@ func Open(filename string) (*File, error) {
 	return file, nil
 }
 
-// isHDF5File verifies HDF5 file signature.
-func isHDF5File(r utils.ReaderAt) bool {
-	buf := utils.GetBuffer(8)
-	defer utils.ReleaseBuffer(buf)
-
-	if _, err := r.ReadAt(buf, 0); err != nil {
+// regionInFile reports whether a region of size bytes at the relative address
+// addr — that is, at absolute position base+addr — lies within a file of the
+// given size. The subtraction form avoids overflowing on a corrupt address.
+func regionInFile(base, addr, size, fileSize uint64) bool {
+	if base > fileSize {
 		return false
 	}
-	return string(buf) == core.Signature
+
+	rel := fileSize - base
+
+	return addr <= rel && size <= rel-addr
 }
 
 // Close closes the HDF5 file and releases associated resources.
@@ -148,9 +154,11 @@ func (f *File) Superblock() *core.Superblock {
 
 // Reader returns a read-only view of the file for low-level access.
 //
-// Reads outside the file's bounds return an error instead of the platform
-// reader's short read, because the returned reader is bounded by the file size
-// (ADR-003). Close still releases the underlying file.
+// Addresses are relative to the file's base address, which is zero unless the
+// file carries a user block (Superblock.BaseAddress). Reads outside the file's
+// bounds return an error instead of the platform reader's short read, because
+// the returned reader is bounded by the file size (ADR-003). Close still
+// releases the underlying file.
 func (f *File) Reader() io.ReaderAt {
 	return f.reader
 }

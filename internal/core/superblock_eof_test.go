@@ -26,6 +26,14 @@ func buildSuperblockImage(t *testing.T, version uint8, order binary.ByteOrder, e
 	if version == Version0 {
 		size = minSuperblockSizeV0
 	}
+
+	// The stored end-of-file address is an absolute offset, so the image must
+	// contain at least that many bytes: a header claiming more than the file has
+	// is truncated and is rejected before these assertions run.
+	if eof > uint64(size) {
+		size = int(eof)
+	}
+
 	buf := make([]byte, size)
 	copy(buf[0:8], Signature)
 	buf[8] = version

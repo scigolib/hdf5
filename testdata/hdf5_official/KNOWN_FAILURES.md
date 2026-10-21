@@ -114,10 +114,13 @@ features we don't yet support.
 
 **Files**:
 
-**User Blocks** (3 files):
-- `twithub.h5` - File with 512-byte user block
-- `twithub513.h5` - File with 513-byte user block
-- User block = arbitrary data before HDF5 signature
+**User Blocks** — now supported:
+- `twithub.h5` (512-byte user block), `twithub513.h5` (1024-byte user block),
+  `h5clear_fsm_persist_user_equal.h5`, `h5clear_fsm_persist_user_less.h5` are read by the
+  library: metadata addresses are relative to the superblock position (the base address), and
+  the reader applies the base at the I/O boundary.
+- `h5clear_fsm_persist_user_greater.h5` stays skipped: it stores an end-of-file address past the
+  physical size, and the C library rejects it as truncated as well.
 
 **SOHM (Shared Object Header Messages)** (1 file):
 - `h5stat_tsohm.h5` - Uses shared object header optimization

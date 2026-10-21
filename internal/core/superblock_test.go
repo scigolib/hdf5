@@ -90,7 +90,12 @@ func TestReadSuperblockV2(t *testing.T) {
 		0x00, 0x00, 0x00, 0x00,
 	}
 
-	sb, err := ReadSuperblock(bytes.NewReader(data))
+	// The stored end-of-file address is 256: the image must be that long,
+	// otherwise the parser reports a truncated file.
+	image := make([]byte, 256)
+	copy(image, data)
+
+	sb, err := ReadSuperblock(bytes.NewReader(image))
 	require.NoError(t, err)
 	require.Equal(t, uint8(2), sb.Version)
 	require.Equal(t, uint8(8), sb.OffsetSize)
@@ -124,7 +129,12 @@ func TestReadSuperblockV3(t *testing.T) {
 		0x00, 0x00, 0x00, 0x00,
 	}
 
-	sb, err := ReadSuperblock(bytes.NewReader(data))
+	// The stored end-of-file address is 256: the image must be that long,
+	// otherwise the parser reports a truncated file.
+	image := make([]byte, 256)
+	copy(image, data)
+
+	sb, err := ReadSuperblock(bytes.NewReader(image))
 	require.NoError(t, err)
 	require.Equal(t, uint8(3), sb.Version)
 	require.Equal(t, uint8(8), sb.OffsetSize)
@@ -186,6 +196,10 @@ func TestSuperblockWrite(t *testing.T) {
 		err = sb.WriteTo(tmpFile, eofAddress)
 		require.NoError(t, err)
 
+		// The declared end-of-file address must match the physical size: the
+		// writer wrote only the header here, so extend the file as a real one is.
+		require.NoError(t, tmpFile.Truncate(int64(eofAddress)))
+
 		// Read back and verify
 		readSb, err := ReadSuperblock(tmpFile)
 		require.NoError(t, err)
@@ -220,6 +234,9 @@ func TestSuperblockWrite(t *testing.T) {
 		// Write
 		err = original.WriteTo(tmpFile, 2048)
 		require.NoError(t, err)
+
+		// The declared end-of-file address must match the physical size.
+		require.NoError(t, tmpFile.Truncate(2048))
 
 		// Read
 		read, err := ReadSuperblock(tmpFile)
@@ -341,7 +358,13 @@ func TestSuperblockBackwardCompatibility(t *testing.T) {
 		t.Run(fmt.Sprintf("v%d", tc.version), func(t *testing.T) {
 			data := tc.creator(t)
 
-			sb, err := ReadSuperblock(bytes.NewReader(data))
+			// The mock images carry an absolute end-of-file address but are only
+			// as long as the header; pad them so the truncation check sees a
+			// complete file.
+			image := make([]byte, 4096)
+			copy(image, data)
+
+			sb, err := ReadSuperblock(bytes.NewReader(image))
 			require.NoError(t, err)
 			assert.Equal(t, tc.version, sb.Version)
 		})

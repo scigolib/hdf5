@@ -60,10 +60,72 @@ func minimumSuperblockSize(version uint8) uint64 {
 // ReadSuperblock reads and parses the HDF5 superblock from the file.
 // It supports versions 0, 2, and 3 of the superblock format.
 func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
+	addr, err := locateSuperblock(r)
+	if err != nil {
+		return nil, err
+	}
+
+	size, sizeKnown := utils.ReaderSize(r)
+
+	return readSuperblockAt(r, addr, size, sizeKnown)
+}
+
+// ErrNoSignature reports a file with no HDF5 superblock signature at any of
+// the locations the format allows. Open maps it to "not an HDF5 file".
+var ErrNoSignature = errors.New("HDF5 signature not found")
+
+// locateSuperblock finds the superblock signature the way the C library does
+// (H5FD_locate_signature, H5FDint.c:148): at address 0, then at every power of
+// two starting at 512, until the file size is passed. The address found is the
+// file's base address.
+func locateSuperblock(r io.ReaderAt) (uint64, error) {
+	size, sizeKnown := utils.ReaderSize(r)
+
+	// The C loop runs n from 8 (address 0) to the file's bit length, with a
+	// floor of 9 so that address 512 is always attempted.
+	maxPow := 9
+	if sizeKnown {
+		maxPow = 0
+		for v := size; v != 0; v >>= 1 {
+			maxPow++
+		}
+		if maxPow < 9 {
+			maxPow = 9
+		}
+	}
+
+	buf := utils.GetBuffer(len(Signature))
+	defer utils.ReleaseBuffer(buf)
+
+	for n := 8; n < maxPow; n++ {
+		addr := uint64(0)
+		if n != 8 {
+			addr = uint64(1) << n
+		}
+
+		if sizeKnown && addr+uint64(len(Signature)) > size {
+			break
+		}
+
+		if _, err := r.ReadAt(buf, int64(addr)); err != nil {
+			continue
+		}
+		if string(buf) == Signature {
+			return addr, nil
+		}
+	}
+
+	return 0, ErrNoSignature
+}
+
+// readSuperblockAt parses the superblock found at addr, which is also the
+// file's effective base address: HDF5 metadata addresses are relative to it.
+func readSuperblockAt(r io.ReaderAt, addr, size uint64, sizeKnown bool) (*Superblock, error) {
 	buf := utils.GetBuffer(128)
 	defer utils.ReleaseBuffer(buf)
 
-	n, err := r.ReadAt(buf, 0)
+	//nolint:gosec // G115: addr is a file offset located within the file
+	n, err := r.ReadAt(buf, int64(addr))
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, utils.WrapError("superblock read failed", err)
 	}
@@ -80,71 +142,9 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		return nil, fmt.Errorf("unsupported superblock version: %d (only 0, 2, 3 supported)", version)
 	}
 
-	// Endianness and size handling depends on version
-	var endianness binary.ByteOrder
-	var offsetSize, lengthSize uint8
-
-	if version == Version0 {
-		// For v0: sizes in bytes 13-14, endianness presumably little-endian (check spec)
-		offsetSize = buf[13]
-		lengthSize = buf[14]
-		endianness = binary.LittleEndian // v0 files are typically little-endian
-	} else {
-		// For v2 and v3: endianness in byte 9, packed sizes in byte 10
-		// Byte 9: flags byte - bit 0 is endianness (0=LE, 1=BE)
-		switch buf[9] & 0x01 { // Check only bit 0
-		case 0:
-			endianness = binary.LittleEndian
-		case 1:
-			endianness = binary.BigEndian
-		}
-
-		// Byte 10: Size of Offsets
-		// In v2/v3, this can be either:
-		// 1. Direct size value (1, 2, 4, or 8 bytes)
-		// 2. Packed codes (lower 4 bits=offset, upper 4 bits=length)
-		// If the value is a valid size (1/2/4/8), treat it as direct size
-		// Otherwise, treat as packed codes
-		sizesByte := buf[10]
-
-		// Check if it's a direct size value
-		validDirectSizes := map[uint8]bool{1: true, 2: true, 4: true, 8: true}
-		if validDirectSizes[sizesByte] {
-			// Direct size format: byte 10 = offset size, byte 11 = length size (implied 8)
-			offsetSize = sizesByte
-			lengthSize = 8 // HDF5 v2/v3 typically uses 8-byte lengths
-		} else {
-			// Packed format: lower 4 bits = offset code, upper 4 bits = length code
-			// Size codes: 0=1 byte, 1=2 bytes, 2=4 bytes, 3=8 bytes
-			offsetSizeCode := sizesByte & 0x0F        // Lower 4 bits
-			lengthSizeCode := (sizesByte >> 4) & 0x0F // Upper 4 bits
-
-			// Convert codes to actual sizes
-			sizeCodeMap := map[uint8]uint8{0: 1, 1: 2, 2: 4, 3: 8}
-			var ok bool
-			offsetSize, ok = sizeCodeMap[offsetSizeCode]
-			if !ok {
-				return nil, fmt.Errorf("invalid offset size code: %d", offsetSizeCode)
-			}
-			lengthSize, ok = sizeCodeMap[lengthSizeCode]
-			if !ok {
-				return nil, fmt.Errorf("invalid length size code: %d", lengthSizeCode)
-			}
-		}
-	}
-
-	// Handle zero sizes (in test files)
-	if offsetSize == 0 {
-		offsetSize = 8
-	}
-	if lengthSize == 0 {
-		lengthSize = 8
-	}
-
-	validSizes := map[uint8]bool{1: true, 2: true, 4: true, 8: true}
-	if !validSizes[offsetSize] || !validSizes[lengthSize] {
-		return nil, fmt.Errorf("invalid sizes for version %d: offset=%d, length=%d",
-			version, offsetSize, lengthSize)
+	endianness, offsetSize, lengthSize, err := parseSuperblockSizes(version, buf)
+	if err != nil {
+		return nil, err
 	}
 
 	// Helper function to read variable-sized values
@@ -169,14 +169,24 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 	}
 
 	sb := &Superblock{
-		Version:    version,
-		OffsetSize: offsetSize,
-		LengthSize: lengthSize,
-		Endianness: endianness,
+		Version:     version,
+		OffsetSize:  offsetSize,
+		LengthSize:  lengthSize,
+		Endianness:  endianness,
+		BaseAddress: addr,
 	}
 
+	// The base address stored in the file is parsed for both layouts and
+	// validated, but the effective base is the superblock position: the C
+	// library rewrites a disagreeing value the same way (H5Fsuper.c:475-485).
 	if version == Version0 {
-		sb.BaseAddress = 0
+		storedBase, baseErr := readValue(24, offsetSize)
+		if baseErr != nil {
+			return nil, utils.WrapError("base address read failed", baseErr)
+		}
+		if err := validateStoredBaseAddress(storedBase, size, sizeKnown); err != nil {
+			return nil, err
+		}
 		// Version 0 superblock structure:
 		// Offset 24-31: Base address
 		// Offset 32-39: Free space index
@@ -219,9 +229,12 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		// For v2 and v3, fields start at byte 12
 		current := 12
 
-		sb.BaseAddress, err = readValue(current, offsetSize)
-		if err != nil {
-			return nil, utils.WrapError("base address read failed", err)
+		storedBase, baseErr := readValue(current, offsetSize)
+		if baseErr != nil {
+			return nil, utils.WrapError("base address read failed", baseErr)
+		}
+		if err := validateStoredBaseAddress(storedBase, size, sizeKnown); err != nil {
+			return nil, err
 		}
 		current += int(offsetSize)
 
@@ -247,23 +260,101 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		// The HDF5 C library also doesn't enforce checksum validation on read
 	}
 
-	if err := validateEOFAddress(version, sb.EOFAddress); err != nil {
+	if err := validateEOFAddress(version, addr, sb.EOFAddress, size, sizeKnown); err != nil {
 		return nil, err
 	}
 
 	return sb, nil
 }
 
+// parseSuperblockSizes returns the byte order and field widths of the
+// superblock: v0 stores them at bytes 13-14, while v2/v3 select the byte order
+// in byte 9 and either a direct size or a pair of packed codes in byte 10.
+func parseSuperblockSizes(version uint8, buf []byte) (binary.ByteOrder, uint8, uint8, error) {
+	var endianness binary.ByteOrder
+	var offsetSize, lengthSize uint8
+
+	if version == Version0 {
+		offsetSize = buf[13]
+		lengthSize = buf[14]
+		endianness = binary.LittleEndian // v0 files are little-endian only here
+	} else {
+		// Byte 9: flags — bit 0 selects the byte order.
+		if buf[9]&0x01 == 0 {
+			endianness = binary.LittleEndian
+		} else {
+			endianness = binary.BigEndian
+		}
+
+		// Byte 10 is either a direct size (1, 2, 4, 8) or packed codes:
+		// lower 4 bits = offset size, upper 4 bits = length size.
+		sizesByte := buf[10]
+		validDirectSizes := map[uint8]bool{1: true, 2: true, 4: true, 8: true}
+		if validDirectSizes[sizesByte] {
+			offsetSize = sizesByte
+			lengthSize = 8 // HDF5 v2/v3 typically uses 8-byte lengths
+		} else {
+			sizeCodeMap := map[uint8]uint8{0: 1, 1: 2, 2: 4, 3: 8}
+
+			var ok bool
+			offsetSize, ok = sizeCodeMap[sizesByte&0x0F]
+			if !ok {
+				return nil, 0, 0, fmt.Errorf("invalid offset size code: %d", sizesByte&0x0F)
+			}
+			lengthSize, ok = sizeCodeMap[(sizesByte>>4)&0x0F]
+			if !ok {
+				return nil, 0, 0, fmt.Errorf("invalid length size code: %d", (sizesByte>>4)&0x0F)
+			}
+		}
+	}
+
+	// Handle zero sizes (in test files).
+	if offsetSize == 0 {
+		offsetSize = 8
+	}
+	if lengthSize == 0 {
+		lengthSize = 8
+	}
+
+	validSizes := map[uint8]bool{1: true, 2: true, 4: true, 8: true}
+	if !validSizes[offsetSize] || !validSizes[lengthSize] {
+		return nil, 0, 0, fmt.Errorf("invalid sizes for version %d: offset=%d, length=%d",
+			version, offsetSize, lengthSize)
+	}
+
+	return endianness, offsetSize, lengthSize, nil
+}
+
 // validateEOFAddress rejects a non-zero EOF address smaller than the superblock
 // header itself: the file's address space cannot end inside the superblock that
 // defines it, so such a value means truncation or corruption (cf. the stored_eof
 // check in H5F__super_read, H5Fsuper.c:573).
-func validateEOFAddress(version uint8, eofAddress uint64) error {
+func validateEOFAddress(version uint8, superAddr, eofAddress, size uint64, sizeKnown bool) error {
 	minSize := minimumSuperblockSize(version)
-	if eofAddress != 0 && eofAddress < minSize {
+	headerEnd := superAddr + minSize
+	if eofAddress != 0 && eofAddress < headerEnd {
 		return fmt.Errorf("invalid superblock: EOF address %d is smaller than the superblock header (%d bytes)",
-			eofAddress, minSize)
+			eofAddress, headerEnd)
 	}
+
+	// The stored EOF address is absolute (C: H5Fsuper.c:573 compares the
+	// physical end of file plus the base against it), so it cannot be past the
+	// bytes the file actually has.
+	if sizeKnown && eofAddress > size {
+		return fmt.Errorf("truncated file: end-of-file address %d is beyond the file size %d",
+			eofAddress, size)
+	}
+
+	return nil
+}
+
+// validateStoredBaseAddress rejects a base address stored in the file that
+// points past the end of the file: it cannot describe a user block.
+func validateStoredBaseAddress(stored, size uint64, sizeKnown bool) error {
+	if sizeKnown && stored > size {
+		return fmt.Errorf("invalid superblock: base address %d is beyond the file size %d", stored, size)
+	}
+
 	return nil
 }
 
