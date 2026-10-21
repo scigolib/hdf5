@@ -219,7 +219,12 @@ func TestGZIPFilter_CompressionLevels(t *testing.T) {
 
 func TestGZIPFilter_CompressionRatio_Comparison(t *testing.T) {
 	// Test that higher compression levels produce smaller output
-	data := bytes.Repeat([]byte("Lorem ipsum dolor sit amet. "), 1000)
+	// The input must be compressible but not trivially so: on highly repetitive
+	// text flate levels 1 and 9 can emit the same bytes (go1.27 does for a
+	// single repeated sentence), which tells nothing about whether the level
+	// reached the compressor. Drawn from a small vocabulary, the difference is
+	// measurable on every Go version tested (1.25 and 1.27).
+	data := gzipLevelTestData()
 
 	filter1 := NewGZIPFilter(1)
 	filter9 := NewGZIPFilter(9)
@@ -242,6 +247,30 @@ func TestGZIPFilter_CompressionRatio_Comparison(t *testing.T) {
 	decompressed9, err := filter9.Remove(compressed9)
 	require.NoError(t, err)
 	require.Equal(t, data, decompressed9)
+}
+
+// gzipLevelTestData returns about 21 KB of text drawn from a 26-word
+// vocabulary. The sequence comes from a small LCG rather than math/rand so the
+// bytes are fixed by this file alone, independent of the standard library.
+func gzipLevelTestData() []byte {
+	words := []string{
+		"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+		"india", "juliet", "kilo", "lima", "mike", "november", "oscar", "papa",
+		"quebec", "romeo", "sierra", "tango", "uniform", "victor", "whiskey",
+		"xray", "yankee", "zulu",
+	}
+
+	const wordCount = 3000
+	out := make([]byte, 0, wordCount*8)
+
+	state := uint32(42)
+	for i := 0; i < wordCount; i++ {
+		state = state*1664525 + 1013904223 // Numerical Recipes LCG.
+		out = append(out, words[state%uint32(len(words))]...)
+		out = append(out, ' ')
+	}
+
+	return out
 }
 
 func TestGZIPFilter_Remove_InvalidData(t *testing.T) {
