@@ -34,7 +34,7 @@ type DataspaceMessage struct {
 
 // ParseDataspaceMessage parses a dataspace message from header message data.
 func ParseDataspaceMessage(data []byte) (*DataspaceMessage, error) {
-	if len(data) < 2 {
+	if len(data) < 1 {
 		return nil, errors.New("dataspace message too short")
 	}
 
@@ -43,6 +43,22 @@ func ParseDataspaceMessage(data []byte) (*DataspaceMessage, error) {
 	// Support both version 1 and version 2.
 	if version != 1 && version != 2 {
 		return nil, fmt.Errorf("unsupported dataspace version: %d", version)
+	}
+
+	// Require the whole header of this version before reading any field of it.
+	// Version 1 has version(1) + dimensionality(1) + flags(1) + reserved(5);
+	// version 2 has version(1) + dimensionality(1) + flags(1) + type(1). A
+	// truncated attribute message can carry a two-byte dataspace section, and
+	// reading data[2] after only len >= 2 was an out-of-range panic reachable
+	// from hdf5.Open (found by FuzzParseAttributeMessage).
+	minHeader := 8
+	if version == 2 {
+		minHeader = 4
+	}
+
+	if len(data) < minHeader {
+		return nil, fmt.Errorf("dataspace message too short: %d bytes, need %d for version %d header",
+			len(data), minHeader, version)
 	}
 
 	dimensionality := data[1]
