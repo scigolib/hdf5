@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/scigolib/hdf5/internal/core"
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // LinkType represents the type of link.
@@ -140,12 +141,22 @@ func ParseLinkMessage(data []byte, sb *core.Superblock) (*LinkMessage, error) {
 	}
 
 	// Name (N bytes).
-	if current+int(nameLen) > len(data) {
+	//
+	// nameLen can be encoded in up to 8 bytes, so a corrupt message can claim a
+	// size that does not fit in int. Convert with the platform check first: a
+	// value that wrapped negative would make the bounds check below pass (the
+	// sum turns small) and the slice expression panic.
+	nameLengthInt, err := utils.SafeInt(nameLen, "link name length")
+	if err != nil {
+		return nil, err
+	}
+
+	if current+nameLengthInt > len(data) {
 		return nil, fmt.Errorf("unexpected end of data reading name (need %d bytes, have %d)",
 			nameLen, len(data)-current)
 	}
-	msg.Name = string(data[current : current+int(nameLen)])
-	current += int(nameLen)
+	msg.Name = string(data[current : current+nameLengthInt])
+	current += nameLengthInt
 
 	// Link-type specific data.
 	switch msg.Type {

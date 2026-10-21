@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // FilterID represents HDF5 filter identifiers.
@@ -108,12 +110,17 @@ func ParseFilterPipelineMessage(data []byte) (*FilterPipelineMessage, error) {
 		// Filter name (variable length, only in version 1).
 		if version == 1 && nameLength > 0 {
 			// Name is null-terminated and padded to 8-byte boundary.
-			padded := nameLength
+			//
+			// The padded length is computed in int on purpose: nameLength is a
+			// uint16 from the file, and 65535 rounds up to 65536, which does not
+			// fit in uint16. A wrapped zero would pass the bounds check below
+			// and the name slice would run past the message.
+			padded := int(nameLength)
 			if padded%8 != 0 {
 				padded += 8 - (padded % 8)
 			}
 
-			if offset+int(padded) > len(data) {
+			if offset+padded > len(data) {
 				return nil, fmt.Errorf("filter name truncated at filter %d", i)
 			}
 
@@ -129,7 +136,7 @@ func ParseFilterPipelineMessage(data []byte) (*FilterPipelineMessage, error) {
 				filter.Name = string(nameBytes)
 			}
 
-			offset += int(padded)
+			offset += padded
 		}
 
 		// Client data (array of uint32).
@@ -190,7 +197,26 @@ func (fp *FilterPipelineMessage) ApplyFilters(data []byte) ([]byte, error) {
 		// If decompression produces less data than expected, pad with zeros.
 		// This can happen with sparse chunks or chunks at dataset boundaries.
 		if filter.ID == FilterLZF && len(filter.ClientData) >= 3 && filter.ClientData[2] > 0 {
-			expectedSize := int(filter.ClientData[2])
+			// ADR-003: the padding buffer is sized from cd_values[2], i.e. from
+			// the file, and a corrupt value would ask for an allocation Go turns
+			// into a fatal throw. The chunk policy has been 1 GB since
+			// CVE-2025-7067, so the same cap applies here instead of a second,
+			// looser one. The check runs on the raw uint32, before any
+			// conversion.
+			chunkSize := uint64(filter.ClientData[2])
+			if err := utils.ValidateBufferSize(chunkSize, utils.MaxChunkSize, "LZF uncompressed chunk"); err != nil {
+				return nil, fmt.Errorf("filter %d (%s): %w", filter.ID, filterName(filter.ID), err)
+			}
+
+			// cd_values[2] is the uncompressed chunk size, a uint32 from the
+			// filter pipeline message. Convert with the platform check: on a
+			// 32-bit target a value above math.MaxInt32 would wrap negative and
+			// the padding below would be skipped silently.
+			expectedSize, convErr := utils.SafeInt(chunkSize, "LZF uncompressed chunk size")
+			if convErr != nil {
+				return nil, fmt.Errorf("filter %d (%s): %w", filter.ID, filterName(filter.ID), convErr)
+			}
+
 			if len(result) < expectedSize {
 				// Pad with zeros to match expected size
 				padded := make([]byte, expectedSize)
@@ -224,7 +250,13 @@ func applyFilter(filter Filter, data []byte) ([]byte, error) {
 		// HDF5 stores data uncompressed if compression doesn't help.
 		// cd_values[2] contains the expected uncompressed chunk size.
 		if len(filter.ClientData) >= 3 && filter.ClientData[2] > 0 {
-			expectedSize := int(filter.ClientData[2])
+			// Same conversion guard as ApplyFilters: the value is a uint32 from
+			// the file and must fit in int before the comparison.
+			expectedSize, err := utils.SafeInt(uint64(filter.ClientData[2]), "LZF uncompressed chunk size")
+			if err != nil {
+				return nil, fmt.Errorf("filter %d (%s): %w", filter.ID, filterName(filter.ID), err)
+			}
+
 			if len(data) == expectedSize {
 				// Data is already uncompressed (compression didn't help)
 				return data, nil

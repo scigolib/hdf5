@@ -28,6 +28,28 @@ func SafeMultiply(a, b uint64) (uint64, error) {
 	return a * b, nil
 }
 
+// SafeInt converts a size read from file metadata to int, rejecting values the
+// platform cannot represent.
+//
+// On a 32-bit target int is 32 bits, so a uint64 or uint32 size above
+// math.MaxInt32 wraps negative, and a bounds check of the form
+// offset+int(size) > len(data) then passes because the sum has turned small.
+// The slice expression that follows panics; where the value sizes an
+// allocation, make() does. The comparison is written against math.MaxInt, so
+// it is evaluated in the target's own width and accepts exactly the values
+// that fit.
+//
+// This is a representability guard, not a policy cap: a caller that allocates
+// from the result still applies its own semantic bound (ValidateBufferSize for
+// heap sizes, or ReadBlock for block reads).
+func SafeInt(size uint64, what string) (int, error) {
+	if size > uint64(math.MaxInt) {
+		return 0, fmt.Errorf("%s: size %d exceeds the platform limit", what, size)
+	}
+
+	return int(size), nil
+}
+
 // CalculateChunkSize safely calculates the total chunk size by multiplying dimensions and element size.
 // Returns an error if overflow would occur.
 func CalculateChunkSize(dimensions []uint32, elementSize uint64) (uint64, error) {
