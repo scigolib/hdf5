@@ -885,14 +885,15 @@ func readHeapObject(r io.ReaderAt, blockAddr, offset, length uint64, sb *Superbl
 	if header.ChecksumDirBlocks {
 		headerSize += 4
 	}
-	headerBuf := make([]byte, headerSize+16) // Extra bytes for safety
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	n, err := r.ReadAt(headerBuf, int64(blockAddr))
-	if err != nil && !errors.Is(err, io.EOF) {
+
+	// ADR-003: blockAddr comes from the heap header, so the direct block header
+	// goes through the same funnel as the object itself — an off-file or
+	// undefined address is an error instead of a zero-filled short read.
+	//nolint:gosec // G115: headerSize is bounded by 4+1+255+255+4, well within uint64
+	headerBuf, err := ReadBlock(r, sb, blockAddr, uint64(headerSize), utils.MaxChunkSize,
+		"fractal heap direct block header")
+	if err != nil {
 		return nil, fmt.Errorf("read failed at 0x%X: %w", blockAddr, err)
-	}
-	if n < headerSize {
-		return nil, fmt.Errorf("direct block too short: got %d bytes, need %d", n, headerSize)
 	}
 
 	// Check signature
@@ -921,6 +922,23 @@ func readHeapObject(r io.ReaderAt, blockAddr, offset, length uint64, sb *Superbl
 	}
 	relativeOffset := offset - blockOffset
 
+	// ADR-003: length comes from the heap ID and used to size the allocation
+	// unchecked. For a managed object the heap header supplies two authoritative
+	// bounds: the object cannot exceed MaxManagedObjSize (H5HF_MAN_OBJ_MAX_SIZE,
+	// H5HFpkg.h) and it cannot exceed the direct block that holds it. A zero
+	// field means the header did not report a bound; the ReadBlock cap below
+	// still applies.
+	if header.MaxManagedObjSize != 0 {
+		if maxObj := uint64(header.MaxManagedObjSize); length > maxObj {
+			return nil, fmt.Errorf("heap object length %d exceeds MaxManagedObjSize %d", length, maxObj)
+		}
+	}
+
+	if header.MaxDirectBlockSize != 0 && length > header.MaxDirectBlockSize {
+		return nil, fmt.Errorf("heap object length %d exceeds MaxDirectBlockSize %d",
+			length, header.MaxDirectBlockSize)
+	}
+
 	// When ChecksumDirBlocks is set, the heap-address-space origin sits at
 	// the START of the FHDB block (so heap-id offset 21 maps to FHDB byte
 	// 21 — the first byte AFTER header + checksum). When the flag is
@@ -939,16 +957,14 @@ func readHeapObject(r io.ReaderAt, blockAddr, offset, length uint64, sb *Superbl
 		//nolint:gosec // G115: headerOffset bounded by header size specification
 		objectAddr = blockAddr + uint64(headerOffset) + relativeOffset
 	}
-	objectData := make([]byte, length)
-
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	n, err = r.ReadAt(objectData, int64(objectAddr))
-	if err != nil && !errors.Is(err, io.EOF) {
+	// ADR-003: the object address is derived from file metadata (blockAddr plus
+	// the heap-ID offset), so ReadBlock validates it for the undefined-address
+	// sentinel and the file region, and caps the size at utils.MaxChunkSize
+	// before the allocation. The C library allocates the same size and survives
+	// a corrupt one only because malloc returns NULL.
+	objectData, err := ReadBlock(r, sb, objectAddr, length, utils.MaxChunkSize, "fractal heap object")
+	if err != nil {
 		return nil, fmt.Errorf("read object failed at 0x%X: %w", objectAddr, err)
-	}
-	//nolint:gosec // G115: Safe comparison, length bounded by heap object size
-	if uint64(n) < length {
-		return nil, fmt.Errorf("object data too short: got %d bytes, expected %d", n, length)
 	}
 
 	return objectData, nil

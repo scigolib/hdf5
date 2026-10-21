@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // GlobalHeapSignature is the magic signature for global heap collections (4 bytes ASCII "GCOL").
@@ -86,9 +88,15 @@ func ReadGlobalHeapCollection(r io.ReaderAt, address uint64, offsetSize int) (*G
 	}
 
 	// Read entire collection into memory for easier parsing.
-	collectionData := make([]byte, collectionSize)
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	if _, err := r.ReadAt(collectionData, int64(address)); err != nil {
+	//
+	// ADR-003: collectionSize comes straight from the GCOL header. The C
+	// library's H5HG__cache_deserialize (H5HGcache.c) allocates the same size
+	// and survives a corrupt one only because malloc returns NULL; a failed Go
+	// allocation is a fatal runtime throw instead, so the size is checked
+	// against the reader and capped at utils.MaxChunkSize before the make
+	// inside ReadBlock.
+	collectionData, err := ReadBlock(r, nil, address, collectionSize, utils.MaxChunkSize, "global heap collection")
+	if err != nil {
 		return nil, fmt.Errorf("failed to read global heap collection: %w", err)
 	}
 
@@ -126,6 +134,18 @@ func ReadGlobalHeapCollection(r io.ReaderAt, address uint64, offsetSize int) (*G
 		}
 
 		// Object ID 0 is the free space object, skip it.
+		//
+		// objSize is a uint64 from the file and the code below converts it to
+		// int to advance the offset and to slice the collection. No object can
+		// be larger than the collection that holds it, so reject the claim here:
+		// a corrupt size would wrap the conversion negative (both here and on a
+		// 32-bit platform) and index the buffer out of range. C relies on
+		// malloc returning NULL for this case; Go needs the explicit check.
+		if objSize > uint64(len(collectionData)) {
+			return nil, fmt.Errorf("object %d size %d exceeds collection size %d",
+				objID, objSize, len(collectionData))
+		}
+
 		if objID == 0 {
 			// Free space - just advance.
 			offset += objHeaderSize
