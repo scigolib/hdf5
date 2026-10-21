@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Removed
+
+- `scripts/pre-release-check.sh`, a maintainer-only validation script. It duplicated the release
+  checks and still described the retired `develop` branch flow; those checks now live in the
+  maintainer's release tooling.
+
 ## [v0.14.2] - 2026-10-21
 
 ### Security
