@@ -257,7 +257,7 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 // validateEOFAddress rejects a non-zero EOF address smaller than the superblock
 // header itself: the file's address space cannot end inside the superblock that
 // defines it, so such a value means truncation or corruption (cf. the stored_eof
-// check in H5F__super_read, H5Fsuper.c:574-577).
+// check in H5F__super_read, H5Fsuper.c:573).
 func validateEOFAddress(version uint8, eofAddress uint64) error {
 	minSize := minimumSuperblockSize(version)
 	if eofAddress != 0 && eofAddress < minSize {
