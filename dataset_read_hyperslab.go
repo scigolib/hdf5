@@ -659,7 +659,10 @@ func (d *Dataset) readHyperslabChunked(
 	}
 
 	// Find which chunks overlap with the selection
-	overlappingChunks := findOverlappingChunks(selection, chunkDims, dims)
+	overlappingChunks, err := findOverlappingChunks(selection, chunkDims, dims)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute overlapping chunks: %w", err)
+	}
 
 	if len(overlappingChunks) == 0 {
 		// No chunks overlap (empty selection)
@@ -725,7 +728,7 @@ type chunkIndexEntry struct {
 
 // findOverlappingChunks identifies all chunks that overlap with the hyperslab selection.
 // Returns chunk coordinates (scaled chunk indices, not element indices).
-func findOverlappingChunks(sel *HyperslabSelection, chunkDims, datasetDims []uint64) [][]uint64 {
+func findOverlappingChunks(sel *HyperslabSelection, chunkDims, datasetDims []uint64) ([][]uint64, error) {
 	ndims := len(sel.Start)
 
 	// Calculate first and last chunk indices for each dimension
@@ -753,16 +756,32 @@ func findOverlappingChunks(sel *HyperslabSelection, chunkDims, datasetDims []uin
 }
 
 // generateChunkCoordinates generates all chunk coordinates in the range [first, last].
-func generateChunkCoordinates(first, last []uint64) [][]uint64 {
+//
+// The spans come from dataset dimensions and the selection, i.e. from file
+// metadata, so the total is computed in uint64 and converted through SafeInt:
+// on a 32-bit target a large span used to wrap int, and on any target an
+// overflowing product turned the pre-allocation capacity negative and panicked
+// in make (ADR-003).
+func generateChunkCoordinates(first, last []uint64) ([][]uint64, error) {
 	ndims := len(first)
 	if ndims == 0 {
-		return nil
+		return nil, nil
 	}
 
-	// Calculate total number of chunks
-	totalChunks := 1
+	total := uint64(1)
 	for i := 0; i < ndims; i++ {
-		totalChunks *= int(last[i] - first[i] + 1) //nolint:gosec // G115: chunk count bounded by dataset dimensions
+		span := last[i] - first[i] + 1
+
+		var err error
+		total, err = utils.SafeMultiply(total, span)
+		if err != nil {
+			return nil, fmt.Errorf("chunk count at dimension %d: %w", i, err)
+		}
+	}
+
+	totalChunks, err := utils.SafeInt(total, "hyperslab chunk count")
+	if err != nil {
+		return nil, err
 	}
 
 	result := make([][]uint64, 0, totalChunks)
@@ -772,7 +791,7 @@ func generateChunkCoordinates(first, last []uint64) [][]uint64 {
 	// Recursively generate coordinates
 	generateChunkCoordsRecursive(first, last, current, 0, &result)
 
-	return result
+	return result, nil
 }
 
 // generateChunkCoordsRecursive recursively generates chunk coordinates.
