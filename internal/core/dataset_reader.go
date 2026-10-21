@@ -81,12 +81,9 @@ func ReadDatasetFloat64(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]
 		rawData = layout.CompactData
 
 	case layout.IsContiguous():
-		// Data is stored contiguously at specific address.
-		dataSize := totalElements * uint64(datatype.Size)
-		rawData = make([]byte, dataSize)
-
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		_, err := r.ReadAt(rawData, int64(layout.DataAddress))
+		// The size and the region both come from file metadata, so they are
+		// validated before the buffer is allocated (ADR-003, cf. H5D__contig_check).
+		rawData, err = readContiguousDatasetData(r, sb, layout, totalElements, uint64(datatype.Size))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read contiguous data: %w", err)
 		}

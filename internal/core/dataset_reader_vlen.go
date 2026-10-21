@@ -80,11 +80,9 @@ func ReadDatasetVLenBytes(r io.ReaderAt, header *ObjectHeader, sb *Superblock) (
 		rawData = layout.CompactData
 
 	case layout.IsContiguous():
-		dataSize := totalElements * uint64(datatype.Size)
-		rawData = make([]byte, dataSize)
-
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		_, err := r.ReadAt(rawData, int64(layout.DataAddress))
+		// Size and region come from file metadata; validate before allocating
+		// (ADR-003, cf. H5D__contig_check).
+		rawData, err = readContiguousDatasetData(r, sb, layout, totalElements, uint64(datatype.Size))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read contiguous data: %w", err)
 		}
