@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Security
+
+**Bounds on every allocation sized from file metadata (issue #68).** A corrupted metadata byte
+could make the library request terabytes and die with a fatal out-of-memory error, which Go cannot
+recover from. Every such allocation is now validated against the bytes actually present before it
+happens: contiguous dataset reads, fixed-length and variable-length attributes, the float64
+conversion buffer, the local heap, the global heap and the fractal-heap direct and indirect blocks.
+Block reads go through one funnel that mirrors the C library's `H5F_block_read` and
+`H5D__contig_check`; the file limit is the reader's live end-of-file (the writer's allocator during a
+modify session), falling back to the superblock End-of-File address. The new fuzz harness found two
+further panics, both fixed: `ParseDataspaceMessage` read past a truncated header, and
+`parseCompoundData` sliced at a compound member offset taken from the file.
+
+### Bug Fixes
+
+- **32-bit targets compile again (issue #66).** Two untyped constants overflowed `int` on
+  `GOARCH=arm` and `GOARCH=386`; both now compare in a width-independent way. A new CI job builds
+  `linux/386`, `linux/arm` (`GOARM=6`) and `windows/386` and runs `go vet` for 386.
+- Hyperslab chunk iteration validates the chunk-count span before sizing its result; an
+  unrepresentable span used to panic.
+- The LZF padding buffer and the read-modify-write fractal-heap direct block are bounded like every
+  other chunk-sized allocation.
+
+### Changed
+
+- `File.Reader()` returns a read-only view bounded by the file size: a read outside the file now
+  returns an error instead of the platform reader's short read.
+
+---
+
 ## [v0.14.1] - 2026-09-02
 
 ### Bug Fixes
