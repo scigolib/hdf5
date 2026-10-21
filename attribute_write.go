@@ -735,7 +735,7 @@ func deleteDenseAttributeImpl(fw *FileWriter, attrInfo *core.AttributeInfoMessag
 //
 // Reference: H5Adense.c - H5A__dense_insert().
 //
-//nolint:gocyclo,cyclop // Complex RMW logic with multiple verification steps
+//nolint:gocyclo,cyclop,gocognit // Complex RMW logic with multiple verification steps; refactor in TASK-055
 func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
 	// Step 1: Find Attribute Info Message
