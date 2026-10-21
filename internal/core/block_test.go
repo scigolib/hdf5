@@ -7,6 +7,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/scigolib/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -218,4 +219,19 @@ func TestContigDataSize_ErrorLabel(t *testing.T) {
 
 	require.ErrorContains(t, err, "hyperslab block")
 	require.ErrorContains(t, err, "read beyond end of file")
+}
+
+// TestReadBlock_BoundedReaderBeatsCorruptEOA proves the limit order: a reader
+// that knows its size (File wraps the handle in a bounded reader) must win over
+// Superblock.EOFAddress, which is file metadata and can be corrupted. Without
+// this, a 19 GB read against an 8-byte file reached make() — FuzzOpenFile found
+// exactly that as a 5 s stall inside the runtime's non-preemptible allocation.
+func TestReadBlock_BoundedReaderBeatsCorruptEOA(t *testing.T) {
+	file := bytes.NewReader([]byte("12345678"))
+	bounded := utils.NewBoundedReader(file, 8)
+	sb := &Superblock{Version: Version2, OffsetSize: 8, LengthSize: 8, EOFAddress: 1 << 40}
+
+	_, err := ReadBlock(bounded, sb, 0, 1024, utils.MaxChunkSize, "test")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "read beyond end of file")
 }

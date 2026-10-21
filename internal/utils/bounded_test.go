@@ -7,6 +7,8 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestBoundedReader covers reads inside, at and outside the declared file
@@ -195,4 +197,20 @@ func TestBoundedReaderNilUnderlying(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBoundedReaderEndOfFile verifies that the wrapper reports the size it
+// enforces, so ReaderSize and the region checks use the real file size rather
+// than falling back to an untrusted superblock value.
+func TestBoundedReaderEndOfFile(t *testing.T) {
+	r := NewBoundedReader(bytes.NewReader(make([]byte, 10)), 10)
+
+	size, ok := ReaderSize(r)
+	require.True(t, ok)
+	require.Equal(t, uint64(10), size)
+
+	// The concrete type exposes the size directly as well.
+	eof, ok := r.(interface{ EndOfFile() uint64 })
+	require.True(t, ok)
+	require.Equal(t, uint64(10), eof.EndOfFile())
 }

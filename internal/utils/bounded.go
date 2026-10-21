@@ -58,6 +58,15 @@ func (b *boundedReader) ReadAt(p []byte, off int64) (int, error) {
 	return b.r.ReadAt(p, off)
 }
 
+// EndOfFile reports the size the wrapper enforces. ReaderSize uses it as the
+// region limit, so a read through File is bounded by the real file size rather
+// than by an EOF address from a (possibly corrupted) superblock: without this
+// method ReaderSize falls back to Superblock.EOFAddress, which is file metadata
+// too (found by FuzzOpenFile: an 18 GB ReadBlock against an 8 KB file).
+func (b *boundedReader) EndOfFile() uint64 {
+	return b.size
+}
+
 // beyondEOF builds the error for a read outside [0, size). The message names
 // the requested offset and length as well as the real file size, so a user can
 // tell corruption from a truncated file.
