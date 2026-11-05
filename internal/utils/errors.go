@@ -1,6 +1,23 @@
 package utils
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrCorrupt marks file metadata that contradicts the file or the HDF5 format:
+// a size that overflows, a region past the end of the file, a stored value the
+// C library would reject. Wrap it with %w so callers can match it with
+// errors.Is; the message must still name the structure and its address.
+//
+// The root package re-exports it as hdf5.ErrCorrupt. It lives here because
+// internal/core cannot import the root package.
+var ErrCorrupt = errors.New("hdf5: corrupt file")
+
+// ErrLimit marks a read refused because it would allocate more than the
+// configured read limit. Unlike ErrCorrupt the file may be valid: raising the
+// limit lets the read proceed. Re-exported as hdf5.ErrLimit.
+var ErrLimit = errors.New("hdf5: read limit exceeded")
 
 // H5Error represents a structured HDF5 error.
 type H5Error struct {
