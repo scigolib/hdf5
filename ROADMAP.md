@@ -94,7 +94,7 @@ v1.0.0 LTS → Long-term support release (no date: it ships when it is ready)
 
 **v0.12.0** = Stable release with feature-complete write support ✅ RELEASED
 - Compound datatypes, soft/external links complete
-- Official HDF5 test suite validated (current result: <<SUITE>>)
+- Official HDF5 test suite validated (current result: 379 of 383 valid files)
 - 100% write support achieved
 - API stable, production-ready
 
@@ -122,7 +122,7 @@ v1.0.0 LTS → Long-term support release (no date: it ships when it is ready)
 - Fixed V2 header parsing: CRC32 checksum + creation index handling
 - Fixed soft link handling (CacheType=2) - lazy resolution like C library
 - Added Named Datatype (committed datatype) support
-- Official HDF5 test suite: <<SUITE>>
+- Official HDF5 test suite: 379 of 383 valid files
 - Added flux.h5 to test suite, professional error testing for corrupt files
 
 **v0.13.4** = Attribute Reading Fix ✅ RELEASED (2025-01-29)
@@ -191,7 +191,7 @@ v1.0.0 LTS → Long-term support release (no date: it ships when it is ready)
 - ✅ Chunk-aware partial reading
 
 **Validation**:
-- ✅ **Official HDF5 Test Suite**: <<SUITE>>
+- ✅ **Official HDF5 Test Suite**: 379 of 383 valid files
 - ✅ Files written by this library are read by h5dump (C-interop CI job)
 
 **History**: See [CHANGELOG.md](CHANGELOG.md) for complete release history
@@ -290,7 +290,7 @@ v1.0.0 LTS → Long-term support release (no date: it ships when it is ready)
 
 3. ✅ **TASK-020: Official HDF5 Test Suite** (COMPLETE)
    - Official .h5 test files from HDF5 1.14.6
-   - Result at v0.12.0: 98.2% (380/387 valid single-file HDF5); current result: <<SUITE>>
+   - Result at v0.12.0: 98.2% (380/387 valid single-file HDF5); current result: 379 of 383 valid files
    - Comprehensive format validation
    - Edge cases and invalid files tested
    - Production quality confirmed
@@ -304,7 +304,7 @@ v1.0.0 LTS → Long-term support release (no date: it ships when it is ready)
 
 **Quality Metrics**:
 - ✅ Test coverage 88%+ library packages (exceeded >70% target)
-- ✅ Official HDF5 test suite: 98.2% at v0.12.0 (current result: <<SUITE>>)
+- ✅ Official HDF5 test suite: 98.2% at v0.12.0 (current result: 379 of 383 valid files)
 - ✅ 0 linter issues (34+ linters)
 - ✅ Comprehensive documentation (5 guides, 5 examples)
 - ✅ Cross-platform (Linux, macOS, Windows)
