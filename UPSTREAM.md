@@ -6,7 +6,7 @@ that this Pure Go implementation is based on.
 ## Primary References
 
 ### HDF5 Format Specification
-URL:        https://docs.hdfgroup.org/hdf5/latest/_f_m_t3.html
+URL:        https://docs.hdfgroup.org/documentation/hdf5/latest/_f_m_t3.html
 Version:    Format Specification v4.0 (HDF5 Library 2.0.0)
 Date:       2025-05-01
 Status:     Fully supported (superblock v0, v2, v3)
