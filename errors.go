@@ -1,6 +1,10 @@
 package hdf5
 
-import "github.com/scigolib/hdf5/internal/utils"
+import (
+	"errors"
+
+	"github.com/scigolib/hdf5/internal/utils"
+)
 
 // ErrCorrupt is wrapped by errors that report invalid file metadata: a size
 // that overflows, data that would lie past the end of the file, or a stored
@@ -18,6 +22,16 @@ var ErrLimit = utils.ErrLimit
 // stored in the shared-message heap, a datatype it cannot represent. The file
 // is not corrupt; the C library may read it. Match it with errors.Is.
 var ErrNotSupported = utils.ErrNotSupported
+
+// ErrNeedsRepack is wrapped by the error OpenForWrite returns for a file whose
+// version 2 object headers carry no valid checksum: files written by hdf5-go
+// v0.13.9 and earlier (v0.13.8 and earlier wrote no header checksum, v0.13.9
+// counted it in the chunk size), or a corrupted file. The HDF5 C library
+// cannot open such a file, and changing it in place would need every object
+// header rewritten. Read it with Open (File.Warnings lists what was found) and
+// write its contents into a new file; hdf5.Repack is planned for v0.15. It is
+// not ErrCorrupt: the file reads. Match it with errors.Is.
+var ErrNeedsRepack = errors.New("hdf5: file needs to be rewritten into a new file")
 
 // ErrNoData is wrapped by errors that refuse to read a dataset with no stored
 // data and no defined fill value: its contiguous storage was never written and

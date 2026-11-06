@@ -419,17 +419,21 @@ func metaDatatypeInfo(dt *core.DatatypeMessage) (DatatypeInfo, error) {
 		return DatatypeInfo{}, fmt.Errorf("%w: missing datatype", ErrCorrupt)
 	}
 
+	// The core enums carry the C values (H5T_order_t, H5T_str_t, H5T_cset_t),
+	// as the public ones do, so the conversions keep the meaning.
+	padding, charset := dt.StringProperties()
 	info := DatatypeInfo{
 		Class:          DatatypeClass(dt.Class),
 		Size:           uint64(dt.Size),
-		Order:          metaOrder(dt),
-		Signed:         metaSigned(dt),
-		VariableString: metaIsVariableString(dt),
+		Order:          ByteOrder(dt.Order()),
+		Signed:         dt.Signed(),
+		VariableString: dt.IsVariableString(),
+		Padding:        StringPadding(padding),
+		Charset:        Charset(charset),
 	}
 	if info.VariableString {
 		info.Class = ClassString // Externally a VL string is a string (H5T.c:2808-2814).
 	}
-	info.Padding, info.Charset = metaStringProps(dt)
 
 	if err := metaFillClass(&info, dt); err != nil {
 		return DatatypeInfo{}, err
@@ -505,16 +509,16 @@ func metaEnumMembers(dt *core.DatatypeMessage) ([]EnumMemberInfo, error) {
 
 	size := int(base.Size)
 	if size > 8 {
-		return nil, fmt.Errorf("not supported: enumeration base type of %d bytes "+
-			"(EnumMemberInfo.Value holds at most 64 bits)", size)
+		return nil, fmt.Errorf("%w: enumeration base type of %d bytes "+
+			"(EnumMemberInfo.Value holds at most 64 bits)", ErrNotSupported, size)
 	}
 	if len(dt.EnumValues) != len(dt.EnumNames)*size {
 		return nil, fmt.Errorf("%w: enumeration has %d names and %d value bytes of %d-byte values",
 			ErrCorrupt, len(dt.EnumNames), len(dt.EnumValues), size)
 	}
 
-	bigEndian := metaOrder(base) == OrderBigEndian
-	signed := metaSigned(base)
+	bigEndian := base.Order() == core.OrderBigEndian
+	signed := base.Signed()
 
 	members := make([]EnumMemberInfo, len(dt.EnumNames))
 	for i, name := range dt.EnumNames {
@@ -556,118 +560,6 @@ func metaIntegerValue(raw []byte, bigEndian, signed bool, bitOffset, precision u
 	}
 
 	return int64(v) //nolint:gosec // G115: the bits are kept on purpose; see EnumMemberInfo.
-}
-
-// metaRootType follows the parent chain to the type that has no parent, as
-// H5T_get_order and H5T_get_sign do (H5Torder.c:114-116, H5Tfixed.c:73-75).
-func metaRootType(dt *core.DatatypeMessage) *core.DatatypeMessage {
-	for dt.Base != nil {
-		dt = dt.Base
-	}
-
-	return dt
-}
-
-// Class bit field flags of the atomic classes (H5Odtype.c:171-174, :193-201).
-const (
-	metaFlagBigEndian = 0x01
-	metaFlagSigned    = 0x08
-	metaFlagFloatVAX  = 0x40
-)
-
-// metaDtypeVersionVAX is H5O_DTYPE_VERSION_3, the first datatype message
-// version with VAX byte order (H5Odtype.c:194).
-const metaDtypeVersionVAX = 3
-
-// metaOrder mirrors H5T_get_order (H5Torder.c:108-160) on the order the
-// decoder sets for each class (H5O__dtype_decode_helper, H5Odtype.c:171-290,
-// 641): integer, float, time and bitfield store it in bit 0 of the class bit
-// field (a version 3 float with bit 6 also set is VAX); strings, opaque types and
-// references have none; a compound reports its members' order.
-func metaOrder(dt *core.DatatypeMessage) ByteOrder {
-	dt = metaRootType(dt)
-
-	switch dt.Class {
-	case core.DatatypeFixed, core.DatatypeTime, core.DatatypeBitfield:
-		return metaBitOrder(dt.ClassBitField)
-	case core.DatatypeFloat:
-		// The decoder reads VAX order only from version 3 messages
-		// (H5Odtype.c:193-201); bit 6 of an older one is not a byte order.
-		if dt.Version >= metaDtypeVersionVAX && dt.ClassBitField&metaFlagFloatVAX != 0 {
-			return OrderVAX
-		}
-		return metaBitOrder(dt.ClassBitField)
-	case core.DatatypeCompound:
-		return metaCompoundOrder(dt)
-	default:
-		return OrderNone
-	}
-}
-
-func metaBitOrder(flags uint32) ByteOrder {
-	if flags&metaFlagBigEndian != 0 {
-		return OrderBigEndian
-	}
-
-	return OrderLittleEndian
-}
-
-// metaCompoundOrder is the compound branch of H5T_get_order (H5Torder.c:118-152):
-// members of order NONE are ignored; the first other order is the result,
-// and a member that differs from it makes the result MIXED.
-func metaCompoundOrder(dt *core.DatatypeMessage) ByteOrder {
-	order := OrderNone
-	for _, m := range dt.Members {
-		if m.Type == nil {
-			continue
-		}
-
-		mo := metaOrder(m.Type)
-		switch {
-		case mo == OrderNone:
-		case order == OrderNone:
-			order = mo
-		case mo != order:
-			return OrderMixed
-		}
-	}
-
-	return order
-}
-
-// metaSigned mirrors H5T_get_sign (H5Tfixed.c:65-85): the root of the
-// parent chain must be an integer, signed when bit 3 of its class bit field
-// is set (H5Odtype.c:174).
-func metaSigned(dt *core.DatatypeMessage) bool {
-	dt = metaRootType(dt)
-
-	return dt.Class == core.DatatypeFixed && dt.ClassBitField&metaFlagSigned != 0
-}
-
-// metaIsVariableString reports a variable-length string: class VLEN with kind 1
-// in bits 0-3 of the class bit field (H5Odtype.c:762-763).
-func metaIsVariableString(dt *core.DatatypeMessage) bool {
-	return dt.IsVariableString()
-}
-
-// metaStringProps mirrors H5Tget_strpad and H5Tget_cset
-// (H5Tstrpad.c:50-59, H5Tcset.c:49-60): follow the parent chain to the first
-// string, then read padding and character set from where the decoder keeps
-// them, bits 0-3 and 4-7 for a fixed-length string, bits 4-7 and 8-11 for a
-// variable-length one (H5Odtype.c:295-296, :763-765). A type with no string
-// in its chain reports the zero values.
-func metaStringProps(dt *core.DatatypeMessage) (StringPadding, Charset) {
-	for dt != nil {
-		switch {
-		case dt.Class == core.DatatypeString:
-			return StringPadding(dt.ClassBitField & 0x0F), Charset(dt.ClassBitField >> 4 & 0x0F)
-		case dt.IsVariableString():
-			return StringPadding(dt.ClassBitField >> 4 & 0x0F), Charset(dt.ClassBitField >> 8 & 0x0F)
-		}
-		dt = dt.Base
-	}
-
-	return PaddingNullTerm, CharsetASCII
 }
 
 // metaEnumName returns the name of v from names, or prefix(N) for a value

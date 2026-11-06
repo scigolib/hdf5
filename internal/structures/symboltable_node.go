@@ -17,13 +17,19 @@ type SymbolTableNode struct {
 	Entries    []SymbolTableEntry
 }
 
-// ParseSymbolTableNode parses a Symbol Table Node (SNOD).
+// ParseSymbolTableNode parses a Symbol Table Node (SNOD), as the C library
+// decodes it (H5G__cache_node_deserialize, H5Gcache.c; entries by
+// H5G__ent_decode_vec, H5Gent.c).
 // Format:
 // - 4 bytes: Signature ("SNOD").
 // - 1 byte: Version (1).
 // - 1 byte: Reserved (0).
 // - 2 bytes: Number of symbols.
-// - Then symbol table entries follow (each entry is offsetSize*2 + 8 + 16 bytes).
+// - Then symbol table entries follow, each H5G_SIZEOF_ENTRY bytes
+// (H5Gprivate.h:38-43): sizeof_size + sizeof_addr + 4 + 4 + 16.
+//
+// A structurally invalid node (signature, version, cache type) is reported
+// as utils.ErrCorrupt.
 func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*SymbolTableNode, error) {
 	// Read header (8 bytes).
 	header := utils.GetBuffer(8)
@@ -36,13 +42,13 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 
 	// Check signature.
 	sig := string(header[0:4])
-	if sig != "SNOD" {
-		return nil, fmt.Errorf("invalid SNOD signature: %q", sig)
+	if sig != SymbolTableSignature {
+		return nil, fmt.Errorf("invalid SNOD signature %q at 0x%x: %w", sig, address, utils.ErrCorrupt)
 	}
 
 	version := header[4]
 	if version != 1 {
-		return nil, fmt.Errorf("unsupported SNOD version: %d", version)
+		return nil, fmt.Errorf("unsupported SNOD version %d at 0x%x: %w", version, address, utils.ErrCorrupt)
 	}
 
 	numSymbols := sb.Endianness.Uint16(header[6:8])
@@ -66,13 +72,16 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 		return node, nil
 	}
 
-	// Each symbol table entry format:
-	// - offsetSize bytes: Link name offset in local heap.
-	// - offsetSize bytes: Object header address.
+	// Each symbol table entry (H5G_ent_decode, H5Gent.c:125-171):
+	// - sizeof_size bytes: Link name offset in the local heap (a length,
+	//   H5F_DECODE_LENGTH at H5Gent.c:125).
+	// - sizeof_addr bytes: Object header address.
 	// - 4 bytes: Cache type.
 	// - 4 bytes: Reserved.
 	// - 16 bytes: Scratch-pad (cache-type specific).
-	entrySize := int(sb.OffsetSize)*2 + 4 + 4 + 16
+	offsetSize := int(sb.OffsetSize)
+	lengthSize := int(sb.LengthSize)
+	entrySize := lengthSize + offsetSize + 4 + 4 + 16
 
 	// Read all entries.
 	dataSize := int(numSymbols) * entrySize
@@ -92,14 +101,14 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 			return nil, fmt.Errorf("SNOD data truncated at entry %d", i)
 		}
 
-		// Read link name offset.
-		linkOffset := readAddressFromBytes(data[offset:], int(sb.OffsetSize), sb.Endianness)
-		offset += int(sb.OffsetSize)
+		// Read link name offset (a length, not an address).
+		linkOffset := readAddressFromBytes(data[offset:], lengthSize, sb.Endianness)
+		offset += lengthSize
 
 		// Read object header address: HADDR_UNDEF for a soft link, all ones
 		// at any width (H5Gent.c:130, H5Fint.c:3046-3050).
-		objAddr := core.DecodeAddress(data[offset:], int(sb.OffsetSize), sb.Endianness)
-		offset += int(sb.OffsetSize)
+		objAddr := core.DecodeAddress(data[offset:], offsetSize, sb.Endianness)
+		offset += offsetSize
 
 		// Read cache type.
 		cacheType := sb.Endianness.Uint32(data[offset : offset+4])
@@ -113,14 +122,19 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 		// CacheType 1 (H5G_CACHED_STAB): cached B-tree and heap addresses.
 		// CacheType 2 (H5G_CACHED_SLINK): 4-byte offset of the soft-link
 		// target path in the group's local heap.
+		// Any other type is an error in C (H5Gent.c:162-164).
 		var cachedBTree, cachedHeap uint64
 		var cachedSoftLink uint32
 		switch cacheType {
-		case 1:
-			cachedBTree = core.DecodeAddress(data[offset:], int(sb.OffsetSize), sb.Endianness)
-			cachedHeap = core.DecodeAddress(data[offset+int(sb.OffsetSize):], int(sb.OffsetSize), sb.Endianness)
+		case CacheTypeNone:
+		case CacheTypeSymbolTable:
+			cachedBTree = core.DecodeAddress(data[offset:], offsetSize, sb.Endianness)
+			cachedHeap = core.DecodeAddress(data[offset+offsetSize:], offsetSize, sb.Endianness)
 		case CacheTypeSoftLink:
 			cachedSoftLink = sb.Endianness.Uint32(data[offset : offset+4])
+		default:
+			return nil, fmt.Errorf("SNOD at 0x%x entry %d: unknown cache type %d: %w",
+				address, i, cacheType, utils.ErrCorrupt)
 		}
 		offset += 16
 
@@ -185,19 +199,22 @@ func (stn *SymbolTableNode) AddEntry(entry SymbolTableEntry) error {
 	return nil
 }
 
-// WriteAt writes the symbol table node to w at the specified address.
-// offsetSize determines the size of addresses in the file (typically 8 bytes).
+// WriteAt writes the symbol table node to w at the specified address, in the
+// layout the C library encodes (H5G__cache_node_serialize, H5Gcache.c;
+// H5G_ent_encode, H5Gent.c).
+// offsetSize is sizeof_addr and lengthSize is sizeof_size from the superblock:
+// each entry's link name offset is a length (H5Gent.c:125, H5G_SIZEOF_ENTRY).
 // maxEntries is the fixed size of the node (for padding with zeros).
-func (stn *SymbolTableNode) WriteAt(w io.WriterAt, address uint64, offsetSize uint8, maxEntries uint16, endianness binary.ByteOrder) error {
-	// Calculate entry size: 2*offsetSize + 4 + 4 + 16
-	entrySize := int(offsetSize)*2 + 4 + 4 + 16
+func (stn *SymbolTableNode) WriteAt(w io.WriterAt, address uint64, offsetSize, lengthSize uint8, maxEntries uint16, endianness binary.ByteOrder) error {
+	// Entry size (H5G_SIZEOF_ENTRY): lengthSize + offsetSize + 4 + 4 + 16.
+	entrySize := int(lengthSize) + int(offsetSize) + 4 + 4 + 16
 
 	// Total size: 8-byte header + (maxEntries * entrySize)
 	totalSize := 8 + int(maxEntries)*entrySize
 	buf := make([]byte, totalSize)
 
 	// Write header
-	copy(buf[0:4], "SNOD")
+	copy(buf[0:4], SymbolTableSignature)
 	buf[4] = stn.Version
 	buf[5] = 0 // Reserved
 	endianness.PutUint16(buf[6:8], stn.NumSymbols)
@@ -208,9 +225,9 @@ func (stn *SymbolTableNode) WriteAt(w io.WriterAt, address uint64, offsetSize ui
 		if i < stn.NumSymbols {
 			entry := stn.Entries[i]
 
-			// Write link name offset
-			writeAddressToBytes(buf[pos:], entry.LinkNameOffset, int(offsetSize), endianness)
-			pos += int(offsetSize)
+			// Write link name offset (a length)
+			writeAddressToBytes(buf[pos:], entry.LinkNameOffset, int(lengthSize), endianness)
+			pos += int(lengthSize)
 
 			// Write object header address
 			writeAddressToBytes(buf[pos:], entry.ObjectAddress, int(offsetSize), endianness)
@@ -226,7 +243,7 @@ func (stn *SymbolTableNode) WriteAt(w io.WriterAt, address uint64, offsetSize ui
 
 			// Write scratch-pad (16 bytes; unused bytes stay zero).
 			switch entry.CacheType {
-			case 1:
+			case CacheTypeSymbolTable:
 				writeAddressToBytes(buf[pos:], entry.CachedBTreeAddr, int(offsetSize), endianness)
 				writeAddressToBytes(buf[pos+int(offsetSize):], entry.CachedHeapAddr, int(offsetSize), endianness)
 			case CacheTypeSoftLink:

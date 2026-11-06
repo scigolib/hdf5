@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2026-10-21 | **Current Version**: v0.14.2 | **Strategy**: HDF5 2.0.0 compatible → security hardened → v1.0.0 LTS | **Milestone**: v0.14.2 RELEASED! (2026-10-21) → v1.0.0 LTS (Q3 2026)
+**Last Updated**: 2026-11-06 | **Current Version**: v0.14.3 | **Strategy**: HDF5 2.0.0 compatible → security hardened → C-library parity → v1.0.0 LTS | **Milestone**: v0.14.3 (reader and writer aligned with the C library) → v1.0.0 LTS (when ready, no date)
 
 ---
 
@@ -83,16 +83,18 @@ v0.14.1 (BUGFIX - write compatibility, B-tree panic) ✅ RELEASED 2026-09-02
          ↓ (metadata bounds / security hardening)
 v0.14.2 (SECURITY - bound metadata-sized allocations, 32-bit builds) ✅ RELEASED 2026-10-21
          ↓ (maintenance continues)
+v0.14.3 (reader and writer aligned with the C library; sentinel errors, read limit, compound API)
+         ↓ (maintenance continues)
 v0.14.x (maintenance phase) → Stable maintenance, bug fixes, minor enhancements
-         ↓ (6-9 months production validation)
-v1.0.0 LTS → Long-term support release (Q3 2026)
+         ↓ (production validation)
+v1.0.0 LTS → Long-term support release (no date: it ships when it is ready)
 ```
 
 ### Critical Milestones
 
 **v0.12.0** = Stable release with feature-complete write support ✅ RELEASED
 - Compound datatypes, soft/external links complete
-- **433 official HDF5 test files** validated (now 100% with v0.13.3)
+- Official HDF5 test suite validated (current result: <<SUITE>>)
 - 100% write support achieved
 - API stable, production-ready
 
@@ -120,7 +122,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - Fixed V2 header parsing: CRC32 checksum + creation index handling
 - Fixed soft link handling (CacheType=2) - lazy resolution like C library
 - Added Named Datatype (committed datatype) support
-- Official HDF5 test suite: **100% pass rate** (378/378 valid files)
+- Official HDF5 test suite: <<SUITE>>
 - Added flux.h5 to test suite, professional error testing for corrupt files
 
 **v0.13.4** = Attribute Reading Fix ✅ RELEASED (2025-01-29)
@@ -139,7 +141,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - Extended slice attribute types: []int8, []int16, []uint8, []uint16, []uint32, []uint64 (TASK-040)
 - Fixed all 70 golangci-lint issues across 24 files
 
-**v0.13.x** = Stable Maintenance Phase (current)
+**v0.13.x** = Stable Maintenance Phase (superseded by v0.14.x)
 - Monitoring for bug reports from production use
 - Performance optimizations when identified
 - Minor feature enhancements from community feedback
@@ -158,7 +160,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-## 📊 Current Status (v0.13.6)
+## 📊 Current Status (v0.14.3)
 
 **Phase**: 🛡️ Stable Maintenance (monitoring, community support)
 **HDF5 2.0.0 Format Spec v4.0**: Complete! 🎉
@@ -189,9 +191,8 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - ✅ Chunk-aware partial reading
 
 **Validation**:
-- ✅ **Official HDF5 Test Suite**: 98.2% pass rate (380/387 files)
-- ✅ 433 test files from HDF5 1.14.6
-- ✅ Production quality confirmed
+- ✅ **Official HDF5 Test Suite**: <<SUITE>>
+- ✅ Files written by this library are read by h5dump (C-interop CI job)
 
 **History**: See [CHANGELOG.md](CHANGELOG.md) for complete release history
 
@@ -266,8 +267,6 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 - Expert technical guidance incorporated
 - Standard HDF5 feature now available in Go
 
-*Current: v0.11.6-beta | Next: v0.12.0 | Target: v1.0.0 (Q3 2026)*
-
 ---
 
 ### **v0.12.0 - Feature Complete Stable Release** ✅ **RELEASED!** (2025-11-13)
@@ -290,8 +289,8 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
    - Full HDF5 spec compliance
 
 3. ✅ **TASK-020: Official HDF5 Test Suite** (COMPLETE)
-   - **433 official .h5 test files** from HDF5 1.14.6
-   - **98.2% pass rate** (380/387 valid single-file HDF5)
+   - Official .h5 test files from HDF5 1.14.6
+   - Result at v0.12.0: 98.2% (380/387 valid single-file HDF5); current result: <<SUITE>>
    - Comprehensive format validation
    - Edge cases and invalid files tested
    - Production quality confirmed
@@ -305,7 +304,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 **Quality Metrics**:
 - ✅ Test coverage 88%+ library packages (exceeded >70% target)
-- ✅ Official HDF5 test suite 98.2% pass rate
+- ✅ Official HDF5 test suite: 98.2% at v0.12.0 (current result: <<SUITE>>)
 - ✅ 0 linter issues (34+ linters)
 - ✅ Comprehensive documentation (5 guides, 5 examples)
 - ✅ Cross-platform (Linux, macOS, Windows)
@@ -317,7 +316,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-### **v0.13.x - Stable Maintenance Phase** ✅ **CURRENT** (2025-11 → 2026-Q2)
+### **v0.13.x - Stable Maintenance Phase** ✅ (2025-11 → 2026-Q2; continues as v0.14.x)
 
 **Goal**: Production validation, stability, and community support
 
@@ -384,7 +383,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-### **v1.0.0 - Long-Term Support Release** (Q3 2026)
+### **v1.0.0 - Long-Term Support Release** (no date; it ships when it is ready)
 
 **Goal**: LTS release with stability guarantees
 
@@ -407,7 +406,7 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 ## 📚 Resources
 
 **Official HDF5**:
-- Format Spec: https://docs.hdfgroup.org/hdf5/latest/_f_m_t3.html
+- Format Spec: https://docs.hdfgroup.org/documentation/hdf5/latest/_f_m_t3.html
 - C Library: https://github.com/HDFGroup/hdf5
 - Tools: h5dump, h5diff, h5stat
 
@@ -442,6 +441,6 @@ v1.0.0 LTS → Long-term support release (Q3 2026)
 
 ---
 
-*Version 5.4 (Updated 2026-02-24)*
-*Current: v0.13.6 (STABLE) | Phase: Maintenance | Next: v0.14.0+ (community-driven) | Target: v1.0.0 LTS (Q3 2026)*
+*Version 5.5 (Updated 2026-11-06)*
+*Current: v0.14.3 | Phase: Maintenance | Next: v0.15 (community-driven) | Target: v1.0.0 LTS (no date)*
 

@@ -132,7 +132,9 @@ func exerciseFuzzFile(inputLen int, file *hdf5.File) string {
 				violation = exerciseFuzzAttributes(inputLen, attrs)
 			}
 		case *hdf5.NamedDatatype:
-			_ = o.Datatype()
+			// Errors are expected on fuzzed input; the harness looks for
+			// panics, hangs and oversized allocations.
+			_, _ = o.DatatypeInfo()
 		}
 	})
 

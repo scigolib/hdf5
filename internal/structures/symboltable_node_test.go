@@ -105,7 +105,8 @@ func TestParseSymbolTableNode_Success(t *testing.T) {
 				offset := 8
 				binary.LittleEndian.PutUint32(buf[offset:offset+4], 0xAAA)
 				binary.LittleEndian.PutUint32(buf[offset+4:offset+8], 0xBBB)
-				binary.LittleEndian.PutUint32(buf[offset+8:offset+12], 5)
+				// Cache type: H5G_CACHED_SLINK (types above 2 are corrupt, H5Gent.c:162-164).
+				binary.LittleEndian.PutUint32(buf[offset+8:offset+12], 2)
 				binary.LittleEndian.PutUint32(buf[offset+12:offset+16], 0)
 				for i := 0; i < 16; i++ {
 					buf[offset+16+i] = 0
@@ -120,7 +121,7 @@ func TestParseSymbolTableNode_Success(t *testing.T) {
 				require.Len(t, node.Entries, 1)
 				require.Equal(t, uint64(0xAAA), node.Entries[0].LinkNameOffset)
 				require.Equal(t, uint64(0xBBB), node.Entries[0].ObjectAddress)
-				require.Equal(t, uint32(5), node.Entries[0].CacheType)
+				require.Equal(t, uint32(2), node.Entries[0].CacheType)
 			},
 		},
 		{
@@ -136,7 +137,8 @@ func TestParseSymbolTableNode_Success(t *testing.T) {
 				offset := 8
 				binary.LittleEndian.PutUint16(buf[offset:offset+2], 0x111)
 				binary.LittleEndian.PutUint16(buf[offset+2:offset+4], 0x222)
-				binary.LittleEndian.PutUint32(buf[offset+4:offset+8], 3)
+				// Cache type: none (types above 2 are corrupt, H5Gent.c:162-164).
+				binary.LittleEndian.PutUint32(buf[offset+4:offset+8], 0)
 				binary.LittleEndian.PutUint32(buf[offset+8:offset+12], 0)
 				for i := 0; i < 16; i++ {
 					buf[offset+12+i] = 0
@@ -183,7 +185,8 @@ func TestParseSymbolTableNode_Success(t *testing.T) {
 				entryOffset := offset + 8
 				binary.LittleEndian.PutUint64(buf[entryOffset:entryOffset+8], 0x999)
 				binary.LittleEndian.PutUint64(buf[entryOffset+8:entryOffset+16], 0x888)
-				binary.LittleEndian.PutUint32(buf[entryOffset+16:entryOffset+20], 7)
+				// Cache type: none (types above 2 are corrupt, H5Gent.c:162-164).
+				binary.LittleEndian.PutUint32(buf[entryOffset+16:entryOffset+20], 0)
 				binary.LittleEndian.PutUint32(buf[entryOffset+20:entryOffset+24], 0)
 				for i := 0; i < 16; i++ {
 					buf[entryOffset+24+i] = 0
@@ -205,7 +208,10 @@ func TestParseSymbolTableNode_Success(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := &mockReaderAt{data: tt.data}
 			sb := createMockSuperblock()
+			// These fixtures use equal address and length widths; the link
+			// name offset is a length (H5Gent.c:125).
 			sb.OffsetSize = tt.offsetSize
+			sb.LengthSize = tt.offsetSize
 
 			node, err := ParseSymbolTableNode(reader, tt.address, sb)
 			require.NoError(t, err)
@@ -341,7 +347,8 @@ func TestParseSymbolTableNode_BigEndian(t *testing.T) {
 	// Entry in big-endian
 	binary.BigEndian.PutUint64(buf[8:16], 0x123456789ABCDEF0)
 	binary.BigEndian.PutUint64(buf[16:24], 0xFEDCBA0987654321)
-	binary.BigEndian.PutUint32(buf[24:28], 0x12345678)
+	// Cache type: H5G_CACHED_SLINK (types above 2 are corrupt, H5Gent.c:162-164).
+	binary.BigEndian.PutUint32(buf[24:28], 2)
 	binary.BigEndian.PutUint32(buf[28:32], 0x87654321)
 	for i := 0; i < 16; i++ {
 		buf[32+i] = 0
@@ -357,7 +364,7 @@ func TestParseSymbolTableNode_BigEndian(t *testing.T) {
 	require.Len(t, node.Entries, 1)
 	require.Equal(t, uint64(0x123456789ABCDEF0), node.Entries[0].LinkNameOffset)
 	require.Equal(t, uint64(0xFEDCBA0987654321), node.Entries[0].ObjectAddress)
-	require.Equal(t, uint32(0x12345678), node.Entries[0].CacheType)
+	require.Equal(t, uint32(2), node.Entries[0].CacheType)
 	require.Equal(t, uint32(0x87654321), node.Entries[0].Reserved)
 }
 

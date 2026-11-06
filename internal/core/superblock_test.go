@@ -28,10 +28,10 @@ func TestReadSuperblockV0(t *testing.T) {
 		0x08,
 		// Reserved (1 byte)
 		0x00,
-		// Group leaf/internal node K (2 bytes)
-		0x00, 0x00,
-		// Group internal node K (2 bytes)
-		0x00, 0x00,
+		// Group leaf node K (2 bytes): C rejects 0 (H5Fsuper_cache.c:478-479)
+		0x04, 0x00,
+		// Group internal node K (2 bytes): C rejects 0 (H5Fsuper_cache.c:485-486)
+		0x10, 0x00,
 		// File consistency flags (4 bytes)
 		0x00, 0x00, 0x00, 0x00,
 		// Base address (8 bytes) - offset 24
@@ -72,11 +72,11 @@ func TestReadSuperblockV2(t *testing.T) {
 		0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n',
 		// Version (1 byte) - offset 8
 		0x02,
-		// Endianness flag (1 byte) - offset 9: 0=little-endian
-		0x00,
-		// Packed sizes (1 byte) - offset 10: 0x33 = offset:8 bytes(code 3), length:8 bytes(code 3)
-		0x33,
-		// Reserved (1 byte) - offset 11
+		// Size of offsets (1 byte) - offset 9 (H5Fsuper_cache.c:183)
+		0x08,
+		// Size of lengths (1 byte) - offset 10 (H5Fsuper_cache.c:184)
+		0x08,
+		// File consistency flags (1 byte) - offset 11
 		0x00,
 		// Base address (8 bytes) - offset 12
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -86,14 +86,14 @@ func TestReadSuperblockV2(t *testing.T) {
 		0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		// Root group address (8 bytes) - offset 36
 		0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		// Checksum (4 bytes) - offset 44
+		// Checksum (4 bytes) - offset 44, set by sealSuperblockV2
 		0x00, 0x00, 0x00, 0x00,
 	}
 
 	// The stored end-of-file address is 256: the image must be that long,
 	// otherwise the parser reports a truncated file.
 	image := make([]byte, 256)
-	copy(image, data)
+	copy(image, sealSuperblockV2(data))
 
 	sb, err := ReadSuperblock(bytes.NewReader(image))
 	require.NoError(t, err)
@@ -111,11 +111,11 @@ func TestReadSuperblockV3(t *testing.T) {
 		0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n',
 		// Version (1 byte) - offset 8
 		0x03,
-		// Endianness flag (1 byte) - offset 9: 0=little-endian
-		0x00,
-		// Packed sizes (1 byte) - offset 10: 0x33 = offset:8 bytes(code 3), length:8 bytes(code 3)
-		0x33,
-		// Reserved (1 byte) - offset 11
+		// Size of offsets (1 byte) - offset 9 (H5Fsuper_cache.c:183)
+		0x08,
+		// Size of lengths (1 byte) - offset 10 (H5Fsuper_cache.c:184)
+		0x08,
+		// File consistency flags (1 byte) - offset 11
 		0x00,
 		// Base address (8 bytes) - offset 12
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -125,14 +125,14 @@ func TestReadSuperblockV3(t *testing.T) {
 		0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		// Root group address (8 bytes) - offset 36
 		0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		// Checksum (4 bytes) - offset 44
+		// Checksum (4 bytes) - offset 44, set by sealSuperblockV2
 		0x00, 0x00, 0x00, 0x00,
 	}
 
 	// The stored end-of-file address is 256: the image must be that long,
 	// otherwise the parser reports a truncated file.
 	image := make([]byte, 256)
-	copy(image, data)
+	copy(image, sealSuperblockV2(data))
 
 	sb, err := ReadSuperblock(bytes.NewReader(image))
 	require.NoError(t, err)
@@ -373,6 +373,14 @@ func TestSuperblockBackwardCompatibility(t *testing.T) {
 
 // Helper functions to create mock superblocks for testing.
 
+// sealSuperblockV2 stores the checksum of a 48-byte version 2/3 superblock
+// image (8-byte addresses): lookup3 over bytes 0-43, as
+// H5F__cache_superblock_serialize computes it (H5Fsuper_cache.c:755-758).
+func sealSuperblockV2(data []byte) []byte {
+	binary.LittleEndian.PutUint32(data[44:48], JenkinsChecksum(data[:44]))
+	return data
+}
+
 // createMockSuperblockV0 creates a mock superblock version 0 for testing.
 func createMockSuperblockV0(t *testing.T) []byte {
 	t.Helper()
@@ -390,8 +398,9 @@ func createMockSuperblockV0(t *testing.T) []byte {
 		0x08,
 		// Reserved (1 byte)
 		0x00,
-		// Group leaf/internal node K (4 bytes)
-		0x00, 0x00, 0x00, 0x00,
+		// Group leaf and internal node K (2 bytes each); C rejects 0
+		// (H5Fsuper_cache.c:478-486)
+		0x04, 0x00, 0x10, 0x00,
 		// File consistency flags (4 bytes)
 		0x00, 0x00, 0x00, 0x00,
 		// Base address (8 bytes) - offset 24
@@ -428,11 +437,11 @@ func createMockSuperblockV2(t *testing.T) []byte {
 		0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n',
 		// Version (1 byte) - offset 8
 		0x02,
-		// Endianness flag (1 byte) - offset 9: 0=little-endian
-		0x00,
-		// Packed sizes (1 byte) - offset 10: 0x33 = 8 bytes for both
-		0x33,
-		// Reserved (1 byte) - offset 11
+		// Size of offsets (1 byte) - offset 9 (H5Fsuper_cache.c:183)
+		0x08,
+		// Size of lengths (1 byte) - offset 10 (H5Fsuper_cache.c:184)
+		0x08,
+		// File consistency flags (1 byte) - offset 11
 		0x00,
 		// Base address (8 bytes) - offset 12
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -442,11 +451,11 @@ func createMockSuperblockV2(t *testing.T) []byte {
 		0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		// Root group address (8 bytes) - offset 36
 		0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		// Checksum (4 bytes) - offset 44
+		// Checksum (4 bytes) - offset 44, set by sealSuperblockV2
 		0x00, 0x00, 0x00, 0x00,
 	}
 
-	return data
+	return sealSuperblockV2(data)
 }
 
 // createMockSuperblockV3 creates a mock superblock version 3 for testing.
@@ -458,11 +467,11 @@ func createMockSuperblockV3(t *testing.T) []byte {
 		0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n',
 		// Version (1 byte) - offset 8
 		0x03,
-		// Endianness flag (1 byte) - offset 9: 0=little-endian
-		0x00,
-		// Packed sizes (1 byte) - offset 10: 0x33 = 8 bytes for both
-		0x33,
-		// Reserved (1 byte) - offset 11
+		// Size of offsets (1 byte) - offset 9 (H5Fsuper_cache.c:183)
+		0x08,
+		// Size of lengths (1 byte) - offset 10 (H5Fsuper_cache.c:184)
+		0x08,
+		// File consistency flags (1 byte) - offset 11
 		0x00,
 		// Base address (8 bytes) - offset 12
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -472,9 +481,9 @@ func createMockSuperblockV3(t *testing.T) []byte {
 		0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		// Root group address (8 bytes) - offset 36
 		0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		// Checksum (4 bytes) - offset 44
+		// Checksum (4 bytes) - offset 44, set by sealSuperblockV2
 		0x00, 0x00, 0x00, 0x00,
 	}
 
-	return data
+	return sealSuperblockV2(data)
 }

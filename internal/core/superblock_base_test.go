@@ -9,21 +9,22 @@ import (
 )
 
 // v2SuperblockImage returns a file image of the given size with a v2
-// superblock at addr. Fields follow the v2 layout: base at 12, extension at
-// 20, end-of-file at 28, root group at 36.
+// superblock at addr. Fields follow the v2 layout: sizes at 9 and 10, base at
+// 12, extension at 20, end-of-file at 28, root group at 36, checksum at 44.
 func v2SuperblockImage(addr, storedBase, eof, root uint64, size int) []byte {
 	img := make([]byte, size)
 	sb := img[addr:]
 
 	copy(sb[0:8], Signature)
 	sb[8] = Version2
-	sb[9] = 0  // little-endian
-	sb[10] = 8 // size of offsets (direct value)
+	sb[9] = 8  // size of offsets
+	sb[10] = 8 // size of lengths
 
 	binary.LittleEndian.PutUint64(sb[12:20], storedBase)
 	binary.LittleEndian.PutUint64(sb[20:28], ^uint64(0)) // no extension
 	binary.LittleEndian.PutUint64(sb[28:36], eof)
 	binary.LittleEndian.PutUint64(sb[36:44], root)
+	binary.LittleEndian.PutUint32(sb[44:48], JenkinsChecksum(sb[:44]))
 
 	return img
 }
@@ -97,6 +98,8 @@ func TestReadSuperblockV0FourByteOffsets(t *testing.T) {
 	img[8] = Version0
 	img[13] = offsetSize
 	img[14] = offsetSize
+	img[16] = 4  // group leaf node K
+	img[18] = 16 // group internal node K
 
 	put := func(off int, v uint32) {
 		binary.LittleEndian.PutUint32(img[off:off+4], v)
@@ -125,8 +128,10 @@ func TestReadSuperblockV0ParsesStoredBase(t *testing.T) {
 	img := make([]byte, 4096)
 	copy(img[0:8], Signature)
 	img[8] = Version0
-	img[13] = 8 // size of offsets
-	img[14] = 8 // size of lengths
+	img[13] = 8  // size of offsets
+	img[14] = 8  // size of lengths
+	img[16] = 4  // group leaf node K
+	img[18] = 16 // group internal node K
 
 	binary.LittleEndian.PutUint64(img[24:32], 1<<40)            // base address (stored)
 	binary.LittleEndian.PutUint64(img[40:48], uint64(len(img))) // end of file

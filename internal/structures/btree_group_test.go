@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/scigolib/hdf5/internal/core"
+	"github.com/scigolib/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -169,7 +170,8 @@ func TestReadGroupBTreeEntries_Success(t *testing.T) {
 				objectAddress  uint64
 				cacheType      uint32
 			}{
-				{0xAAA, 0xBBB, 5},
+				// Cache type 2 (H5G_CACHED_SLINK); types above 2 are corrupt (H5Gent.c:162-164).
+				{0xAAA, 0xBBB, 2},
 			}),
 			address:       0,
 			offsetSize:    4,
@@ -177,7 +179,7 @@ func TestReadGroupBTreeEntries_Success(t *testing.T) {
 			checkEntries: func(t *testing.T, entries []BTreeEntry) {
 				require.Equal(t, uint64(0xAAA), entries[0].LinkNameOffset)
 				require.Equal(t, uint64(0xBBB), entries[0].ObjectAddress)
-				require.Equal(t, uint32(5), entries[0].CacheType)
+				require.Equal(t, uint32(2), entries[0].CacheType)
 			},
 		},
 		{
@@ -187,7 +189,7 @@ func TestReadGroupBTreeEntries_Success(t *testing.T) {
 				objectAddress  uint64
 				cacheType      uint32
 			}{
-				{0x111, 0x222, 3},
+				{0x111, 0x222, 0},
 			}),
 			address:       0,
 			offsetSize:    2,
@@ -220,7 +222,10 @@ func TestReadGroupBTreeEntries_Success(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := &mockReaderAt{data: tt.data}
 			sb := createMockSuperblock()
+			// The fixtures use equal address and length widths: B-tree keys and
+			// entry name offsets are lengths (H5Gnode.c:1081, H5Gent.c:125).
 			sb.OffsetSize = tt.offsetSize
+			sb.LengthSize = tt.offsetSize
 
 			entries, err := ReadGroupBTreeEntries(reader, tt.address, sb)
 			require.NoError(t, err)
@@ -292,6 +297,10 @@ func TestReadGroupBTreeEntries_InvalidNodeType(t *testing.T) {
 	}
 }
 
+// TestReadGroupBTreeEntries_NonLeafNode: non-leaf nodes are walked (their
+// readback is in group_btree_test.go). This level-1 node's only child is
+// address 0, the node itself: a cycle, reported as corruption instead of
+// being followed.
 func TestReadGroupBTreeEntries_NonLeafNode(t *testing.T) {
 	buf := make([]byte, 1024)
 	copy(buf[0:4], "TREE")
@@ -305,7 +314,8 @@ func TestReadGroupBTreeEntries_NonLeafNode(t *testing.T) {
 	entries, err := ReadGroupBTreeEntries(reader, 0, sb)
 	require.Error(t, err)
 	require.Nil(t, entries)
-	require.Contains(t, err.Error(), "non-leaf B-tree nodes not supported")
+	require.ErrorIs(t, err, utils.ErrCorrupt)
+	require.Contains(t, err.Error(), "reached twice")
 }
 
 func TestReadGroupBTreeEntries_ReadErrors(t *testing.T) {
@@ -370,7 +380,8 @@ func TestReadGroupBTreeEntries_BigEndian(t *testing.T) {
 		objectAddress  uint64
 		cacheType      uint32
 	}{
-		{0x123456789ABCDEF0, 0xFEDCBA0987654321, 0x12345678},
+		// Cache type 2 (H5G_CACHED_SLINK); types above 2 are corrupt (H5Gent.c:162-164).
+		{0x123456789ABCDEF0, 0xFEDCBA0987654321, 2},
 	})
 
 	reader := &mockReaderAt{data: data}
@@ -382,7 +393,7 @@ func TestReadGroupBTreeEntries_BigEndian(t *testing.T) {
 	require.Len(t, entries, 1)
 	require.Equal(t, uint64(0x123456789ABCDEF0), entries[0].LinkNameOffset)
 	require.Equal(t, uint64(0xFEDCBA0987654321), entries[0].ObjectAddress)
-	require.Equal(t, uint32(0x12345678), entries[0].CacheType)
+	require.Equal(t, uint32(2), entries[0].CacheType)
 }
 
 func TestReadAddress(t *testing.T) {

@@ -38,7 +38,8 @@ fw, err := hdf5.CreateForWrite(filename, mode, ...options)
 
 | Mode | Function | Use Case |
 |------|----------|----------|
-| **Default** | (no options) | Append-only, small files |
+| **Default (immediate)** | (no options) | Few deletions; the C library's behavior |
+| **None** | `WithBTreeRebalancing(false)` | Append-only, small files |
 | **Lazy** | `WithLazyRebalancing()` | Batch deletions |
 | **Incremental** | `WithIncrementalRebalancing()` | Large files, continuous ops |
 | **Smart** | `WithSmartRebalancing()` | Auto-tuning, unknown workloads |
@@ -398,7 +399,7 @@ Smart rebalancing automatically detects workload patterns and selects the optima
 
 This is the **"auto-pilot" mode** for scientific data workflows.
 
-**IMPORTANT**: This is **OPTIONAL** and must be explicitly enabled. By default (no options), NO rebalancing is performed (like C library).
+**IMPORTANT**: This is **OPTIONAL** and must be explicitly enabled. By default (no options), every delete rebalances immediately. The HDF5 C library does the same for version 2 B-trees: it merges and redistributes nodes on every delete (`H5B2__remove_internal`, `H5B2internal.c`); only its version 1 B-tree never rebalances (`H5B.c`). `WithBTreeRebalancing(false)` skips rebalancing.
 
 **Parameters**:
 - `opts ...SmartOption`: Optional configuration (defaults used if omitted)
@@ -705,7 +706,7 @@ ModeDecision{
 
 ## Complete Examples
 
-### Example 1: Default (No Rebalancing)
+### Example 1: No Rebalancing
 
 ```go
 package main
@@ -716,8 +717,11 @@ import (
 )
 
 func main() {
-    // No options = no rebalancing (like HDF5 C library)
-    fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate)
+    // No options = rebalance on every delete, as the HDF5 C library does for
+    // version 2 B-trees. WithBTreeRebalancing(false) turns rebalancing off.
+    fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
+        hdf5.WithBTreeRebalancing(false),
+    )
     if err != nil {
         log.Fatal(err)
     }
@@ -915,7 +919,7 @@ func main() {
 
 ## Migration Guide
 
-### From Default (No Rebalancing) to Lazy
+### From Default (Immediate) to Lazy
 
 **Before**:
 ```go

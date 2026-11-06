@@ -68,9 +68,8 @@ type bt2Header struct {
 //     fit in the file.
 func readBT2Header(r io.ReaderAt, sb *Superblock, addr uint64, wantTypes ...uint8) (*bt2Header, error) {
 	ls, os := int(sb.LengthSize), int(sb.OffsetSize)
-	size := uint64(bt2NodePrefix+4+2+2+1+1+2+4) + uint64(sb.OffsetSize) + uint64(sb.LengthSize)
 
-	buf, err := readChecksummedBlock(r, sb, addr, size, "v2 B-tree header")
+	buf, err := readChecksummedBlockLegacy(r, sb, addr, bt2HeaderSize(sb), "v2 B-tree header")
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +107,13 @@ func readBT2Header(r io.ReaderAt, sb *Superblock, addr uint64, wantTypes ...uint
 	}
 
 	return h, nil
+}
+
+// bt2HeaderSize is H5B2_HEADER_SIZE (H5B2pkg.h:63-74), the size C allocates
+// for the header (H5B2hdr.c:244, :288): prefix, node and record sizes,
+// depth, split and merge percentages and the root's tree pointer.
+func bt2HeaderSize(sb *Superblock) uint64 {
+	return bt2NodePrefix + 4 + 4 + 2 + 2 + 1 + 1 + uint64(sb.OffsetSize) + 2 + uint64(sb.LengthSize)
 }
 
 // init computes the per-depth node information (H5B2__hdr_init,
@@ -204,7 +210,9 @@ type bt2Walk struct {
 	sb      *Superblock
 	h       *bt2Header
 	visited map[uint64]bool
+	budget  *blockBudget // Bytes of every node the walk reads.
 	fn      func(rec []byte) error
+	block   func(addr, size uint64) error // Each node at node_size; nil: not reported.
 }
 
 // walk passes every record of the tree to fn in key order, stopping at the
@@ -217,13 +225,29 @@ type bt2Walk struct {
 //     internal node's total equals its records plus its children's totals,
 //     as C maintains them (H5B2int.c); the root's total is the header's;
 //   - the whole node_size bytes of each node lie in the file, as C reads
-//     them (the image length is node_size).
+//     them (the image length is node_size);
+//   - the bytes of all nodes read are at most the file's size (blockBudget):
+//     nodes at distinct addresses that overlap each pass the visited set.
 func (h *bt2Header) walk(r io.ReaderAt, sb *Superblock, fn func(rec []byte) error) error {
+	return h.walkBlocks(r, sb, nil, fn)
+}
+
+// walkBlocks is walk that also passes the header and every node it reads to
+// block (nil: none), each at the size C allocated for it: the header
+// H5B2_HEADER_SIZE (H5B2hdr.c:288), every internal node and leaf node_size
+// (H5B2internal.c:127, H5B2leaf.c:116), as H5B2_delete frees them
+// (H5B2hdr.c:321, H5B2internal.c:153, H5B2leaf.c:142). It adds no read.
+func (h *bt2Header) walkBlocks(r io.ReaderAt, sb *Superblock, block func(addr, size uint64) error, fn func(rec []byte) error) error {
+	if block != nil {
+		if err := block(h.addr, bt2HeaderSize(sb)); err != nil {
+			return err
+		}
+	}
 	if h.rootAddr == undefinedAddress {
 		return nil
 	}
 
-	w := &bt2Walk{r: r, sb: sb, h: h, visited: map[uint64]bool{}, fn: fn}
+	w := &bt2Walk{r: r, sb: sb, h: h, visited: map[uint64]bool{}, budget: newBlockBudget(r, sb), fn: fn, block: block}
 	total, err := w.node(h.rootAddr, h.depth, h.rootNrec)
 	if err != nil {
 		return err
@@ -268,18 +292,20 @@ func (w *bt2Walk) node(addr uint64, depth int, nrec uint64) (uint64, error) {
 		span += (nrec + 1) * ptr
 	}
 
-	buf, err := readChecksummedBlock(w.r, w.sb, addr, span, what)
+	if err := w.budget.charge(span, addr, "v2 B-tree"); err != nil {
+		return 0, err
+	}
+	buf, err := readChecksummedBlockLegacy(w.r, w.sb, addr, span, what)
 	if err != nil {
 		return 0, err
 	}
-	if string(buf[:4]) != sig {
-		return 0, fmt.Errorf("%w: %s at 0x%X: wrong signature %q", utils.ErrCorrupt, what, addr, buf[:4])
+	if err := h.checkNodePrefix(buf, sig, what, addr); err != nil {
+		return 0, err
 	}
-	if buf[4] != 0 {
-		return 0, fmt.Errorf("%w: %s at 0x%X: unsupported version %d", utils.ErrCorrupt, what, addr, buf[4])
-	}
-	if buf[5] != h.typ {
-		return 0, fmt.Errorf("%w: %s at 0x%X: type %d, the header says %d", utils.ErrCorrupt, what, addr, buf[5], h.typ)
+	if w.block != nil {
+		if err := w.block(addr, h.nodeSize); err != nil {
+			return 0, err
+		}
 	}
 
 	recs := buf[bt2NodePrefix:]
@@ -294,6 +320,22 @@ func (w *bt2Walk) node(addr uint64, depth int, nrec uint64) (uint64, error) {
 	}
 
 	return w.children(addr, depth, nrec, recs, buf[bt2NodePrefix+nrec*h.rrecSize:], ptr)
+}
+
+// checkNodePrefix checks a node's signature, version 0 and B-tree type
+// against the header.
+func (h *bt2Header) checkNodePrefix(buf []byte, sig, what string, addr uint64) error {
+	if string(buf[:4]) != sig {
+		return fmt.Errorf("%w: %s at 0x%X: wrong signature %q", utils.ErrCorrupt, what, addr, buf[:4])
+	}
+	if buf[4] != 0 {
+		return fmt.Errorf("%w: %s at 0x%X: unsupported version %d", utils.ErrCorrupt, what, addr, buf[4])
+	}
+	if buf[5] != h.typ {
+		return fmt.Errorf("%w: %s at 0x%X: type %d, the header says %d", utils.ErrCorrupt, what, addr, buf[5], h.typ)
+	}
+
+	return nil
 }
 
 // children walks the nrec+1 children of an internal node in order, passing

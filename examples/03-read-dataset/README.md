@@ -68,6 +68,9 @@ if err != nil {
 fmt.Printf("Dataset info: %s\n", info)
 ```
 
+`Info()` is a one-line summary for people to read. Programs should use `Shape()`,
+`MaxShape()`, `Datatype()` and `Layout()` instead of parsing it.
+
 **Info Output**:
 - Datatype (int32, float64, etc.)
 - Layout (compact, contiguous, chunked)
@@ -176,10 +179,11 @@ if ds, ok := datasets["temperature"]; ok {
 
 **Cause**: Dataset might be empty or use unsupported layout.
 
-**Solution**: Check with `Info()`:
+**Solution**: Check the shape and layout (a dimension of 0 means no elements):
 ```go
-info, _ := ds.Info()
-fmt.Println(info)  // Check dimensions and size
+shape, _ := ds.Shape()
+layout, _ := ds.Layout()
+fmt.Println(shape, layout.Class)
 ```
 
 ### Reading Large Datasets
@@ -188,10 +192,15 @@ fmt.Println(info)  // Check dimensions and size
 
 ```go
 // Check size first
-info, _ := ds.Info()
-fmt.Println(info)  // See "Total size"
+shape, _ := ds.Shape()
+dt, _ := ds.Datatype()
+elements := uint64(1)
+for _, n := range shape {
+    elements *= n
+}
+fmt.Println(elements*dt.Size, "bytes as stored")
 
-// Only read if acceptable
+// Only read if acceptable (Read() returns []float64: 8 bytes per element)
 if /* size is ok */ {
     data, _ := ds.Read()
 }

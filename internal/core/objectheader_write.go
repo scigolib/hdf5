@@ -694,47 +694,6 @@ func ContinuationChunkSizeV2(messages []MessageWriter, ohFlags uint8) uint64 {
 	return 4 + v2MessagesSize(messages, ohFlags) + 4
 }
 
-// RewriteObjectHeaderV2 rewrites an object header v2 with updated messages.
-// This handles the case where we need to modify an existing object header
-// by reading it, modifying it, and writing it back.
-//
-// Parameters:
-//   - w: Writer with WriteAt capability
-//   - r: Reader for reading current header
-//   - addr: File address of object header
-//   - sb: Superblock
-//   - newMessages: Additional messages to add
-//
-// Returns:
-//   - error: Non-nil if operation fails
-func RewriteObjectHeaderV2(w io.WriterAt, r io.ReaderAt, addr uint64, sb *Superblock, newMessages []*HeaderMessage) error {
-	// Read existing object header
-	oh, err := ReadObjectHeader(r, addr, sb)
-	if err != nil {
-		return fmt.Errorf("failed to read object header: %w", err)
-	}
-
-	if oh.Version != 2 {
-		return fmt.Errorf("only v2 headers supported for rewrite, got version %d", oh.Version)
-	}
-
-	// Add new messages
-	for _, msg := range newMessages {
-		err = AddMessageToObjectHeader(oh, msg.Type, msg.Data)
-		if err != nil {
-			return fmt.Errorf("failed to add message: %w", err)
-		}
-	}
-
-	// Write back to same location
-	err = WriteObjectHeader(w, addr, oh, sb)
-	if err != nil {
-		return fmt.Errorf("failed to write object header: %w", err)
-	}
-
-	return nil
-}
-
 // v2PrefixFlags returns the header flags without the chunk-size bits, with
 // the times and phase-change flags kept only when their fields are present.
 func (ohw *ObjectHeaderWriter) v2PrefixFlags() uint8 {

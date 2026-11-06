@@ -362,12 +362,12 @@ func TestCInterop_CompoundPublicAPI(t *testing.T) {
 	}
 }
 
-// TestFloatAttribute_CInterop checks that float attributes written through
+// TestCInterop_FloatAttribute checks that float attributes written through
 // WriteAttribute carry the IEEE layout the C library expects. A float
 // datatype whose sign bit position is 0 overlaps the mantissa and is rejected
 // by H5O__dtype_decode_helper ("mantissa and sign positions overlap",
 // H5Odtype.c:264-267).
-func TestFloatAttribute_CInterop(t *testing.T) {
+func TestCInterop_FloatAttribute(t *testing.T) {
 	h5dump := h5tool(t, "h5dump")
 	file := filepath.Join(t.TempDir(), "float_attr.h5")
 	fw, err := CreateForWrite(file, CreateTruncate)

@@ -1069,30 +1069,38 @@ func TestSmartRebalancer_PeriodicReevaluation(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	_ = sr.Start(ctx)
+	if err := sr.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 	defer sr.Stop()
 
 	// Record operations (append-only)
 	for i := 0; i < 50; i++ {
-		_ = sr.RecordOperation(OpWrite)
+		if err := sr.RecordOperation(OpWrite); err != nil {
+			t.Fatalf("RecordOperation: %v", err)
+		}
 	}
 
-	// Wait for first re-evaluation
-	time.Sleep(100 * time.Millisecond)
-
-	// Stats should show evaluations
-	stats1 := sr.GetStats()
-	if stats1.TotalEvaluations < 1 {
-		t.Error("Expected at least 1 evaluation")
+	// The re-evaluation runs on a real 50 ms ticker. Wait for the event with a
+	// generous deadline instead of a fixed sleep, so a loaded machine cannot
+	// fail the test while a broken ticker still does.
+	waitEvaluations := func(atLeast int64) int64 {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			n := int64(sr.GetStats().TotalEvaluations)
+			if n >= atLeast {
+				return n
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("expected at least %d evaluations within 10s, got %d", atLeast, n)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 
-	// Wait for more re-evaluations
-	time.Sleep(200 * time.Millisecond)
-
-	stats2 := sr.GetStats()
-	if stats2.TotalEvaluations <= stats1.TotalEvaluations {
-		t.Error("Expected more evaluations over time")
-	}
+	first := waitEvaluations(1)
+	waitEvaluations(first + 1) // re-evaluation keeps running over time
 }
 
 func TestSmartRebalancer_ContextCancellation(_ *testing.T) {

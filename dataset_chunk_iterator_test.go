@@ -340,7 +340,8 @@ func TestChunkIteratorChunkCoords(t *testing.T) {
 	}
 }
 
-// TestChunkIteratorTimeout tests context timeout.
+// TestChunkIteratorTimeout tests that an expired deadline stops the iterator
+// with context.DeadlineExceeded.
 func TestChunkIteratorTimeout(t *testing.T) {
 	testFile := createChunkedTestFile(t)
 
@@ -355,12 +356,13 @@ func TestChunkIteratorTimeout(t *testing.T) {
 		t.Fatal("No dataset found in file")
 	}
 
-	// Create context with very short timeout.
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	// A deadline already in the past: the context is done with
+	// DeadlineExceeded before the iterator starts, with no sleep or timing.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Unix(0, 0))
 	defer cancel()
-
-	// Wait a bit for timeout.
-	time.Sleep(10 * time.Millisecond)
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("a past deadline must have expired, got %v", ctx.Err())
+	}
 
 	iter, err := ds.ChunkIteratorWithContext(ctx)
 	if err != nil {

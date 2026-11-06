@@ -252,22 +252,3 @@ func readUint(data []byte, size int, endianness binary.ByteOrder) uint64 {
 		return val
 	}
 }
-
-// computeOffsetSize computes the number of bytes needed to store a value
-// (H5VM_limit_enc_size).
-func computeOffsetSize(value uint64) uint8 {
-	if value == 0 {
-		return 1
-	}
-
-	// Find highest bit set
-	bits := 0
-	v := value
-	for v > 0 {
-		bits++
-		v >>= 1
-	}
-
-	// Round up to bytes
-	return uint8((bits + 7) / 8)
-}

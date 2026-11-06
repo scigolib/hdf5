@@ -3,7 +3,6 @@ package structures
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -156,32 +155,6 @@ func TestParseFractalHeapHeader(t *testing.T) {
 // one fractal heap reader, and internal/core/fractalheap_read_test.go tests
 // it (TestFractalHeap_IDRejected, _Tiny, _RootDirectBlock, _ManagedRejected,
 // _HeaderRejected).
-
-// TestComputeOffsetSize tests offset size computation.
-func TestComputeOffsetSize(t *testing.T) {
-	tests := []struct {
-		value    uint64
-		wantSize uint8
-	}{
-		{0, 1},
-		{255, 1},
-		{256, 2},
-		{65535, 2},
-		{65536, 3},
-		{16777215, 3},
-		{16777216, 4},
-		{4294967295, 4},
-		{4294967296, 5},
-		{0xFFFFFFFFFFFFFFFF, 8},
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("value_%d", tt.value), func(t *testing.T) {
-			size := computeOffsetSize(tt.value)
-			assert.Equal(t, tt.wantSize, size)
-		})
-	}
-}
 
 // TestReadUint tests variable-length unsigned integer reading.
 func TestReadUint(t *testing.T) {

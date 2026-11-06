@@ -42,6 +42,20 @@ type Superblock struct {
 	SuperExtension uint64
 	DriverInfo     uint64
 
+	// SymLeafK, SymInternalK and ChunkInternalK are the version 1 B-tree K
+	// values of the file (H5F_super_t sym_leaf_k, btree_k[H5B_SNODE_ID],
+	// btree_k[H5B_CHUNK_ID], H5Fpkg.h): a group's symbol table node holds up to
+	// 2*SymLeafK entries, a group B-tree node up to 2*SymInternalK children and
+	// a chunk B-tree node up to 2*ChunkInternalK. A version 0 superblock stores
+	// the first two (H5Fsuper_cache.c:476-486); a version 2/3 superblock keeps
+	// non-default values in its extension's B-tree 'K' values message
+	// (H5O_BTREEK, H5Fsuper.c:699-715). Otherwise each is the C default
+	// (DefaultSymLeafK, DefaultSymInternalK, DefaultChunkInternalK). Version 1,
+	// which also stores ChunkInternalK, is not read.
+	SymLeafK       uint16
+	SymInternalK   uint16
+	ChunkInternalK uint16
+
 	// V0-specific: Cached symbol table info for root group
 	// These are only used when Version == 0
 	RootBTreeAddr uint64 // B-tree address for root group (v0 only)
@@ -52,6 +66,11 @@ type Superblock struct {
 	// every read of a file carries, so the cache lives as long as the File.
 	shared sharedCache
 
+	// warnings collects the findings that do not stop the file from being
+	// read (legacy hdf5-go structures, header checksums), bounded per file
+	// (warnings.go).
+	warnings warningSink
+
 	// ExternalFiles opens the raw data files of datasets stored through an
 	// External File List (external_storage.go). Nil refuses every external
 	// file; the root package sets it when it opens a file by name, with the
@@ -59,15 +78,51 @@ type Superblock struct {
 	ExternalFiles ExternalOpener
 }
 
-// minimumSuperblockSize returns the minimum on-disk size in bytes of the
-// superblock header for the given version.
-func minimumSuperblockSize(version, offsetSize uint8) uint64 {
+// Superblock layout constants from the C library.
+const (
+	// superblockFixedSize is the signature plus the version byte
+	// (H5F_SUPERBLOCK_FIXED_SIZE, H5Fpkg.h:75).
+	superblockFixedSize = 9
+
+	// superblockV0PrefixSize is the fixed part of a version 0 superblock before
+	// the first address field (H5F_SUPERBLOCK_VARLEN_SIZE_COMMON, H5Fpkg.h:93-99).
+	superblockV0PrefixSize = superblockFixedSize + 15
+
+	// superblockV2PrefixSize is the fixed part of a version 2/3 superblock
+	// before the first address field: sizes and status flags
+	// (H5F_SUPERBLOCK_VARLEN_SIZE_V2, H5Fpkg.h:116-123).
+	superblockV2PrefixSize = superblockFixedSize + 3
+
+	// metadataChecksumSize is the size of a metadata checksum (H5F_SIZEOF_CHKSUM).
+	metadataChecksumSize = 4
+
+	// symbolEntryFixedSize is the cache type, the reserved word and the scratch
+	// pad of a symbol table entry (H5G_SIZEOF_ENTRY, H5Gprivate.h:38-43).
+	symbolEntryFixedSize = 4 + 4 + 16
+
+	// superblockAllFlags are the status flags a superblock may carry
+	// (H5F_SUPER_ALL_FLAGS, H5Fpkg.h:50-53).
+	superblockAllFlags = 0x01 | 0x02 | 0x04
+
+	// The cache types of a symbol table entry that the C library decodes
+	// (H5G_NOTHING_CACHED, H5G_CACHED_STAB, H5G_CACHED_SLINK; H5Gpkg.h:65-67).
+	symbolEntryCacheNothing = 0
+	symbolEntryCacheStab    = 1
+	symbolEntryCacheSlink   = 2
+)
+
+// minimumSuperblockSize returns the on-disk size in bytes of the superblock
+// for the given version and field widths (H5F_SUPERBLOCK_FIXED_SIZE plus
+// H5F_SUPERBLOCK_VARLEN_SIZE, H5Fpkg.h:75-127).
+func minimumSuperblockSize(version, offsetSize, lengthSize uint8) uint64 {
+	addr := uint64(offsetSize)
 	if version == Version0 {
-		// 24 fixed bytes + four address-width fields + the root group symbol
-		// table entry (two addresses, 8 fixed bytes, a 16-byte scratch pad).
-		return 48 + 6*uint64(offsetSize)
+		// Base, free-space, EOF and driver addresses, then the root group
+		// symbol table entry (link name offset is a length).
+		return superblockV0PrefixSize + 4*addr + uint64(lengthSize) + addr + symbolEntryFixedSize
 	}
-	return minSuperblockSizeV2
+	// Base, extension, EOF and root group addresses, then the checksum.
+	return superblockV2PrefixSize + 4*addr + metadataChecksumSize
 }
 
 // ReadSuperblock reads and parses the HDF5 superblock from the file.
@@ -133,6 +188,10 @@ func locateSuperblock(r io.ReaderAt) (uint64, error) {
 
 // readSuperblockAt parses the superblock found at addr, which is also the
 // file's effective base address: HDF5 metadata addresses are relative to it.
+// It follows H5F__superblock_prefix_decode and H5F__cache_superblock_deserialize
+// (H5Fsuper_cache.c:140-214, :400-600); the checksum of a version 2/3
+// superblock is verified first, as the metadata cache does through
+// H5F__cache_superblock_verify_chksum (:365-391).
 func readSuperblockAt(r io.ReaderAt, addr, size uint64, sizeKnown bool) (*Superblock, error) {
 	buf := utils.GetBuffer(128)
 	defer utils.ReleaseBuffer(buf)
@@ -142,15 +201,16 @@ func readSuperblockAt(r io.ReaderAt, addr, size uint64, sizeKnown bool) (*Superb
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, utils.WrapError("superblock read failed", err)
 	}
-	if n < 48 {
-		return nil, errors.New("file too small to contain a superblock")
+	img := buf[:n]
+	if len(img) < superblockFixedSize {
+		return nil, fmt.Errorf("file too small to contain a superblock: %w", utils.ErrCorrupt)
 	}
 
-	if string(buf[:8]) != Signature {
-		return nil, errors.New("invalid HDF5 signature")
+	if string(img[:8]) != Signature {
+		return nil, fmt.Errorf("invalid HDF5 signature: %w", utils.ErrCorrupt)
 	}
 
-	version := buf[8]
+	version := img[8]
 	// Version 1 (non-default B-tree K values) is valid HDF5 (H5Fprivate.h:301)
 	// that this reader does not decode; above 3 C refuses the superblock
 	// (H5Fsuper_cache.c:164-165).
@@ -162,193 +222,280 @@ func readSuperblockAt(r io.ReaderAt, addr, size uint64, sizeKnown bool) (*Superb
 		return nil, fmt.Errorf("unsupported superblock version: %d (only 0, 2, 3 supported): %w", version, sentinel)
 	}
 
-	endianness, offsetSize, lengthSize, err := parseSuperblockSizes(version, buf)
+	offsetSize, lengthSize, err := parseSuperblockSizes(version, img)
 	if err != nil {
 		return nil, err
 	}
 
-	// readValue decodes one of the superblock's address fields. Every field
-	// read here is an address (base, free-space or extension, EOF, root group
-	// and the root's cached B-tree and heap), so an all-ones value of the
-	// file's offset width is the undefined address (H5F_addr_decode,
-	// H5Fint.c:3046-3050).
-	readValue := func(offset int, size uint8) (uint64, error) {
-		if offset < 0 || offset+int(size) > len(buf) {
-			return 0, fmt.Errorf("buffer overflow: offset=%d, size=%d", offset, size)
-		}
-
-		switch size {
-		case 1, 2, 4, 8:
-			return DecodeAddress(buf[offset:offset+int(size)], int(size), endianness), nil
-		default:
-			return 0, fmt.Errorf("unsupported size: %d", size)
-		}
+	// The image must hold every field its own sizes call for.
+	need := minimumSuperblockSize(version, offsetSize, lengthSize)
+	if uint64(len(img)) < need {
+		return nil, fmt.Errorf("file too small to contain a superblock: %d of %d bytes: %w",
+			len(img), need, utils.ErrCorrupt)
 	}
+	img = img[:need]
 
 	sb := &Superblock{
-		Version:     version,
-		OffsetSize:  offsetSize,
-		LengthSize:  lengthSize,
-		Endianness:  endianness,
-		BaseAddress: addr,
+		Version:    version,
+		OffsetSize: offsetSize,
+		LengthSize: lengthSize,
+		// HDF5 metadata is little-endian whatever the platform; the format
+		// has no byte-order field (H5Fsuper_cache.c decodes with UINT*DECODE).
+		Endianness:     binary.LittleEndian,
+		BaseAddress:    addr,
+		SymLeafK:       DefaultSymLeafK,
+		SymInternalK:   DefaultSymInternalK,
+		ChunkInternalK: DefaultChunkInternalK,
 	}
 
-	// The base address stored in the file is parsed for both layouts and
-	// validated, but the effective base is the superblock position: the C
-	// library rewrites a disagreeing value the same way (H5Fsuper.c:475-485).
 	if version == Version0 {
-		// A v0 superblock is a fixed 24-byte header followed by fields whose
-		// width is sizeof_addr: base address, free-space index, end-of-file,
-		// driver info, then the root group symbol table entry. The entry itself
-		// is link name offset, object header address, a 4-byte cache type, 4
-		// reserved bytes, and a 16-byte scratch pad holding the B-tree and local
-		// heap addresses. Offsets are computed, not assumed 8-byte wide: old
-		// writers produced files with sizeof_addr = 4 (H5F__super_decode_v0
-		// decodes every variable-width field with the sizes in the superblock).
-		addrSize := int(offsetSize)
-		baseOff := 24
-		eofOff := baseOff + 2*addrSize // skips the free-space index
-		rootSymOff := eofOff + 2*addrSize
-		rootOff := rootSymOff + addrSize // skips the link name offset
-		btreeOff := rootOff + addrSize + 8
-		heapOff := btreeOff + addrSize
-
-		storedBase, baseErr := readValue(baseOff, offsetSize)
-		if baseErr != nil {
-			return nil, utils.WrapError("base address read failed", baseErr)
-		}
-		if err := validateStoredBaseAddress(storedBase, size, sizeKnown); err != nil {
-			return nil, err
-		}
-
-		sb.EOFAddress, err = readValue(eofOff, offsetSize)
-		if err != nil {
-			return nil, utils.WrapError("end-of-file address read failed", err)
-		}
-
-		sb.RootGroup, err = readValue(rootOff, offsetSize)
-		if err != nil {
-			return nil, utils.WrapError("root group address read failed", err)
-		}
-
-		// ALWAYS read cached B-tree and Heap addresses for v0 files
-		// These are stored in the scratch-pad area when cache type = 1 (H5G_CACHED_STAB)
-		// Even if object header address is non-zero, the symbol table may use these
-		sb.RootBTreeAddr, err = readValue(btreeOff, offsetSize)
-		if err != nil {
-			return nil, utils.WrapError("b-tree address read failed", err)
-		}
-
-		sb.RootHeapAddr, err = readValue(heapOff, offsetSize)
-		if err != nil {
-			return nil, utils.WrapError("heap address read failed", err)
-		}
+		err = sb.decodeV0(img, size, sizeKnown)
 	} else {
-		// For v2 and v3, fields start at byte 12
-		current := 12
-
-		storedBase, baseErr := readValue(current, offsetSize)
-		if baseErr != nil {
-			return nil, utils.WrapError("base address read failed", baseErr)
-		}
-		if err := validateStoredBaseAddress(storedBase, size, sizeKnown); err != nil {
-			return nil, err
-		}
-		current += int(offsetSize)
-
-		sb.SuperExtension, err = readValue(current, offsetSize)
-		if err != nil {
-			return nil, utils.WrapError("super extension read failed", err)
-		}
-		current += int(offsetSize)
-
-		// End-of-file address (C reference H5Fsuper_cache.c:584 decodes base
-		// address, superblock extension, EOF, then root group object header).
-		sb.EOFAddress, err = readValue(current, offsetSize)
-		if err != nil {
-			return nil, utils.WrapError("end-of-file address read failed", err)
-		}
-		current += int(offsetSize)
-
-		sb.RootGroup, err = readValue(current, offsetSize)
-		if err != nil {
-			return nil, utils.WrapError("root group address read failed", err)
-		}
-		// Note: v2 and v3 have checksum at bytes 44-47, but we don't validate it during read
-		// The HDF5 C library also doesn't enforce checksum validation on read
+		err = sb.decodeV2(img, size, sizeKnown)
+	}
+	if err != nil {
+		return nil, err
 	}
 
-	if err := validateEOFAddress(version, offsetSize, addr, sb.EOFAddress, size, sizeKnown); err != nil {
+	if err := validateEOFAddress(version, offsetSize, lengthSize, addr, sb.EOFAddress, size, sizeKnown); err != nil {
 		return nil, err
+	}
+
+	if version >= Version2 && sb.SuperExtension != undefinedAddress {
+		// The extension address, like every address in the file, is relative
+		// to the base address (H5FD_read adds file->base_addr, H5FDint.c:267); a
+		// file with a user block has its superblock, and base, past offset 0.
+		er := r
+		if addr > 0 {
+			er = utils.NewBaseReader(r, addr)
+		}
+		if err := sb.readBTreeK(er); err != nil {
+			return nil, err
+		}
 	}
 
 	return sb, nil
 }
 
-// parseSuperblockSizes returns the byte order and field widths of the
-// superblock: v0 stores them at bytes 13-14, while v2/v3 select the byte order
-// in byte 9 and either a direct size or a pair of packed codes in byte 10.
-func parseSuperblockSizes(version uint8, buf []byte) (binary.ByteOrder, uint8, uint8, error) {
-	var endianness binary.ByteOrder
-	var offsetSize, lengthSize uint8
+// The C library's default B-tree K values (H5Fprivate.h:200, :314-317).
+const (
+	DefaultSymLeafK       = 4  // H5F_CRT_SYM_LEAF_DEF
+	DefaultSymInternalK   = 16 // HDF5_BTREE_SNODE_IK_DEF
+	DefaultChunkInternalK = 32 // HDF5_BTREE_CHUNK_IK_DEF
+)
 
-	if version == Version0 {
-		offsetSize = buf[13]
-		lengthSize = buf[14]
-		endianness = binary.LittleEndian // v0 files are little-endian only here
-	} else {
-		// Byte 9: flags — bit 0 selects the byte order.
-		if buf[9]&0x01 == 0 {
-			endianness = binary.LittleEndian
-		} else {
-			endianness = binary.BigEndian
+// btreeKMessageSize is the B-tree 'K' values message: version(1)=0, chunk
+// internal K(2), symbol table internal K(2), symbol table leaf K(2)
+// (H5O__btreek_decode, H5Obtreek.c:80-103).
+const btreeKMessageSize = 7
+
+// readBTreeK reads the B-tree 'K' values message of the superblock extension,
+// when it has one, into sb (H5F__super_read, H5Fsuper.c:699-715). Deviation,
+// stricter: a K of 0 is corrupt, as for the version 0 superblock's group K
+// values (H5Fsuper_cache.c:476-486); C does not check the message's values, and
+// a B-tree with K 0 holds no entries.
+func (sb *Superblock) readBTreeK(r io.ReaderAt) error {
+	ext := sb.SuperExtension
+	header, err := readObjectHeader(r, ext, sb, false)
+	if err != nil {
+		return fmt.Errorf("superblock extension at 0x%X: %w", ext, err)
+	}
+	for _, msg := range header.Messages {
+		if msg.Type != MsgBTreeK {
+			continue
 		}
+		d := msg.Data
+		if len(d) < btreeKMessageSize {
+			return fmt.Errorf("superblock extension at 0x%X: B-tree 'K' values message of %d bytes: %w",
+				ext, len(d), utils.ErrCorrupt)
+		}
+		if d[0] != 0 {
+			return fmt.Errorf("superblock extension at 0x%X: B-tree 'K' values message version %d: %w",
+				ext, d[0], utils.ErrCorrupt)
+		}
+		chunkK := binary.LittleEndian.Uint16(d[1:3])
+		snodeK := binary.LittleEndian.Uint16(d[3:5])
+		leafK := binary.LittleEndian.Uint16(d[5:7])
+		if chunkK == 0 || snodeK == 0 || leafK == 0 {
+			return fmt.Errorf("superblock extension at 0x%X: B-tree 'K' values %d/%d/%d include 0: %w",
+				ext, chunkK, snodeK, leafK, utils.ErrCorrupt)
+		}
+		sb.ChunkInternalK, sb.SymInternalK, sb.SymLeafK = chunkK, snodeK, leafK
 
-		// Byte 10 is either a direct size (1, 2, 4, 8) or packed codes:
-		// lower 4 bits = offset size, upper 4 bits = length size.
-		sizesByte := buf[10]
-		validDirectSizes := map[uint8]bool{1: true, 2: true, 4: true, 8: true}
-		if validDirectSizes[sizesByte] {
-			offsetSize = sizesByte
-			lengthSize = 8 // HDF5 v2/v3 typically uses 8-byte lengths
-		} else {
-			sizeCodeMap := map[uint8]uint8{0: 1, 1: 2, 2: 4, 3: 8}
+		return nil
+	}
 
-			var ok bool
-			offsetSize, ok = sizeCodeMap[sizesByte&0x0F]
-			if !ok {
-				return nil, 0, 0, fmt.Errorf("invalid offset size code: %d", sizesByte&0x0F)
-			}
-			lengthSize, ok = sizeCodeMap[(sizesByte>>4)&0x0F]
-			if !ok {
-				return nil, 0, 0, fmt.Errorf("invalid length size code: %d", (sizesByte>>4)&0x0F)
-			}
+	return nil
+}
+
+// decodeV0 decodes the variable part of a version 0 superblock
+// (H5Fsuper_cache.c:425-546): hard-wired versions, B-tree K values, status
+// flags, four addresses (base, free-space index, EOF, driver block) and the
+// root group symbol table entry. img holds exactly the superblock.
+func (sb *Superblock) decodeV0(img []byte, size uint64, sizeKnown bool) error {
+	// Free-space, object directory and shared-header versions are hard-wired
+	// to 0 (HDF5_*_VERSION, H5Fprivate.h:308-310; checked :435-453).
+	switch {
+	case img[9] != 0:
+		return fmt.Errorf("bad free space version number %d: %w", img[9], utils.ErrCorrupt)
+	case img[10] != 0:
+		return fmt.Errorf("bad object directory version number %d: %w", img[10], utils.ErrCorrupt)
+	case img[12] != 0:
+		return fmt.Errorf("bad shared-header format version number %d: %w", img[12], utils.ErrCorrupt)
+	}
+
+	// Group leaf and internal node K must not be 0 (:476-486).
+	sb.SymLeafK = binary.LittleEndian.Uint16(img[16:18])
+	sb.SymInternalK = binary.LittleEndian.Uint16(img[18:20])
+	if sb.SymLeafK == 0 {
+		return fmt.Errorf("bad symbol table leaf node 1/2 rank: %w", utils.ErrCorrupt)
+	}
+	if sb.SymInternalK == 0 {
+		return fmt.Errorf("bad 1/2 rank for btree internal nodes: %w", utils.ErrCorrupt)
+	}
+
+	// Status flags: a 32-bit field holding the 8-bit flags (:492-499).
+	if flags := binary.LittleEndian.Uint32(img[20:24]); flags > 255 || flags&^superblockAllFlags != 0 {
+		return fmt.Errorf("bad superblock status flags 0x%x: %w", flags, utils.ErrCorrupt)
+	}
+
+	a := int(sb.OffsetSize)
+	p := superblockV0PrefixSize
+	storedBase := sb.decodeAddr(img[p:])
+	if err := validateStoredBaseAddress(storedBase, size, sizeKnown); err != nil {
+		return err
+	}
+	p += 2 * a // base, then the unused free-space index address
+	eof, err := movedSuperblockEOF(sb.decodeAddr(img[p:]), storedBase, sb.BaseAddress)
+	if err != nil {
+		return err
+	}
+	sb.EOFAddress = eof
+	p += a
+	sb.DriverInfo = sb.decodeAddr(img[p:])
+	p += a
+
+	return sb.decodeRootEntry(img[p:])
+}
+
+// decodeRootEntry decodes the root group symbol table entry of a version 0
+// superblock as H5G_ent_decode does (H5Gent.c:108-170): a LENGTH-sized link
+// name offset (:125, H5F_DECODE_LENGTH), the object header address, the cache
+// type, 4 reserved bytes, and the scratch pad, which holds the B-tree and local
+// heap addresses only for H5G_CACHED_STAB. An unknown cache type is an error.
+func (sb *Superblock) decodeRootEntry(ent []byte) error {
+	p := int(sb.LengthSize) // the root's link name offset is not used
+	sb.RootGroup = sb.decodeAddr(ent[p:])
+	p += int(sb.OffsetSize)
+	cacheType := binary.LittleEndian.Uint32(ent[p:])
+	p += 8 // cache type and reserved word
+
+	switch cacheType {
+	case symbolEntryCacheNothing, symbolEntryCacheSlink:
+		// Nothing for the superblock to keep: the root group's symbol table
+		// is then found through its object header.
+	case symbolEntryCacheStab:
+		sb.RootBTreeAddr = sb.decodeAddr(ent[p:])
+		sb.RootHeapAddr = sb.decodeAddr(ent[p+int(sb.OffsetSize):])
+	default:
+		return fmt.Errorf("unknown root symbol table entry cache type %d: %w", cacheType, utils.ErrCorrupt)
+	}
+
+	return nil
+}
+
+// decodeV2 decodes the variable part of a version 2/3 superblock
+// (H5Fsuper_cache.c:557-600) after verifying its checksum: status flags, then
+// the base, superblock extension, EOF and root group object header addresses.
+// img holds exactly the superblock, checksum last.
+func (sb *Superblock) decodeV2(img []byte, size uint64, sizeKnown bool) error {
+	// H5F__cache_superblock_verify_chksum via H5F_get_checksums
+	// (H5Fio.c:499-530): the stored checksum is the last 4 bytes, the computed
+	// one covers everything before them. hdf5-go up to v0.13.4 stored
+	// CRC32-IEEE here (VerifyMetadataChecksumLegacy); such a file stays
+	// readable, with a warning, although the C library refuses it.
+	body := len(img) - metadataChecksumSize
+	stored := binary.LittleEndian.Uint32(img[body:])
+	legacy, err := VerifyMetadataChecksumLegacy(img[:body], stored, "superblock")
+	if err != nil {
+		return err
+	}
+	if legacy {
+		// The span is relative to the superblock's own position, which is
+		// address 0 unless the file has a user block.
+		sb.warnLegacyChecksumf(WarnLegacySuperblockChecksum, 0, uint64(body), //nolint:gosec // body is a small constant
+			"superblock checksum is CRC32-IEEE, as hdf5-go v0.13.4 and earlier wrote it; "+
+				"the HDF5 C library cannot open this file until it is rewritten (open it with OpenForWrite and close it)")
+	}
+
+	if flags := img[11]; flags&^superblockAllFlags != 0 {
+		return fmt.Errorf("bad flag value 0x%x for superblock: %w", flags, utils.ErrCorrupt)
+	}
+
+	a := int(sb.OffsetSize)
+	p := superblockV2PrefixSize
+	storedBase := sb.decodeAddr(img[p:])
+	if err := validateStoredBaseAddress(storedBase, size, sizeKnown); err != nil {
+		return err
+	}
+	p += a
+	sb.SuperExtension = sb.decodeAddr(img[p:])
+	p += a
+	if sb.EOFAddress, err = movedSuperblockEOF(sb.decodeAddr(img[p:]), storedBase, sb.BaseAddress); err != nil {
+		return err
+	}
+	p += a
+	sb.RootGroup = sb.decodeAddr(img[p:])
+
+	return nil
+}
+
+// decodeAddr decodes one address field of the superblock: an all-ones value
+// of the file's offset width is the undefined address (H5F_addr_decode,
+// H5Fint.c:3046-3050).
+func (sb *Superblock) decodeAddr(b []byte) uint64 {
+	return DecodeAddress(b, int(sb.OffsetSize), sb.Endianness)
+}
+
+// parseSuperblockSizes returns sizeof_addr and sizeof_size from the superblock
+// prefix as H5F__superblock_prefix_decode does (H5Fsuper_cache.c:173-191):
+// version 0/1 store them at bytes 13 and 14, version 2/3 at bytes 9 and 10
+// (byte 11 is the status flags). C accepts 2, 4, 8, 16 and 32 and nothing
+// else; this reader decodes addresses and lengths into uint64, so 16 and 32
+// are reported as not supported.
+func parseSuperblockSizes(version uint8, img []byte) (offsetSize, lengthSize uint8, err error) {
+	at := superblockFixedSize
+	if version < Version2 {
+		at += 4 // free-space, object directory, reserved, shared-header bytes
+	}
+	if len(img) < at+2 {
+		return 0, 0, fmt.Errorf("file too small to contain a superblock: %w", utils.ErrCorrupt)
+	}
+	offsetSize, lengthSize = img[at], img[at+1]
+
+	for _, f := range []struct {
+		what string
+		v    uint8
+	}{{"an address", offsetSize}, {"object size", lengthSize}} {
+		switch f.v {
+		case 2, 4, 8:
+		case 16, 32:
+			return 0, 0, fmt.Errorf("superblock byte number for %s %d: %w", f.what, f.v, utils.ErrNotSupported)
+		default:
+			return 0, 0, fmt.Errorf("bad byte number for %s in superblock version %d: %d: %w",
+				f.what, version, f.v, utils.ErrCorrupt)
 		}
 	}
 
-	// Handle zero sizes (in test files).
-	if offsetSize == 0 {
-		offsetSize = 8
-	}
-	if lengthSize == 0 {
-		lengthSize = 8
-	}
-
-	validSizes := map[uint8]bool{1: true, 2: true, 4: true, 8: true}
-	if !validSizes[offsetSize] || !validSizes[lengthSize] {
-		return nil, 0, 0, fmt.Errorf("invalid sizes for version %d: offset=%d, length=%d",
-			version, offsetSize, lengthSize)
-	}
-
-	return endianness, offsetSize, lengthSize, nil
+	return offsetSize, lengthSize, nil
 }
 
 // validateEOFAddress rejects a non-zero EOF address smaller than the superblock
 // header itself: the file's address space cannot end inside the superblock that
 // defines it, so such a value means truncation or corruption (cf. the stored_eof
 // check in H5F__super_read, H5Fsuper.c:573).
-func validateEOFAddress(version, offsetSize uint8, superAddr, eofAddress, size uint64, sizeKnown bool) error {
-	minSize := minimumSuperblockSize(version, offsetSize)
+func validateEOFAddress(version, offsetSize, lengthSize uint8, superAddr, eofAddress, size uint64, sizeKnown bool) error {
+	minSize := minimumSuperblockSize(version, offsetSize, lengthSize)
 	headerEnd := superAddr + minSize
 	if eofAddress != 0 && eofAddress < headerEnd {
 		return fmt.Errorf("invalid superblock: EOF address %d is smaller than the superblock header (%d bytes)",
@@ -364,6 +511,31 @@ func validateEOFAddress(version, offsetSize uint8, superAddr, eofAddress, size u
 	}
 
 	return nil
+}
+
+// movedSuperblockEOF returns the stored end-of-file address adjusted for a
+// superblock found at superAddr while the file stores base address
+// storedBase, as H5F__super_read does (H5Fsuper.c:475-482): a tool such as
+// h5jam or h5unjam changed the user block in front of it, the data moved with
+// the superblock, and the absolute EOF moves by the same amount. The base
+// address becomes superAddr (Superblock.BaseAddress). C's address arithmetic
+// wraps, which its truncation check then reports; an adjusted EOF outside the
+// address range is reported as corrupt here.
+func movedSuperblockEOF(eof, storedBase, superAddr uint64) (uint64, error) {
+	switch {
+	case storedBase == superAddr:
+		return eof, nil
+	case storedBase > superAddr:
+		if d := storedBase - superAddr; eof >= d {
+			return eof - d, nil
+		}
+	default:
+		if d := superAddr - storedBase; eof <= undefinedAddress-d {
+			return eof + d, nil
+		}
+	}
+	return 0, fmt.Errorf("truncated file: end-of-file address %d does not fit the superblock moved from base %d to %d: %w",
+		eof, storedBase, superAddr, utils.ErrCorrupt)
 }
 
 // validateStoredBaseAddress rejects a base address stored in the file that
@@ -535,11 +707,19 @@ func (sb *Superblock) writeV0(w io.WriterAt, eofAddress uint64) error {
 	// Byte 15: Reserved
 	buf[15] = 0
 
-	// Bytes 16-17: Group Leaf Node K (default: 4)
-	binary.LittleEndian.PutUint16(buf[16:18], 4)
-
-	// Bytes 18-19: Group Internal Node K (default: 16)
-	binary.LittleEndian.PutUint16(buf[18:20], 16)
+	// Bytes 16-17 and 18-19: Group Leaf Node K and Group Internal Node K: the
+	// file's own values, so a rewrite keeps the node sizes its symbol tables
+	// were written with; the C defaults for a new file (H5Fsuper_cache.c
+	// H5F__cache_superblock_serialize writes sym_leaf_k and btree_k[SNODE]).
+	leafK, internalK := sb.SymLeafK, sb.SymInternalK
+	if leafK == 0 {
+		leafK = DefaultSymLeafK
+	}
+	if internalK == 0 {
+		internalK = DefaultSymInternalK
+	}
+	binary.LittleEndian.PutUint16(buf[16:18], leafK)
+	binary.LittleEndian.PutUint16(buf[18:20], internalK)
 
 	// Bytes 20-23: File Consistency Flags (0 = file is closed properly)
 	binary.LittleEndian.PutUint32(buf[20:24], 0)

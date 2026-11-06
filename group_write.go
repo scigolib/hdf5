@@ -2,8 +2,8 @@ package hdf5
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/scigolib/hdf5/internal/core"
@@ -137,8 +137,6 @@ func validateGroupPath(path string) error {
 // createGroupStructures creates and writes the local heap, symbol table node, and B-tree for a group.
 // Returns (heapAddr, stNodeAddr, btreeAddr, error).
 func (fw *FileWriter) createGroupStructures() (uint64, uint64, uint64, error) {
-	offsetSize := int(fw.file.sb.OffsetSize)
-
 	// Create local heap (4096 bytes supports ~300+ typical names).
 	heap := structures.NewLocalHeap(4096)
 	heapAddr, err := fw.writer.Allocate(heap.Size())
@@ -146,31 +144,13 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, uint64, error) {
 		return 0, 0, 0, fmt.Errorf("failed to allocate heap: %w", err)
 	}
 
-	// Create symbol table node with capacity = 2*K where K=4 (GroupLeafNodeK).
-	stNode := structures.NewSymbolTableNode(snodCapacity)
-	stNodeAddr, err := fw.writer.Allocate(snodTotalSize)
+	// An empty B-tree, as H5G__stab_create does through H5B_create
+	// (H5Gstab.c:132): the first insert creates the first symbol table node
+	// (H5B.c:853), so the group has none yet.
+	stNodeAddr := undefinedAddress
+	btreeAddr, err := fw.createEmptyGroupBTree()
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("failed to allocate symbol table node: %w", err)
-	}
-
-	if err := stNode.WriteAt(fw.writer, stNodeAddr, uint8(offsetSize), snodCapacity, fw.file.sb.Endianness); err != nil { //nolint:gosec // Safe: offsetSize is 8
-		return 0, 0, 0, fmt.Errorf("failed to write symbol table node: %w", err)
-	}
-
-	// Create B-tree
-	btree := structures.NewBTreeNodeV1(0, 16)
-	if err := btree.AddKey(0, stNodeAddr); err != nil {
-		return 0, 0, 0, fmt.Errorf("failed to add B-tree key: %w", err)
-	}
-
-	btreeSize := uint64(24 + (2*16+1)*offsetSize + 2*16*offsetSize)
-	btreeAddr, err := fw.writer.Allocate(btreeSize)
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("failed to allocate B-tree: %w", err)
-	}
-
-	if err := btree.WriteAt(fw.writer, btreeAddr, uint8(offsetSize), 16, fw.file.sb.Endianness); err != nil { //nolint:gosec // Safe: offsetSize is 8
-		return 0, 0, 0, fmt.Errorf("failed to write B-tree: %w", err)
+		return 0, 0, 0, err
 	}
 
 	// Write heap
@@ -210,7 +190,6 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, uint64, error) {
 // Limitations for MVP (v0.11.0-beta):
 //   - Only symbol table structure (no indexed groups)
 //   - No link creation time tracking
-//   - Maximum 32 entries per group (symbol table node capacity)
 //   - Parent group must exist (create parents first)
 func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 	// Validate path
@@ -229,7 +208,7 @@ func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 	}
 
 	// Create group structures (heap, symbol table, B-tree)
-	heapAddr, stNodeAddr, btreeAddr, err := fw.createGroupStructures()
+	heapAddr, _, btreeAddr, err := fw.createGroupStructures()
 	if err != nil {
 		return nil, err
 	}
@@ -267,13 +246,7 @@ func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 	}
 
 	// Store group metadata for nested dataset linking
-	fw.groups[path] = &GroupMetadata{
-		heapAddr:      heapAddr,
-		stNodeAddr:    stNodeAddr,
-		btreeAddr:     btreeAddr,
-		headerAddr:    headerAddr,
-		headerAllocSz: headerSize,
-	}
+	fw.registerGroup(path, heapAddr, btreeAddr, headerAddr, headerSize)
 
 	// Link to parent group
 	if err := fw.linkToParent(parent, name, headerAddr); err != nil {
@@ -333,8 +306,6 @@ func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint6
 // path is stored in the parent's local heap and the entry carries cache
 // type 2 with an undefined object address (H5G_CACHED_SLINK) — soft links
 // are not objects and have no object header.
-//
-//nolint:gocognit,gocyclo,cyclop,funlen // Complex but necessary: SNOD split + heap expansion + B-tree update
 func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr uint64, softTarget string) error {
 	// Get parent group metadata.
 	var heapAddr, btreeAddr uint64
@@ -369,23 +340,7 @@ func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr 
 		}
 	}
 
-	// Step 3: Read ALL SNODs in this group (the B-tree may have multiple children after splits).
-	btreeNode, snodAddrs, err := fw.readGroupBTree(btreeAddr)
-	if err != nil {
-		return fmt.Errorf("read group B-tree: %w", err)
-	}
-
-	// Collect all entries from all SNODs, plus the new entry.
-	allEntries := make([]structures.SymbolTableEntry, 0, snodCapacity)
-	for _, addr := range snodAddrs {
-		sn, readErr := fw.readSymbolTableNode(addr)
-		if readErr != nil {
-			return fmt.Errorf("read SNOD at 0x%X: %w", addr, readErr)
-		}
-		allEntries = append(allEntries, sn.Entries...)
-	}
-
-	// Add the new entry.
+	// Step 3: The new entry.
 	newEntry := structures.SymbolTableEntry{
 		LinkNameOffset: nameOffset,
 		ObjectAddress:  childAddr,
@@ -404,91 +359,12 @@ func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr 
 		newEntry.CacheType = structures.CacheTypeSoftLink
 		newEntry.CachedSoftLinkOffset = uint32(targetOffset) //nolint:gosec // G115: local heap offsets fit in uint32
 	}
-	allEntries = append(allEntries, newEntry)
 
-	// Sort all entries by name (HDF5 format requirement).
-	fw.sortEntriesByName(allEntries, heap, nameOffset, childName)
-
-	// Step 4: Distribute entries across SNODs.
-	// Each SNOD holds at most snodCapacity (8) entries.
-	// Per C reference (H5Gnode.c:613): split at K (4), each half gets K entries.
-	numSNODs := (len(allEntries) + snodCapacity - 1) / snodCapacity
-	if numSNODs < 1 {
-		numSNODs = 1
-	}
-
-	// Ensure we have enough SNOD addresses (allocate new ones if needed).
-	for len(snodAddrs) < numSNODs {
-		newAddr, allocErr := fw.writer.Allocate(snodTotalSize)
-		if allocErr != nil {
-			return fmt.Errorf("allocate new SNOD: %w", allocErr)
-		}
-		snodAddrs = append(snodAddrs, newAddr)
-	}
-
-	offsetSize := fw.file.sb.OffsetSize
-
-	// Step 4: Rebuild and write B-tree FIRST (before SNODs).
-	// For v0 format with fixed addresses, the B-tree write must complete before SNOD writes
-	// to avoid overwriting SNOD data with B-tree zero padding.
-	const groupBTreeK = 16 // B-tree internal node K (separate from GroupLeafNodeK).
-	newBTree := structures.NewBTreeNodeV1(0, groupBTreeK)
-
-	for i := 0; i < numSNODs; i++ {
-		// Per C reference H5G__node_create (H5Gnode.c:306-309): initial keys are 0.
-		// Per H5G__node_cmp3 (H5Gnode.c:415): search_name <= left_key returns -1 (before).
-		// Per H5G__node_insert (H5Gnode.c:623): md_key = last entry of LEFT node.
-		//
-		// Key[0] = 0 (empty string sentinel)
-		// Key[i] for i>0 = last entry's name offset in SNOD[i-1] (the boundary between nodes)
-		// This ensures cmp3 returns 0 for names that belong in the RIGHT node.
-		var leftKey uint64
-		if i > 0 {
-			// Boundary key = last entry of the previous SNOD
-			prevEnd := i * snodCapacity
-			if prevEnd > len(allEntries) {
-				prevEnd = len(allEntries)
-			}
-			leftKey = allEntries[prevEnd-1].LinkNameOffset
-		}
-		if addErr := newBTree.AddKey(leftKey, snodAddrs[i]); addErr != nil {
-			return fmt.Errorf("add B-tree key for SNOD %d: %w", i, addErr)
-		}
-	}
-
-	// Add final right key (offset of last entry's name, i.e., the largest name).
-	lastEntry := allEntries[len(allEntries)-1]
-	newBTree.Keys = append(newBTree.Keys, lastEntry.LinkNameOffset)
-
-	// Write B-tree (rewrite in place -- B-tree was allocated with K=16 so has room for 32 children).
-	if err := newBTree.WriteAt(fw.writer, btreeAddr, offsetSize, groupBTreeK, fw.file.sb.Endianness); err != nil {
-		return fmt.Errorf("write B-tree: %w", err)
-	}
-
-	// Update parent's stNodeAddr to the first SNOD (it may have moved).
-	if len(btreeNode.ChildPointers) == 0 || snodAddrs[0] != btreeNode.ChildPointers[0] {
-		fw.updateGroupStNodeAddr(parentPath, snodAddrs[0])
-	}
-
-	// Step 5: Write entries to SNODs (after B-tree to avoid overlap in v0 fixed layout).
-	pos := 0
-	for i := 0; i < numSNODs; i++ {
-		end := pos + snodCapacity
-		if end > len(allEntries) {
-			end = len(allEntries)
-		}
-		chunk := allEntries[pos:end]
-		pos = end
-
-		sn := structures.NewSymbolTableNode(snodCapacity)
-		for _, e := range chunk {
-			if addErr := sn.AddEntry(e); addErr != nil {
-				return fmt.Errorf("add entry to SNOD %d: %w", i, addErr)
-			}
-		}
-		if writeErr := sn.WriteAt(fw.writer, snodAddrs[i], offsetSize, snodCapacity, fw.file.sb.Endianness); writeErr != nil {
-			return fmt.Errorf("write SNOD %d: %w", i, writeErr)
-		}
+	// Step 4: Insert it into the group's B-tree, splitting symbol table
+	// nodes and B-tree nodes as the C library does (H5G__stab_insert_real,
+	// H5Gstab.c:270-300, through H5B_insert).
+	if err := fw.groupSymbolTable(heap).insert(btreeAddr, childName, newEntry); err != nil {
+		return fmt.Errorf("insert %q into group B-tree: %w", childName, err)
 	}
 
 	// Step 6: Write updated heap.
@@ -499,94 +375,6 @@ func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr 
 	return nil
 }
 
-// sortEntriesByName sorts symbol table entries by their name from the local heap.
-// The new entry (at nameOffset) uses childName directly since the heap data
-// may not have been flushed yet.
-func (fw *FileWriter) sortEntriesByName(entries []structures.SymbolTableEntry, heap *structures.LocalHeap, nameOffset uint64, childName string) {
-	sort.Slice(entries, func(i, j int) bool {
-		si := fw.resolveEntryName(entries[i], heap, nameOffset, childName)
-		sj := fw.resolveEntryName(entries[j], heap, nameOffset, childName)
-		return si < sj
-	})
-}
-
-// resolveEntryName gets the string name for a symbol table entry from the heap.
-func (fw *FileWriter) resolveEntryName(entry structures.SymbolTableEntry, heap *structures.LocalHeap, nameOffset uint64, childName string) string {
-	if entry.LinkNameOffset == nameOffset {
-		return childName
-	}
-	name, err := heap.GetString(entry.LinkNameOffset)
-	if err != nil {
-		return ""
-	}
-	return name
-}
-
-// readGroupBTree reads the B-tree v1 node at the given address and extracts child SNOD addresses.
-// Returns the B-tree node, the list of SNOD addresses, and any error.
-func (fw *FileWriter) readGroupBTree(btreeAddr uint64) (*structures.BTreeNodeV1, []uint64, error) {
-	offsetSize := fw.file.sb.OffsetSize
-	endianness := fw.file.sb.Endianness
-
-	// Read B-tree header: 4 (sig) + 1 (type) + 1 (level) + 2 (entries) + 2*offsetSize (siblings).
-	headerSize := 8 + 2*int(offsetSize)
-	header := make([]byte, headerSize)
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface.
-	if _, err := fw.writer.ReadAt(header, int64(btreeAddr)); err != nil {
-		return nil, nil, fmt.Errorf("read B-tree header: %w", err)
-	}
-
-	sig := string(header[0:4])
-	if sig != "TREE" { //nolint:goconst // HDF5 B-tree signature used across multiple packages
-		return nil, nil, fmt.Errorf("invalid B-tree signature: %q", sig)
-	}
-
-	entriesUsed := endianness.Uint16(header[6:8])
-
-	// Read keys and children (interleaved).
-	// Layout after header: Key[0], Child[0], Key[1], Child[1], ..., Key[N].
-	// Total data: (entriesUsed+1) keys + entriesUsed children.
-	dataSize := (int(entriesUsed)+1)*int(offsetSize) + int(entriesUsed)*int(offsetSize)
-	data := make([]byte, dataSize)
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface.
-	if _, err := fw.writer.ReadAt(data, int64(btreeAddr)+int64(headerSize)); err != nil {
-		return nil, nil, fmt.Errorf("read B-tree data: %w", err)
-	}
-
-	node := &structures.BTreeNodeV1{
-		Signature:     [4]byte{'T', 'R', 'E', 'E'},
-		NodeType:      header[4],
-		NodeLevel:     header[5],
-		EntriesUsed:   entriesUsed,
-		LeftSibling:   0xFFFFFFFFFFFFFFFF,
-		RightSibling:  0xFFFFFFFFFFFFFFFF,
-		Keys:          make([]uint64, 0, entriesUsed+1),
-		ChildPointers: make([]uint64, 0, entriesUsed),
-	}
-
-	pos := 0
-	var snodAddrs []uint64
-	for i := uint16(0); i < entriesUsed; i++ {
-		key := readAddrFromBuf(data[pos:], int(offsetSize), endianness)
-		pos += int(offsetSize)
-		child := readAddrFromBuf(data[pos:], int(offsetSize), endianness)
-		pos += int(offsetSize)
-
-		node.Keys = append(node.Keys, key)
-		node.ChildPointers = append(node.ChildPointers, child)
-		if child != 0 && child != undefinedAddress {
-			snodAddrs = append(snodAddrs, child)
-		}
-	}
-	// Read final key.
-	if pos+int(offsetSize) <= len(data) {
-		finalKey := readAddrFromBuf(data[pos:], int(offsetSize), endianness)
-		node.Keys = append(node.Keys, finalKey)
-	}
-
-	return node, snodAddrs, nil
-}
-
 // readAddrFromBuf reads a file address of size bytes from a byte buffer; an
 // all-ones address is HADDR_UNDEF at any width (core.DecodeAddress,
 // H5Fint.c:3046-3050).
@@ -594,133 +382,46 @@ func readAddrFromBuf(data []byte, size int, endianness binary.ByteOrder) uint64 
 	return core.DecodeAddress(data, size, endianness)
 }
 
-// updateGroupHeapAddr updates the heap address for a group.
-// This also rewrites the group's object header symbol table message to point to the new heap.
-func (fw *FileWriter) updateGroupHeapAddr(parentPath string, newHeapAddr uint64) error {
-	if parentPath == "" || parentPath == "/" {
-		fw.rootHeapAddr = newHeapAddr
-		// Rewrite root group's symbol table message.
-		return fw.rewriteSymbolTableMessage(fw.rootGroupAddr, fw.rootBTreeAddr, newHeapAddr)
-	}
-	meta, exists := fw.groups[parentPath]
-	if !exists {
-		return fmt.Errorf("group %q not found", parentPath)
-	}
-	meta.heapAddr = newHeapAddr
-	return nil
-}
-
-// expandHeapAndAdd expands the local heap (doubles its size) and adds a string.
-// Returns the new heap, new address, string offset, and any error.
-func (fw *FileWriter) expandHeapAndAdd(heap *structures.LocalHeap, _ uint64, parentPath, childName string) (*structures.LocalHeap, uint64, uint64, error) {
-	newSize := heap.DataSegmentSize * 2
-	newHeap := structures.NewLocalHeap(newSize)
-	if err := newHeap.CopyStringsFrom(heap); err != nil {
-		return nil, 0, 0, fmt.Errorf("copy strings to new heap: %w", err)
-	}
-	nameOffset, err := newHeap.AddString(childName)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("add string to expanded heap: %w", err)
-	}
-	newHeapAddr, err := fw.writer.Allocate(newHeap.Size())
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("allocate expanded heap: %w", err)
-	}
-	if err := fw.updateGroupHeapAddr(parentPath, newHeapAddr); err != nil {
-		return nil, 0, 0, fmt.Errorf("update heap address: %w", err)
-	}
-	return newHeap, newHeapAddr, nameOffset, nil
-}
-
-// updateGroupStNodeAddr updates the primary SNOD address for a group.
-func (fw *FileWriter) updateGroupStNodeAddr(parentPath string, newStNodeAddr uint64) {
-	if parentPath == "" || parentPath == "/" {
-		fw.rootStNodeAddr = newStNodeAddr
-	} else if meta, exists := fw.groups[parentPath]; exists {
-		meta.stNodeAddr = newStNodeAddr
-	}
-}
-
-// rewriteSymbolTableMessage rewrites the symbol table message in an object header.
-// This is needed when the heap address changes due to expansion.
-func (fw *FileWriter) rewriteSymbolTableMessage(headerAddr, btreeAddr, heapAddr uint64) error {
-	stMsg := core.EncodeSymbolTableMessage(btreeAddr, heapAddr, int(fw.file.sb.OffsetSize), int(fw.file.sb.LengthSize))
-
-	// Find and overwrite the symbol table message in the object header.
-	// The message data starts after the object header prefix and message header.
-	// For v2 headers: OHDR(4) + version(1) + flags(1) + chunk_size(varies) + msg_type(1) + msg_size(2) + msg_flags(1) = variable
-	// For v1 headers: version(1) + reserved(1) + numMessages(2) + refCount(4) + headerSize(4) + reserved(4) + msg_type(2) + msg_size(2) + msg_flags(1) + reserved(3) = 24 bytes to data
-	// Since both formats store the message data contiguously, we can search for
-	// the old B-tree address in the header and overwrite the entire symbol table message.
-	//
-	// Read enough of the header to find the message.
-	headerBuf := make([]byte, 128)
-	//nolint:gosec // G115: HDF5 addresses fit in int64.
-	n, err := fw.writer.ReadAt(headerBuf, int64(headerAddr))
-	if err != nil && n < 32 {
-		return fmt.Errorf("read object header for rewrite: %w", err)
-	}
-
-	// Search for the B-tree address in the header (it's part of the symbol table message).
-	var btreeBytes [8]byte
-	fw.file.sb.Endianness.PutUint64(btreeBytes[:], btreeAddr)
-	for i := 0; i <= n-len(stMsg); i++ {
-		if headerBuf[i] == btreeBytes[0] && i+int(fw.file.sb.OffsetSize) <= n {
-			candidate := readAddrFromBuf(headerBuf[i:], int(fw.file.sb.OffsetSize), fw.file.sb.Endianness)
-			if candidate == btreeAddr {
-				// Found it -- overwrite the full symbol table message data.
-				//nolint:gosec // G115: HDF5 addresses fit in int64.
-				if _, writeErr := fw.writer.WriteAt(stMsg, int64(headerAddr)+int64(i)); writeErr != nil {
-					return fmt.Errorf("rewrite symbol table message: %w", writeErr)
-				}
-				return nil
-			}
-		}
-	}
-
-	return fmt.Errorf("symbol table message not found in object header at 0x%X", headerAddr)
-}
-
-// readLocalHeap reads a local heap from the file at the specified address.
-// This is used to modify the heap by adding new strings for linking.
+// expandHeapAndAdd grows the data segment of the local heap whose prefix is
+// at heapAddr and stores childName in it, as H5HL_insert does when no free
+// block fits (H5HL.c:592-700). The segment is extended in place when the
+// space after it is free (H5MF_try_extend, H5HL.c:617-640); otherwise the
+// old segment is freed and a new one allocated (H5HL__dblk_realloc,
+// H5HLdblk.c:163-257, free at :178-181, allocate at :184-187). Only the data
+// segment moves: the prefix stays at heapAddr (H5HLdblk.c:190 changes only
+// dblk_addr), so the group's symbol table message and a superblock-v0 root
+// entry's cached heap address stay valid and are never rewritten.
 //
-// Parameters:
-//   - addr: Address of the local heap in the file
-//
-// Returns:
-//   - *structures.LocalHeap: The heap structure (writable)
-//   - error: If read fails
+// It returns the heap, the unchanged prefix address and the name's offset;
+// the caller writes the heap (prefix and segment) with WriteTo.
+func (fw *FileWriter) expandHeapAndAdd(heap *structures.LocalHeap, heapAddr uint64, _, childName string) (*structures.LocalHeap, uint64, uint64, error) {
+	oldAddr := heap.DataSegmentAddress
+	nameOffset, oldSize := heap.GrowAndAddString(childName)
+	newSize := heap.DataSegmentSize
+
+	if fw.writer.TryExtend(oldAddr, oldSize, newSize-oldSize) {
+		return heap, heapAddr, nameOffset, nil
+	}
+
+	if err := fw.writer.Free(oldAddr, oldSize); err != nil {
+		return nil, 0, 0, fmt.Errorf("free old local heap data segment: %w", err)
+	}
+	newAddr, err := fw.writer.Allocate(newSize)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("allocate local heap data segment: %w", err)
+	}
+	heap.SetDataSegmentAddress(newAddr)
+	return heap, heapAddr, nameOffset, nil
+}
+
+// readLocalHeap reads the local heap whose prefix is at addr, with its data
+// segment and free list, ready for AddString and WriteTo.
 func (fw *FileWriter) readLocalHeap(addr uint64) (*structures.LocalHeap, error) {
-	// Load existing heap from disk
 	heap, err := structures.LoadLocalHeap(fw.writer, addr, fw.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("load local heap: %w", err)
 	}
-
-	// Convert to writable mode (copies Data to internal strings buffer)
-	if err := heap.PrepareForModification(); err != nil {
-		return nil, fmt.Errorf("prepare heap for modification: %w", err)
-	}
-
-	// Set write-mode fields
-	// Note: DataSegmentAddress is set by WriteTo(), not here
-	heap.OffsetToHeadFreeList = 1 // MVP: no free list (1 = H5HL_FREE_NULL)
-
 	return heap, nil
-}
-
-// readSymbolTableNode reads a symbol table node from the file at the specified address.
-// This is used to modify the node by adding new entries for linking.
-//
-// Parameters:
-//   - addr: Address of the symbol table node in the file
-//
-// Returns:
-//   - *structures.SymbolTableNode: The node structure (writable)
-//   - error: If read fails
-func (fw *FileWriter) readSymbolTableNode(addr uint64) (*structures.SymbolTableNode, error) {
-	// Use the existing ParseSymbolTableNode function from structures package
-	return structures.ParseSymbolTableNode(fw.writer, addr, fw.file.sb)
 }
 
 // CreateDenseGroup creates new dense group (HDF5 1.8+ format).
@@ -823,36 +524,22 @@ func (fw *FileWriter) resolveObjectAddress(path string) (uint64, error) {
 		heapAddr = meta.heapAddr
 	}
 
-	// Read all SNODs from B-tree.
-	_, snodAddrs, err := fw.readGroupBTree(btreeAddr)
-	if err != nil {
-		return 0, fmt.Errorf("read group B-tree: %w", err)
-	}
-
 	// Read heap.
 	heap, err := fw.readLocalHeap(heapAddr)
 	if err != nil {
 		return 0, fmt.Errorf("read local heap: %w", err)
 	}
 
-	// Search all SNODs for the named object.
-	for _, snodAddr := range snodAddrs {
-		stNode, readErr := fw.readSymbolTableNode(snodAddr)
-		if readErr != nil {
-			continue
-		}
-		for _, entry := range stNode.Entries {
-			linkName, nameErr := heap.GetString(entry.LinkNameOffset)
-			if nameErr != nil {
-				continue
-			}
-			if linkName == name {
-				return entry.ObjectAddress, nil
-			}
-		}
+	// Look the name up as H5G__stab_lookup does through H5B_find
+	// (H5Gstab.c:740-770).
+	entry, err := fw.groupSymbolTable(heap).lookup(btreeAddr, name)
+	if errors.Is(err, errGroupEntryNotFound) {
+		return 0, fmt.Errorf("object not found: %s: %w", path, err)
 	}
-
-	return 0, fmt.Errorf("object not found: %s", path)
+	if err != nil {
+		return 0, fmt.Errorf("look up %s: %w", path, err)
+	}
+	return entry.ObjectAddress, nil
 }
 
 // unlinkFromParent removes a named child entry from its parent group's symbol table.
@@ -868,8 +555,6 @@ func (fw *FileWriter) resolveObjectAddress(path string) (uint64, error) {
 //   - error: If unlinking fails or child not found
 //
 // Reference: H5Gobj.c - H5G_obj_remove(), H5Gnode.c - H5G__node_remove().
-//
-//nolint:gocognit,gocyclo,cyclop,funlen,nestif // Complex but necessary: mirror of linkToParent with entry removal
 func (fw *FileWriter) unlinkFromParent(parentPath, childName string) (uint64, error) {
 	// Get parent group metadata (same as linkToParent lines 308-319).
 	var heapAddr, btreeAddr uint64
@@ -891,118 +576,16 @@ func (fw *FileWriter) unlinkFromParent(parentPath, childName string) (uint64, er
 		return 0, fmt.Errorf("read local heap: %w", err)
 	}
 
-	// Step 2: Read ALL SNODs from B-tree.
-	_, snodAddrs, err := fw.readGroupBTree(btreeAddr)
+	// Step 2: Remove the entry from the group's B-tree and its names from
+	// the heap, as H5G__stab_remove does through H5B_remove (H5Gstab.c:540-580).
+	removed, err := fw.groupSymbolTable(heap).remove(btreeAddr, childName)
+	if errors.Is(err, errGroupEntryNotFound) {
+		return 0, fmt.Errorf("child %q not found in parent group: %w", childName, err)
+	}
 	if err != nil {
-		return 0, fmt.Errorf("read group B-tree: %w", err)
+		return 0, fmt.Errorf("remove %q from group B-tree: %w", childName, err)
 	}
-
-	// Step 3: Collect all entries from all SNODs.
-	allEntries := make([]structures.SymbolTableEntry, 0, snodCapacity)
-	for _, addr := range snodAddrs {
-		sn, readErr := fw.readSymbolTableNode(addr)
-		if readErr != nil {
-			return 0, fmt.Errorf("read SNOD at 0x%X: %w", addr, readErr)
-		}
-		allEntries = append(allEntries, sn.Entries...)
-	}
-
-	// Step 4: Find and remove the entry by name.
-	foundIdx := -1
-	var removedAddr uint64
-	for i, entry := range allEntries {
-		entryName, nameErr := heap.GetString(entry.LinkNameOffset)
-		if nameErr != nil {
-			continue
-		}
-		if entryName == childName {
-			foundIdx = i
-			removedAddr = entry.ObjectAddress
-			break
-		}
-	}
-
-	if foundIdx == -1 {
-		return 0, fmt.Errorf("child %q not found in parent group", childName)
-	}
-
-	// Remove the entry from the slice.
-	allEntries = append(allEntries[:foundIdx], allEntries[foundIdx+1:]...)
-
-	// Step 5: Rebuild and write B-tree + SNODs with the remaining entries.
-	// If no entries remain, still write an empty SNOD (HDF5 groups always have at least one SNOD).
-	numSNODs := 1
-	if len(allEntries) > 0 {
-		numSNODs = (len(allEntries) + snodCapacity - 1) / snodCapacity
-	}
-
-	// Reuse existing SNOD addresses where possible.
-	for len(snodAddrs) < numSNODs {
-		newAddr, allocErr := fw.writer.Allocate(snodTotalSize)
-		if allocErr != nil {
-			return 0, fmt.Errorf("allocate new SNOD: %w", allocErr)
-		}
-		snodAddrs = append(snodAddrs, newAddr)
-	}
-	// Only use as many as needed.
-	snodAddrs = snodAddrs[:numSNODs]
-
-	offsetSize := fw.file.sb.OffsetSize
-
-	// Rebuild B-tree.
-	const groupBTreeK = 16
-	newBTree := structures.NewBTreeNodeV1(0, groupBTreeK)
-
-	if len(allEntries) > 0 {
-		for i := 0; i < numSNODs; i++ {
-			var leftKey uint64
-			if i > 0 {
-				prevEnd := i * snodCapacity
-				if prevEnd > len(allEntries) {
-					prevEnd = len(allEntries)
-				}
-				leftKey = allEntries[prevEnd-1].LinkNameOffset
-			}
-			if addErr := newBTree.AddKey(leftKey, snodAddrs[i]); addErr != nil {
-				return 0, fmt.Errorf("add B-tree key for SNOD %d: %w", i, addErr)
-			}
-		}
-		// Final right key = last entry's name offset.
-		lastEntry := allEntries[len(allEntries)-1]
-		newBTree.Keys = append(newBTree.Keys, lastEntry.LinkNameOffset)
-	} else {
-		// Empty group: single SNOD with key 0.
-		if addErr := newBTree.AddKey(0, snodAddrs[0]); addErr != nil {
-			return 0, fmt.Errorf("add B-tree key for empty SNOD: %w", addErr)
-		}
-		newBTree.Keys = append(newBTree.Keys, uint64(0))
-	}
-
-	// Write B-tree.
-	if err := newBTree.WriteAt(fw.writer, btreeAddr, offsetSize, groupBTreeK, fw.file.sb.Endianness); err != nil {
-		return 0, fmt.Errorf("write B-tree: %w", err)
-	}
-
-	// Write entries to SNODs.
-	pos := 0
-	for i := 0; i < numSNODs; i++ {
-		end := pos + snodCapacity
-		if end > len(allEntries) {
-			end = len(allEntries)
-		}
-		chunk := allEntries[pos:end]
-		pos = end
-
-		sn := structures.NewSymbolTableNode(snodCapacity)
-		for _, e := range chunk {
-			if addErr := sn.AddEntry(e); addErr != nil {
-				return 0, fmt.Errorf("add entry to SNOD %d: %w", i, addErr)
-			}
-		}
-		if writeErr := sn.WriteAt(fw.writer, snodAddrs[i], offsetSize, snodCapacity, fw.file.sb.Endianness); writeErr != nil {
-			return 0, fmt.Errorf("write SNOD %d: %w", i, writeErr)
-		}
-	}
+	removedAddr := removed.ObjectAddress
 
 	// Write updated heap.
 	if err := heap.WriteTo(fw.writer, heapAddr); err != nil {

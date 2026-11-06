@@ -14,8 +14,6 @@ import (
 //
 // Current status:
 // - ✅ Low-level functions work (internal/core/attribute_modify.go)
-// - ✅ ModifyCompactAttribute() - WORKING
-// - ✅ DeleteCompactAttribute() - WORKING
 // - ✅ ModifyDenseAttribute() - WORKING
 // - ✅ DeleteDenseAttribute() - WORKING
 // - ⏳ High-level API not yet exposed at FileWriter/Dataset level
@@ -63,8 +61,6 @@ func TestAttributeModificationDeletion_Placeholder(t *testing.T) {
 
 // Note: The internal implementation is COMPLETE and WORKING:
 // - internal/core/attribute_modify.go - All functions implemented
-// - ModifyCompactAttribute() - Uses WriteObjectHeader() ✅
-// - DeleteCompactAttribute() - Uses WriteObjectHeader() ✅
 // - ModifyDenseAttribute() - Heap + B-tree operations ✅
 // - DeleteDenseAttribute() - With lazy/incremental rebalancing ✅
 //

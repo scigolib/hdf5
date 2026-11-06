@@ -101,6 +101,10 @@ const (
 	// attribute info messages with this ID in ordinary object headers; the
 	// readers accept that legacy layout there (attributeInfoMessage).
 	MsgSharedMessageTable MessageType = 15
+
+	// MsgBTreeK is the v1 B-tree 'K' values message (H5O_BTREEK_ID 0x0013,
+	// H5Oprivate.h:226), found only in the superblock extension.
+	MsgBTreeK MessageType = 19
 )
 
 // ReadObjectHeader reads and parses an HDF5 object header from the specified address.
@@ -307,7 +311,9 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 	// The 4-byte Jenkins lookup3 checksum follows immediately after the messages.
 	end := current + chunkSize
 
-	messages, name, err := parseV2ChunkMessages(r, current, end, flags, isBE)
+	// A v0.13.9 header keeps its checksum inside the chunk; its messages end
+	// four bytes earlier.
+	messages, name, err := parseV2ChunkMessages(r, current, verifyV2HeaderChunk(r, sb, headerAddr, end), flags, isBE)
 	if err != nil {
 		return nil, "", err
 	}
@@ -329,7 +335,7 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 				return nil, "", err
 			}
 
-			contMessages, contName, err := parseV2ContinuationBlock(r, cont.Address, cont.Size, flags, isBE)
+			contMessages, contName, err := parseV2ContinuationBlock(r, sb, cont.Address, cont.Size, flags, isBE)
 			if err != nil {
 				return nil, "", utils.WrapError("V2 continuation block parse failed", err)
 			}
@@ -363,7 +369,10 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 //   - "OCHK" signature (4 bytes)
 //   - Messages (same format as main OHDR v2)
 //   - Jenkins lookup3 checksum (4 bytes)
-func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags uint8, isBE bool) ([]*HeaderMessage, string, error) {
+//
+// The checksum is verified as for chunk 0 (verifyV2HeaderChunk), as a warning
+// on sb: a failure does not stop the read.
+func parseV2ContinuationBlock(r io.ReaderAt, sb *Superblock, blockAddr, blockSize uint64, flags uint8, isBE bool) ([]*HeaderMessage, string, error) {
 	if blockSize < 8 {
 		return nil, "", fmt.Errorf("OCHK block too small: %d bytes (minimum 8)", blockSize)
 	}
@@ -381,7 +390,84 @@ func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags 
 	}
 
 	// Messages start after "OCHK" (4 bytes) and end before checksum (4 bytes).
-	return parseV2ChunkMessages(r, blockAddr+4, blockAddr+blockSize-4, flags, isBE)
+	messages, name, err := parseV2ChunkMessages(r, blockAddr+4, blockAddr+blockSize-4, flags, isBE)
+	if err != nil {
+		return nil, "", err
+	}
+	verifyV2ContinuationChunk(r, sb, blockAddr, blockSize)
+
+	return messages, name, nil
+}
+
+// Warning texts for version 2 object header chunks whose checksum C would
+// refuse (H5Ocache.c:217-245 for chunk 0, :614 for an OCHK block, both through
+// H5F_get_checksums).
+const (
+	headerChecksumMessage = "object header %s at 0x%X has no valid checksum (%s): it was written by hdf5-go v0.13.8 " +
+		"or earlier, which wrote none, or the file is corrupted; the HDF5 C library cannot open this file " +
+		"(read it with Open and rewrite it into a new file)"
+	headerChunkSizeMessage = "object header at 0x%X counts its checksum in its chunk size, as hdf5-go v0.13.9 wrote it; " +
+		"the HDF5 C library cannot open this file (read it with Open and rewrite it into a new file)"
+)
+
+// verifyV2HeaderChunk verifies the checksum of chunk 0 of the version 2 object
+// header at headerAddr, whose messages end at end: C stores lookup3 over
+// [headerAddr, end) in the four bytes at end (H5O__cache_verify_chksum,
+// H5Ocache.c:217-245; chunk size from H5Ocache.c:1207).
+//
+// A header that fails is read anyway and recorded on sb, because every
+// hdf5-go release up to v0.13.8 wrote no checksum and those files were
+// readable: WarnHeaderChunkSize when the checksum matches the v0.13.9 layout
+// (chunk size counting the checksum, so lookup3 over [headerAddr, end-4) sits
+// at end-4), WarnHeaderChecksum otherwise. A nil sb verifies nothing.
+//
+// It returns where the chunk's messages end: end, or end-4 for the v0.13.9
+// layout, whose last four bytes are the checksum (the v0.13.9 reader
+// subtracted them; v0.13.10 dropped that, so such files failed to read since).
+func verifyV2HeaderChunk(r io.ReaderAt, sb *Superblock, headerAddr, end uint64) uint64 {
+	if sb == nil {
+		return end
+	}
+	const what = "object header chunk"
+	body, err := ReadBlock(r, sb, headerAddr, end-headerAddr, utils.MaxChunkSize, what)
+	if err != nil {
+		sb.Warnf(WarnHeaderChecksum, headerAddr, headerChecksumMessage, "chunk", headerAddr, err.Error())
+		return end
+	}
+	stored, err := ReadBlock(r, sb, end, 4, 4, what+" checksum")
+	if err == nil && binary.LittleEndian.Uint32(stored) == JenkinsChecksum(body) {
+		return end
+	}
+	// v0.13.9 (commit 7748ffb, fixed in 2f92dd0): chunk size = messages + 4.
+	if n := len(body) - 4; n > 0 && binary.LittleEndian.Uint32(body[n:]) == JenkinsChecksum(body[:n]) {
+		sb.Warnf(WarnHeaderChunkSize, headerAddr, headerChunkSizeMessage, headerAddr)
+		return end - 4
+	}
+	reason := "checksum mismatch"
+	if err != nil {
+		reason = "checksum past the end of the file"
+	}
+	sb.Warnf(WarnHeaderChecksum, headerAddr, headerChecksumMessage, "chunk", headerAddr, reason)
+	return end
+}
+
+// verifyV2ContinuationChunk verifies the checksum of the OCHK block
+// [blockAddr, blockAddr+blockSize): lookup3 over all but its last four bytes,
+// stored in them (H5Ocache.c:614). A failure is recorded on sb as
+// WarnHeaderChecksum; the block is read anyway. A nil sb verifies nothing.
+func verifyV2ContinuationChunk(r io.ReaderAt, sb *Superblock, blockAddr, blockSize uint64) {
+	if sb == nil {
+		return
+	}
+	buf, err := ReadBlock(r, sb, blockAddr, blockSize, utils.MaxChunkSize, "object header continuation chunk")
+	if err != nil {
+		sb.Warnf(WarnHeaderChecksum, blockAddr, headerChecksumMessage, "continuation chunk", blockAddr, err.Error())
+		return
+	}
+	n := len(buf) - 4
+	if binary.LittleEndian.Uint32(buf[n:]) != JenkinsChecksum(buf[:n]) {
+		sb.Warnf(WarnHeaderChecksum, blockAddr, headerChecksumMessage, "continuation chunk", blockAddr, "checksum mismatch")
+	}
 }
 
 // parseV2ChunkMessages decodes the messages of one version-2 object header
@@ -512,7 +598,9 @@ func readV2MessageHeader(r io.ReaderAt, addr uint64, isBE bool) (MessageType, ui
 	if isBE {
 		order = binary.BigEndian
 	}
-	return MessageType(headerBuf[0]), order.Uint16(headerBuf[1:3]), headerBuf[3], order.Uint16(headerBuf[4:6]), nil
+	// The creation index is always little-endian (UINT16DECODE,
+	// H5Ocache.c:1302).
+	return MessageType(headerBuf[0]), order.Uint16(headerBuf[1:3]), headerBuf[3], binary.LittleEndian.Uint16(headerBuf[4:6]), nil
 }
 
 // V2MessageHeaderSize is the size of a message header in a version 2 object

@@ -26,9 +26,7 @@ var denseAttrNames = []string{
 // nameIndexTree is the decoded single-leaf v2 B-tree of an attribute name
 // index, as stored in the file.
 type nameIndexTree struct {
-	objAddr    uint64             // object header of the dataset
-	ohVersion  uint8              // its version
-	ainfo      core.HeaderMessage // its attribute info message
+	ainfo      core.HeaderMessage // attribute info message of the dataset
 	headerAddr uint64
 	typ        uint8
 	recordSize int
@@ -61,7 +59,7 @@ func readNameIndex(t *testing.T, file string) nameIndexTree {
 	require.Equal(t, uint8(8), f.Superblock().OffsetSize, "the writer uses 8-byte offsets")
 
 	tree := decodeIndexTree(t, raw, ainfo.BTreeNameIndexAddr)
-	tree.objAddr, tree.ohVersion, tree.ainfo = ds.Address(), oh.Version, *msg
+	tree.ainfo = *msg
 	return tree
 }
 
@@ -267,80 +265,18 @@ func TestDenseLinks_ReadableByC(t *testing.T) {
 	}
 }
 
-// downgradeToLegacyIndex rewrites the attribute name index of /d into the
-// layout v0.14.2 and earlier wrote: B-tree type 5 with 11-byte records of
-// hash(4) and the first 7 bytes of the heap id. The hashes are kept.
-func downgradeToLegacyIndex(t *testing.T, file string, tree nameIndexTree) {
-	t.Helper()
-	raw, err := os.ReadFile(file)
-	require.NoError(t, err)
-	f, err := os.OpenFile(file, os.O_RDWR, 0)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, f.Close()) }()
-
-	// The superblock offset size is 8 for both versions the writer creates.
-	const osz = 8
-	hdr := slices.Clone(raw[tree.headerAddr : tree.headerAddr+uint64(4+1+1+4+2+2+1+1+osz+2+8+4)])
-	hdr[5] = 5
-	binary.LittleEndian.PutUint16(hdr[10:], 11)
-	n := len(hdr) - 4
-	binary.LittleEndian.PutUint32(hdr[n:], core.JenkinsChecksum(hdr[:n]))
-	_, err = f.WriteAt(hdr, int64(tree.headerAddr))
-	require.NoError(t, err)
-
-	leaf := []byte{'B', 'T', 'L', 'F', 0, 5}
-	for _, rec := range tree.records {
-		leaf = append(leaf, rec[13:17]...) // hash
-		leaf = append(leaf, rec[:7]...)    // heap id, 7 bytes
-	}
-	leaf = binary.LittleEndian.AppendUint32(leaf, core.JenkinsChecksum(leaf))
-	_, err = f.WriteAt(leaf, int64(tree.rootAddr))
-	require.NoError(t, err)
-
-	// v0.14.2 wrote the attribute info message under ID 0x000F.
-	msg := tree.ainfo
-	require.False(t, msg.FromContinuation, "attribute info message expected in chunk 0")
-	if tree.ohVersion == 1 {
-		_, err = f.WriteAt([]byte{0x0F, 0x00}, int64(msg.Offset))
-		require.NoError(t, err)
-		return
-	}
-	// Version 2: type byte, then the checksum of chunk 0 (H5Ocache.c:
-	// prefix of signature, version, flags, optional times and phase change
-	// values, chunk-size field of 1 << (flags & 3) bytes).
-	addr := tree.objAddr
-	flags := raw[addr+5]
-	prefix := uint64(6)
-	if flags&0x20 != 0 {
-		prefix += 16
-	}
-	if flags&0x10 != 0 {
-		prefix += 4
-	}
-	width := uint64(1) << (flags & 3)
-	var chunkSize uint64
-	for i := width; i > 0; i-- {
-		chunkSize = chunkSize<<8 | uint64(raw[addr+prefix+i-1])
-	}
-	end := addr + prefix + width + chunkSize // checksum position
-	chunk := slices.Clone(raw[addr:end])
-	chunk[msg.Offset-addr] = 0x0F
-	chunk = binary.LittleEndian.AppendUint32(chunk, core.JenkinsChecksum(chunk))
-	_, err = f.WriteAt(chunk, int64(addr))
-	require.NoError(t, err)
-}
-
 // TestDenseAttributes_LegacyIndexMigrated: a file whose attribute name index
 // v0.14.2 wrote as a link name index (type 5) is migrated to the attribute
 // name index (type 8) by the first change through OpenForWrite, so the C
 // library reads every attribute afterwards; no type-5 attribute record is
-// ever written again.
+// ever written again. The inputs were written by the released v0.14.2 itself
+// (testdata/reference/legacy-hdf5go/README.md): its dense heap layout, index
+// and attribute info message ID together, as real files carry them.
 func TestDenseAttributes_LegacyIndexMigrated(t *testing.T) {
 	for _, sb := range []uint8{SuperblockV0, SuperblockV2} {
 		t.Run(fmt.Sprintf("sb%d", sb), func(t *testing.T) {
-			names := denseAttrNames[:10] // a00..a09: hashes as v0.14.2 computed them
-			file := writeDenseAttrFile(t, sb, names)
-			downgradeToLegacyIndex(t, file, readNameIndex(t, file))
+			names := denseAttrNames[:10] // a00..a09 = i*7+1, as the generator wrote them
+			file := copyFixture(t, fmt.Sprintf("testdata/reference/legacy-hdf5go/dense_attr_v0142_sb%d.h5", sb))
 			legacy := readNameIndex(t, file)
 			require.Equal(t, uint8(5), legacy.typ)
 			require.Equal(t, 11, legacy.recordSize)
@@ -366,6 +302,20 @@ func TestDenseAttributes_LegacyIndexMigrated(t *testing.T) {
 			require.Equal(t, core.MsgAttributeInfo, migrated.ainfo.Type, "attribute info ID H5O_AINFO_ID")
 			requireAttrNameRecords(t, migrated, all)
 			requireH5dumpAttrs(t, file, values)
+
+			f, err := Open(file)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, f.Close()) }()
+			d, ok := findDatasetByName(f, "d")
+			require.True(t, ok)
+			listed, err := d.ListAttributes()
+			require.NoError(t, err)
+			require.ElementsMatch(t, all, listed, "attributes listed by this library")
+			for name, want := range values {
+				v, err := d.ReadAttribute(name)
+				require.NoError(t, err, "read %s", name)
+				require.EqualValues(t, want, v, "attribute %s read back by this library", name)
+			}
 		})
 	}
 }

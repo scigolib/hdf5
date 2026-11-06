@@ -84,8 +84,8 @@ type FractalHeap struct {
 	tinyMaxLen       uint64
 	legacy           bool
 
-	limit   uint64 // readable end of the file, 0 when unknown
-	spent   uint64 // bytes of the blocks read so far
+	limit   uint64      // readable end of the file, 0 when unknown
+	budget  blockBudget // bytes of the blocks read so far, at most limit
 	iblocks map[uint64]*fheapIBlock
 	dblocks map[uint64]fheapDBlock
 }
@@ -169,8 +169,9 @@ func OpenFractalHeap(r io.ReaderAt, sb *Superblock, addr uint64) (*FractalHeap, 
 		return nil, err
 	}
 
+	limit := dataLimit(r, sb)
 	h := &FractalHeap{
-		r: r, sb: sb, addr: addr, limit: dataLimit(r, sb),
+		r: r, sb: sb, addr: addr, limit: limit, budget: blockBudget{limit: limit},
 		iblocks: map[uint64]*fheapIBlock{}, dblocks: map[uint64]fheapDBlock{},
 	}
 	if err := h.decodeHeader(buf); err != nil {
@@ -210,7 +211,7 @@ func readFractalHeapHeaderBlock(r io.ReaderAt, sb *Superblock, addr uint64) ([]b
 			return nil, err
 		}
 	}
-	if err := verifyFheapChecksum(buf, addr, "header"); err != nil {
+	if err := verifyFheapChecksum(sb, buf, addr, "header"); err != nil {
 		return nil, err
 	}
 	if binary.LittleEndian.Uint16(buf[7:9]) > 0 {
@@ -222,12 +223,19 @@ func readFractalHeapHeaderBlock(r io.ReaderAt, sb *Superblock, addr uint64) ([]b
 
 // verifyFheapChecksum checks the checksum in the last four bytes of a heap
 // header or indirect block (H5F_get_checksums; H5HFcache.c:416-425, :877-881).
-func verifyFheapChecksum(buf []byte, addr uint64, what string) error {
+// Both are structures hdf5-go up to v0.13.4 wrote with CRC32-IEEE: such a
+// checksum is accepted and recorded as a WarnLegacyMetadataChecksum warning on
+// sb (VerifyMetadataChecksumLegacy); C accepts only lookup3.
+func verifyFheapChecksum(sb *Superblock, buf []byte, addr uint64, what string) error {
 	n := len(buf) - fheapChecksumSize
 	stored := binary.LittleEndian.Uint32(buf[n:])
-	if computed := JenkinsChecksum(buf[:n]); computed != stored {
+	legacy, err := VerifyMetadataChecksumLegacy(buf[:n], stored, "fractal heap "+what)
+	if err != nil {
 		return fmt.Errorf("%w: fractal heap %s at 0x%X has checksum 0x%08X, computed 0x%08X",
-			utils.ErrCorrupt, what, addr, stored, computed)
+			utils.ErrCorrupt, what, addr, stored, JenkinsChecksum(buf[:n]))
+	}
+	if legacy {
+		sb.warnLegacyChecksumf(WarnLegacyMetadataChecksum, addr, uint64(n), legacyMetadataChecksumMessage, "fractal heap "+what) //nolint:gosec // n >= 0
 	}
 
 	return nil
@@ -258,6 +266,10 @@ func (h *FractalHeap) decodeHeader(buf []byte) error {
 	h.currRootRows = f.uint(2)
 
 	h.legacy = hugeBT2Addr == 0 && fsAddr == 0
+	if h.legacy {
+		h.sb.Warnf(WarnLegacyDenseLayout, h.addr, legacyDenseLayoutMessage,
+			"fractal heap", h.addr, "object offsets counted from the end of the block prefix")
+	}
 
 	//nolint:gosec // G115: maxIndex is a 2-byte field
 	offSize, err := FractalHeapOffsetSize(uint16(maxIndex), h.sb.LengthSize)
@@ -523,15 +535,9 @@ func (h *FractalHeap) childIndirectBlock(ib *fheapIBlock, row, col uint64) (*fhe
 // spend counts the bytes of a block about to be read against the file's
 // size: the distinct blocks of a heap lie in the file, so together they
 // cannot be larger, and a corrupt heap cannot make the reader read more.
+// The budget lives as long as the heap; its block caches read each block once.
 func (h *FractalHeap) spend(n, addr uint64) error {
-	total, err := utils.SafeAdd(h.spent, n)
-	if err != nil || (h.limit > 0 && total > h.limit) {
-		return fmt.Errorf("%w: fractal heap blocks claim more than the file's %d bytes (block at 0x%X)",
-			utils.ErrCorrupt, h.limit, addr)
-	}
-	h.spent = total
-
-	return nil
+	return h.budget.charge(n, addr, "fractal heap")
 }
 
 // indirectBlock reads the indirect block at addr with nrows rows, which
@@ -562,7 +568,7 @@ func (h *FractalHeap) indirectBlock(addr, nrows, blockOff uint64) (*fheapIBlock,
 	if err := h.checkBlockPrefix(buf, addr, fheapIBlockSig, "indirect"); err != nil {
 		return nil, err
 	}
-	if err := verifyFheapChecksum(buf, addr, "indirect block"); err != nil {
+	if err := verifyFheapChecksum(h.sb, buf, addr, "indirect block"); err != nil {
 		return nil, err
 	}
 

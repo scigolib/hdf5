@@ -160,7 +160,7 @@ func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, co
 	layoutData, err := core.EncodeLayoutMessage(
 		core.LayoutChunked,
 		0,            // dataSize not used for chunked
-		btreeAddress, // B-tree address (0 for now)
+		btreeAddress, // chunk index address: undefined until Write builds it
 		fw.file.sb,
 		config.chunkDims,
 		elemSize, // element size for trailing dimension

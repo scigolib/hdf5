@@ -65,8 +65,8 @@ type NamedDatatype struct {
 	address  uint64                // Address of object header.
 	datatype *core.DatatypeMessage // The stored datatype definition; nil if it does not decode.
 
-	// decodeErr is why the datatype did not decode (nil when it did). Kept for
-	// the typed metadata accessors of TASK-063.
+	// decodeErr is why the datatype did not decode (nil when it did);
+	// DatatypeInfo returns it.
 	decodeErr error
 }
 
@@ -78,8 +78,34 @@ func (n *NamedDatatype) Name() string {
 // Datatype returns the underlying datatype definition, or nil when the stored
 // datatype message does not decode (the C library likewise refuses to open
 // such a type, while the file and the rest of the group stay readable).
+//
+// Deprecated: use DatatypeInfo; the internal return type will be removed in
+// v1.0.
 func (n *NamedDatatype) Datatype() *core.DatatypeMessage {
 	return n.datatype
+}
+
+// DatatypeInfo returns a description of the committed datatype, the same
+// description Dataset.Datatype returns for a dataset's type (see
+// DatatypeInfo for how it relates to the C library's H5Tget_* functions on
+// the type H5Topen returns). Each call returns a fresh value: a caller can
+// change it without changing the datatype.
+//
+// A stored datatype message that does not decode is returned as the decoding
+// error (it wraps ErrCorrupt for damaged bytes), as H5Topen fails on such a
+// type; an enumeration whose base integer is wider than 8 bytes wraps
+// ErrNotSupported, as for Dataset.Datatype.
+func (n *NamedDatatype) DatatypeInfo() (DatatypeInfo, error) {
+	if n.decodeErr != nil {
+		return DatatypeInfo{}, n.decodeErr // Already names the datatype (loadObject).
+	}
+
+	info, err := metaDatatypeInfo(n.datatype)
+	if err != nil {
+		return DatatypeInfo{}, fmt.Errorf("named datatype %q: %w", n.name, err)
+	}
+
+	return info, nil
 }
 
 // Name returns the dataset's name.
@@ -521,7 +547,7 @@ func (g *Group) loadChildren() error {
 
 	var entries []structures.BTreeEntry
 	switch btreeSig {
-	case "TREE": //nolint:goconst // HDF5 B-tree signature used across multiple packages
+	case "TREE":
 		// v1 B-tree format (used in v0 files and some v1 files).
 		entries, err = structures.ReadGroupBTreeEntries(g.file.reader, btreeAddr, g.file.sb)
 	case "BTRE":

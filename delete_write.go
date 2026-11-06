@@ -5,6 +5,9 @@ import (
 	"strings"
 
 	"github.com/scigolib/hdf5/internal/core"
+	"github.com/scigolib/hdf5/internal/structures"
+	"github.com/scigolib/hdf5/internal/utils"
+	"github.com/scigolib/hdf5/internal/writer"
 )
 
 // undefinedAddress is the HDF5 undefined address sentinel value.
@@ -16,14 +19,14 @@ const undefinedAddress = uint64(0xFFFFFFFFFFFFFFFF)
 // This performs a full deletion:
 //  1. Unlinks the object from its parent group's symbol table
 //  2. Decrements the object's reference count (hard link count)
-//  3. If refcount reaches 0, performs cascade delete:
-//     - Frees contiguous data blocks
-//     - Frees chunked data blocks (walks chunk B-tree)
-//     - Frees the object header itself
+//  3. If refcount reaches 0, frees the object's storage: the object header
+//     and its continuation chunks, contiguous data, every chunk and every
+//     block of the chunk index, and an empty group's structures
 //
 // Constraints:
 //   - Cannot delete the root group "/"
-//   - Cannot delete non-empty groups (delete children first)
+//   - Cannot delete non-empty groups (delete children first); the refusal
+//     comes before anything is written, so the file is left unchanged
 //   - Path must start with "/"
 //   - Object must exist
 //
@@ -56,26 +59,29 @@ func (fw *FileWriter) Delete(path string) error {
 	// Parse path into parent + name.
 	parent, name := parsePath(path)
 
-	// Step 1: Unlink from parent group. This returns the object's address.
-	objectAddr, err := fw.unlinkFromParent(parent, name)
+	// Step 1: Everything that can refuse the delete runs before the first
+	// write, so a refused delete leaves the file as it was: the lookup, the
+	// object header and, for an object losing its last link, the check that
+	// it is not a group with children and the collection and check of every
+	// block its storage frees. (The C library decrements the link count before
+	// it removes the entry, H5Gnode.c:782-828, and deletes a group's children
+	// with it; this library refuses a non-empty group.)
+	objectAddr, err := fw.resolveObjectAddress(path)
 	if err != nil {
+		return fmt.Errorf("delete %q: %w", path, err)
+	}
+	sb := fw.file.Superblock()
+	oh, ranges, err := fw.prepareDelete(objectAddr, sb)
+	if err != nil {
+		return fmt.Errorf("delete %q: %w", path, err)
+	}
+
+	// Step 2: Unlink from parent group.
+	if _, err := fw.unlinkFromParent(parent, name); err != nil {
 		return fmt.Errorf("delete %q: unlink failed: %w", path, err)
 	}
-
-	// Step 2: Read the target object header to check reference count
-	// and determine what needs to be freed.
-	if objectAddr == undefinedAddress || objectAddr == 0 {
-		// Object has no valid address (e.g., soft link target). Nothing to cascade-delete.
+	if oh == nil {
 		return nil
-	}
-
-	sb := fw.file.Superblock()
-	reader := fw.writer.Reader()
-	oh, err := core.ReadObjectHeader(reader, objectAddr, sb)
-	if err != nil {
-		// Object header unreadable. Unlink succeeded, so parent is consistent.
-		// Log the error context but don't fail the entire delete.
-		return fmt.Errorf("delete %q: warning: unlinked but could not read object header at 0x%X: %w", path, objectAddr, err)
 	}
 
 	// Step 3: Handle reference counting.
@@ -92,15 +98,172 @@ func (fw *FileWriter) Delete(path string) error {
 		return nil
 	}
 
-	// Step 4: Cascade delete — refcount is now 0, free all storage.
-	if err := fw.cascadeDelete(objectAddr, oh, sb); err != nil {
-		return fmt.Errorf("delete %q: cascade delete failed: %w", path, err)
+	// Step 4: The last link is gone: free every block of the object's
+	// storage, checked in step 1 (H5O_delete, H5Oint.c:1508-1600). A Free
+	// error here is a bug in that check, not a property of the file.
+	allocator := fw.writer.Allocator()
+	for _, r := range ranges {
+		if err := allocator.Free(r.Offset, r.Size); err != nil {
+			return fmt.Errorf("delete %q: free [0x%X, +%d) after the check passed: %w", path, r.Offset, r.Size, err)
+		}
 	}
 
 	// Step 5: Remove from groups map if tracked.
 	delete(fw.groups, path)
 
 	return nil
+}
+
+// prepareDelete runs the checks of a delete that come before its first write:
+// it returns the object header at objectAddr, nil for a link with no object
+// (a soft link), and, when the object loses its last link, every block its
+// storage frees, already checked against the allocator.
+func (fw *FileWriter) prepareDelete(objectAddr uint64, sb *core.Superblock) (*core.ObjectHeader, []writer.FreeBlock, error) {
+	if objectAddr == undefinedAddress || objectAddr == 0 {
+		return nil, nil, nil
+	}
+	oh, err := fw.checkDeletable(objectAddr, sb)
+	if err != nil {
+		return nil, nil, err
+	}
+	if oh.ReferenceCount > 1 {
+		return oh, nil, nil
+	}
+	ranges, err := fw.deleteRanges(objectAddr, oh, sb)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return oh, ranges, nil
+}
+
+// deleteRanges collects every block of file space the object at objectAddr
+// holds, as H5O_delete frees it once the last link goes (H5Oint.c:1508-1600):
+// each chunk of the object header, chunk 0 and the continuation chunks
+// (H5O__cont_delete, H5Ocont.c:207-220); contiguous data (H5D__contig_delete,
+// H5Dcontig.c:352); every chunk and every block of the chunk index
+// (core.DatasetDescriptor.StorageBlocks); a group's B-tree nodes, symbol
+// table nodes and local heap (H5G__stab_delete). Then it checks them against
+// the allocator without changing it (writer.Allocator.CheckFree): every range
+// lies in the file and overlaps neither free space nor another range.
+//
+// It only reads, so Delete runs it before its first write: a structure that
+// cannot be read or a range that fails the check refuses the delete with the
+// file unchanged.
+//
+// Not collected, as before: the fractal heaps and v2 B-trees of dense
+// attribute and link storage, which stay allocated.
+func (fw *FileWriter) deleteRanges(objectAddr uint64, oh *core.ObjectHeader, sb *core.Superblock) ([]writer.FreeBlock, error) {
+	limit := fw.file.ReadLimit()
+	var ranges []writer.FreeBlock
+	add := func(addr, size uint64) error {
+		// Each kept range costs 16 bytes against the read limit, as
+		// CollectChunks charges its entries.
+		if uint64(len(ranges)) >= limit/16 {
+			return fmt.Errorf("%w: the object's storage has more than %d blocks, more than the read limit of %d bytes holds",
+				utils.ErrLimit, len(ranges), limit)
+		}
+		ranges = append(ranges, writer.FreeBlock{Offset: addr, Size: size})
+		return nil
+	}
+
+	size0, err := readChunk0Size(fw, objectAddr)
+	if err != nil {
+		return nil, err
+	}
+	if err := add(objectAddr, size0); err != nil {
+		return nil, err
+	}
+
+	for _, msg := range oh.Messages {
+		switch msg.Type {
+		case core.MsgContinuation:
+			addr, length, err := continuationMessage(msg.Data, sb)
+			if err != nil {
+				return nil, err
+			}
+			if err := add(addr, length); err != nil {
+				return nil, err
+			}
+
+		case core.MsgDataLayout:
+			if err := fw.layoutRanges(oh, msg.Data, sb, limit, add); err != nil {
+				return nil, err
+			}
+
+		case core.MsgSymbolTable:
+			if err := fw.groupStructureRanges(msg.Data, sb, add); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if err := fw.writer.Allocator().CheckFree(ranges); err != nil {
+		return nil, fmt.Errorf("%w: %w", utils.ErrCorrupt, err)
+	}
+	return ranges, nil
+}
+
+// continuationMessage decodes a continuation message: the chunk's address
+// and its length, of the file's offset and length sizes (H5O__cont_decode,
+// H5Ocont.c).
+func continuationMessage(data []byte, sb *core.Superblock) (addr, length uint64, err error) {
+	os, ls := int(sb.OffsetSize), int(sb.LengthSize)
+	if len(data) < os+ls {
+		return 0, 0, fmt.Errorf("continuation message of %d bytes, need %d: %w", len(data), os+ls, utils.ErrCorrupt)
+	}
+	return readAddrFromBuf(data, os, sb.Endianness), readAddrFromBuf(data[os:], ls, sb.Endianness), nil
+}
+
+// layoutRanges collects the data blocks of a data layout message: the one
+// block of contiguous data, every chunk and chunk index block of chunked
+// data (as StorageBlocks reports them), nothing for compact data, which lives
+// in the message. An undefined address is storage never allocated.
+func (fw *FileWriter) layoutRanges(oh *core.ObjectHeader, data []byte, sb *core.Superblock, limit uint64,
+	add func(addr, size uint64) error,
+) error {
+	layout, err := core.ParseDataLayoutMessage(data, sb)
+	if err != nil {
+		return fmt.Errorf("data layout message: %w", err)
+	}
+
+	switch {
+	case layout.IsContiguous():
+		if layout.DataAddress == undefinedAddress || layout.DataSize == 0 {
+			return nil
+		}
+		return add(layout.DataAddress, layout.DataSize)
+
+	case layout.IsChunked():
+		if layout.DataAddress == undefinedAddress {
+			return nil
+		}
+		desc, err := core.NewDatasetDescriptor(fw.writer.Reader(), oh, sb)
+		if err != nil {
+			return fmt.Errorf("dataset messages: %w", err)
+		}
+		if err := desc.StorageBlocks(fw.writer.Reader(), sb, limit, add); err != nil {
+			return fmt.Errorf("chunk index: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// checkDeletable reads the object header at addr and, when the delete would
+// remove its last link, refuses a group that still has children. It only
+// reads, so Delete runs it before its first write.
+func (fw *FileWriter) checkDeletable(addr uint64, sb *core.Superblock) (*core.ObjectHeader, error) {
+	oh, err := core.ReadObjectHeader(fw.writer.Reader(), addr, sb)
+	if err != nil {
+		return nil, fmt.Errorf("read object header at 0x%X: %w", addr, err)
+	}
+	if oh.ReferenceCount <= 1 {
+		if err := fw.checkGroupEmpty(oh, sb); err != nil {
+			return nil, err
+		}
+	}
+	return oh, nil
 }
 
 // writeRefCount rewrites the object header with an updated reference count.
@@ -144,262 +307,100 @@ func (fw *FileWriter) writeRefCount(addr uint64, oh *core.ObjectHeader, sb *core
 	return writeOHDRWithBoundsCheck(fw, addr, oh, sb)
 }
 
-// cascadeDelete frees all storage associated with an object whose refcount has
-// reached zero. This walks the object header messages to find data blocks,
-// chunk B-trees, and sub-group structures, freeing them all.
-//
-// Reference: H5O_delete(), H5O__layout_delete(), H5D_close().
-func (fw *FileWriter) cascadeDelete(objectAddr uint64, oh *core.ObjectHeader, sb *core.Superblock) error {
-	allocator := fw.writer.Allocator()
-
-	// Walk object header messages to find freeable resources.
-	for _, msg := range oh.Messages {
-		switch msg.Type {
-		case core.MsgDataLayout:
-			// Dataset data storage — free the data blocks.
-			layout, err := core.ParseDataLayoutMessage(msg.Data, sb)
-			if err != nil {
-				// Skip unparseable layout messages rather than failing the whole delete.
-				continue
-			}
-			fw.freeDataLayout(layout, allocator)
-
-		case core.MsgSymbolTable:
-			// Group — check if it has children (reject non-empty groups).
-			// The symbol table message contains B-tree and heap addresses.
-			if err := fw.freeGroupStructures(msg.Data, sb, allocator); err != nil {
-				return err
-			}
-		}
-	}
-
-	// Free the object header itself.
-	ohdrSize := core.ObjectHeaderSizeFromParsed(oh)
-	if ohdrSize > 0 {
-		_ = allocator.Free(objectAddr, ohdrSize)
-	}
-
-	return nil
-}
-
-// freeDataLayout frees data blocks described by a DataLayoutMessage.
-//
-// For contiguous layouts, this frees a single block.
-// For chunked layouts, this walks the chunk B-tree and frees each chunk.
-// For compact layouts, data is embedded in the message — nothing to free.
-//
-// Reference: H5O__layout_delete(), H5D__chunk_delete().
-func (fw *FileWriter) freeDataLayout(layout *core.DataLayoutMessage, allocator interface{ Free(uint64, uint64) error }) {
-	switch {
-	case layout.IsContiguous():
-		// Free contiguous data block.
-		if layout.DataAddress != undefinedAddress && layout.DataAddress != 0 && layout.DataSize > 0 {
-			_ = allocator.Free(layout.DataAddress, layout.DataSize)
-		}
-
-	case layout.IsChunked():
-		// Walk chunk B-tree and free each chunk.
-		// The DataAddress points to the chunk index B-tree root.
-		if layout.DataAddress != undefinedAddress && layout.DataAddress != 0 {
-			fw.freeChunkedData(layout.DataAddress, allocator)
-		}
-
-	case layout.IsCompact():
-		// Compact layout: data is embedded in the object header message.
-		// Nothing to free separately — it gets freed when the OHDR is freed.
-	}
-}
-
-// freeChunkedData walks a chunk B-tree v1 and frees each chunk's data.
-// This reads the B-tree at the given address and iterates all child pointers
-// to find chunk data addresses and sizes.
-//
-// Reference: H5D__chunk_delete(), H5B_iterate().
-//
-//nolint:gocognit,gocyclo,cyclop // Inherently complex: parses variable-dimension chunk B-tree keys with fallback heuristics
-func (fw *FileWriter) freeChunkedData(btreeAddr uint64, allocator interface{ Free(uint64, uint64) error }) {
-	// Read the chunk B-tree. This is a B-tree v1 (type 1 = raw data chunks).
-	offsetSize := fw.file.sb.OffsetSize
-	endianness := fw.file.sb.Endianness
-
-	// Read header: signature(4) + type(1) + level(1) + entries(2) + left(offsetSize) + right(offsetSize).
-	headerSize := 8 + 2*int(offsetSize)
-	header := make([]byte, headerSize)
-	//nolint:gosec // G115: HDF5 addresses fit in int64.
-	if _, err := fw.writer.ReadAt(header, int64(btreeAddr)); err != nil {
-		return // Cannot read B-tree header; skip chunk freeing.
-	}
-
-	sig := string(header[0:4])
-	if sig != "TREE" { //nolint:goconst // HDF5 signature used across multiple packages
-		return // Not a valid B-tree.
-	}
-
-	nodeType := header[4]
-	if nodeType != 1 {
-		return // Not a chunk B-tree (type 1 = raw data chunks).
-	}
-
-	entriesUsed := endianness.Uint16(header[6:8])
-	if entriesUsed == 0 {
-		return
-	}
-
-	nodeLevel := header[5]
-
-	// For level-0 (leaf) nodes, the child pointers ARE the chunk addresses.
-	// Each key is: chunkSize(4) + filterMask(4) + dimOffsets (chunkKeySize * ndims).
-	// For simplicity, we read the child pointers and free them.
-	// The chunk size is embedded in the key.
-
-	// Read keys and children. Layout: Key[0], Child[0], Key[1], ..., Key[N].
-	// Key size for chunk B-trees: 4 (chunk size) + 4 (filter mask) + 4*ndims (dimension offsets).
-	// We need to figure out the key size. For type-1 B-trees, the key format depends on
-	// the dataset's dimensionality. We'll read enough data and parse conservatively.
-
-	if nodeLevel > 0 {
-		// Internal nodes: recurse into children.
-		// For simplicity in MVP, we only handle leaf nodes (level 0).
-		// Multi-level chunk B-trees are rare for small-medium datasets.
-		return
-	}
-
-	// For level-0 chunk B-trees, read all keys and children.
-	// We need to determine the key size. Read the data region and parse.
-	// Key format: chunkSize(4) + filterMask(4) + dims (variable).
-	// The number of dimensions is not directly in the B-tree; it's in the dataset's layout message.
-	// However, we can use a simpler approach: read the entire data region and extract child pointers
-	// using the known structure: [key, child, key, child, ..., key].
-	// The child pointer is always offsetSize bytes.
-
-	// For each entry, we need to know the key size to skip over it.
-	// ChunkKey = chunkSize(4) + filterMask(4) + dimensionOffsets.
-	// Without knowing ndims, we estimate from the data layout's ChunkSize field length.
-	// However, since we're called from cascadeDelete where we had the layout, we should
-	// instead track the chunk sizes from the B-tree keys.
-
-	// Practical approach: for each child pointer, the chunk data was allocated as a
-	// contiguous block. We read the chunk size from each key (first 4 bytes).
-	// We can compute the offset to each key/child pair using:
-	//   keySize = data_between_children / known_structure.
-	// Since we know entriesUsed and the total data following the header, we can solve for keySize.
-
-	// Alternative simpler approach: read all data after header. The total data size is:
-	//   (entriesUsed+1) * keySize + entriesUsed * offsetSize.
-	// We know entriesUsed and offsetSize, but not keySize. So let's estimate using a
-	// reasonable upper bound and try to parse.
-
-	// Actually, the simplest correct approach: the B-tree is a fixed allocation,
-	// and freeing just the B-tree node itself is sufficient for space recovery.
-	// Individual chunk data blocks need their sizes, which we get from keys.
-
-	// For MVP: free the B-tree node itself (it was allocated as part of the dataset).
-	// The chunk data blocks are harder to free without the full key size, but we can
-	// try with common key sizes (most datasets are 1-3 dimensional).
-
-	// Try common key sizes: 1D = 4+4+4 = 12, 2D = 4+4+8 = 16, 3D = 4+4+12 = 20.
-	// We try each and see which one produces valid child pointers (non-zero, non-UNDEF).
-	for _, ndims := range []int{1, 2, 3, 4} {
-		keySize := 4 + 4 + 4*ndims // chunkSize + filterMask + ndims*4
-		totalDataSize := (int(entriesUsed)+1)*keySize + int(entriesUsed)*int(offsetSize)
-		data := make([]byte, totalDataSize)
-		//nolint:gosec // G115: HDF5 addresses fit in int64.
-		if _, err := fw.writer.ReadAt(data, int64(btreeAddr)+int64(headerSize)); err != nil {
-			continue
-		}
-
-		// Try to parse entries and validate child pointers.
-		valid := true
-		type chunkInfo struct {
-			addr uint64
-			size uint32
-		}
-		chunks := make([]chunkInfo, 0, entriesUsed)
-
-		pos := 0
-		for i := uint16(0); i < entriesUsed; i++ {
-			if pos+keySize > len(data) {
-				valid = false
-				break
-			}
-			chunkSize := endianness.Uint32(data[pos : pos+4])
-			pos += keySize
-
-			if pos+int(offsetSize) > len(data) {
-				valid = false
-				break
-			}
-			childAddr := readAddrFromBuf(data[pos:], int(offsetSize), endianness)
-			pos += int(offsetSize)
-
-			if childAddr == 0 || childAddr == undefinedAddress {
-				valid = false
-				break
-			}
-			chunks = append(chunks, chunkInfo{addr: childAddr, size: chunkSize})
-		}
-
-		if valid && len(chunks) == int(entriesUsed) {
-			// Successfully parsed. Free each chunk.
-			for _, c := range chunks {
-				_ = allocator.Free(c.addr, uint64(c.size))
-			}
-			return
-		}
-	}
-	// Could not determine key size. B-tree node will be freed with OHDR;
-	// chunk data blocks are leaked. This is acceptable for MVP.
-}
-
-// freeGroupStructures frees the B-tree, symbol table nodes, and local heap
-// associated with a group. Returns an error if the group still has children
-// (non-empty groups must have children deleted first).
-//
-// Reference: H5G_close(), H5G_obj_remove().
-func (fw *FileWriter) freeGroupStructures(symTableData []byte, sb *core.Superblock, allocator interface{ Free(uint64, uint64) error }) error {
-	// Parse symbol table message to get B-tree and heap addresses.
-	// Format: B-tree address (offsetSize) + Heap address (offsetSize).
-	osSize := int(sb.OffsetSize)
-	if len(symTableData) < 2*osSize {
-		return nil // Corrupted or empty message.
-	}
-
-	btreeAddr := readAddrFromBuf(symTableData[0:], osSize, sb.Endianness)
-	heapAddr := readAddrFromBuf(symTableData[osSize:], osSize, sb.Endianness)
-
-	// Read B-tree to check if group has children.
-	_, snodAddrs, err := fw.readGroupBTree(btreeAddr)
+// groupStructureRanges collects the B-tree nodes, symbol table nodes and
+// local heap of a group, as H5G__stab_delete frees them through H5B_delete
+// and H5HL_delete (H5Gstab.c:200-245, H5B.c:1580-1638). The local heap is one
+// block when its data segment follows the prefix (a single cache object),
+// otherwise the prefix and the data segment (H5HL_delete, H5HL.c:847-900).
+// Unlike the C library, which removes the entries of a non-empty group with
+// it, it refuses a group that still has children (delete them first); Delete
+// checks that before its first write (checkGroupEmpty), so the check here
+// only guards other callers.
+func (fw *FileWriter) groupStructureRanges(symTableData []byte, sb *core.Superblock, add func(addr, size uint64) error) error {
+	btreeAddr, heapAddr, err := symbolTableMessageAddrs(symTableData, sb)
 	if err != nil {
-		return nil //nolint:nilerr // Intentional: unreadable B-tree treated as empty group during cascade delete
+		return err
 	}
 
-	// Check if any SNODs have entries (children).
-	for _, addr := range snodAddrs {
-		sn, readErr := fw.readSymbolTableNode(addr)
-		if readErr != nil {
+	g := fw.groupSymbolTable(nil)
+	btreeNodes, snods, err := g.groupNodes(btreeAddr)
+	if err != nil {
+		return fmt.Errorf("read group B-tree: %w", err)
+	}
+	if err := g.requireNoEntries(snods); err != nil {
+		return err
+	}
+
+	for _, addr := range snods {
+		if err := add(addr, g.l.SNODSize()); err != nil {
+			return err
+		}
+	}
+	for _, addr := range btreeNodes {
+		if err := add(addr, g.l.NodeSize()); err != nil {
+			return err
+		}
+	}
+
+	heap, err := structures.LoadLocalHeap(fw.writer, heapAddr, sb)
+	if err != nil {
+		return fmt.Errorf("read local heap at 0x%X: %w", heapAddr, err)
+	}
+	if heap.Contiguous(heapAddr) {
+		return add(heapAddr, heap.Size())
+	}
+	if err := add(heapAddr, heap.PrefixSize()); err != nil {
+		return err
+	}
+	return add(heap.DataSegmentAddress, heap.DataSegmentSize)
+}
+
+// checkGroupEmpty refuses an object whose symbol table still holds entries.
+// It only reads, so Delete runs it before it writes anything.
+func (fw *FileWriter) checkGroupEmpty(oh *core.ObjectHeader, sb *core.Superblock) error {
+	for _, msg := range oh.Messages {
+		if msg.Type != core.MsgSymbolTable {
 			continue
 		}
-		if len(sn.Entries) > 0 {
-			return fmt.Errorf("cannot delete non-empty group (has %d children); delete children first", len(sn.Entries))
+		btreeAddr, _, err := symbolTableMessageAddrs(msg.Data, sb)
+		if err != nil {
+			return err
+		}
+		g := fw.groupSymbolTable(nil)
+		_, snods, err := g.groupNodes(btreeAddr)
+		if err != nil {
+			return fmt.Errorf("read group B-tree: %w", err)
+		}
+		if err := g.requireNoEntries(snods); err != nil {
+			return err
 		}
 	}
-
-	// Group is empty. Free its structures.
-	// Free each SNOD.
-	for _, addr := range snodAddrs {
-		_ = allocator.Free(addr, snodTotalSize)
-	}
-
-	// Free heap. Local heap has a fixed header + data segment.
-	// We don't know the exact size, but a typical heap is 4096 bytes.
-	// For MVP, we free a standard heap size. This is conservative.
-	heap, heapErr := fw.readLocalHeap(heapAddr)
-	if heapErr == nil {
-		_ = allocator.Free(heapAddr, heap.Size())
-	}
-
-	// The B-tree node itself is part of the fixed layout; it will be freed
-	// when the parent OHDR is freed or left as dead space.
-
 	return nil
+}
+
+// requireNoEntries refuses a group whose symbol table nodes hold entries.
+func (g *groupSymbolTable) requireNoEntries(snods []uint64) error {
+	children := 0
+	for _, addr := range snods {
+		sn, err := g.readSNOD(addr)
+		if err != nil {
+			return err
+		}
+		children += len(sn.Entries)
+	}
+	if children > 0 {
+		return fmt.Errorf("cannot delete non-empty group (has %d children); delete children first", children)
+	}
+	return nil
+}
+
+// symbolTableMessageAddrs decodes a symbol table message: the B-tree
+// address, then the local heap address, each of the file's offset size
+// (H5O__stab_decode, H5Ostab.c).
+func symbolTableMessageAddrs(data []byte, sb *core.Superblock) (btreeAddr, heapAddr uint64, err error) {
+	osSize := int(sb.OffsetSize)
+	if len(data) < 2*osSize {
+		return 0, 0, fmt.Errorf("symbol table message of %d bytes, need %d: %w", len(data), 2*osSize, utils.ErrCorrupt)
+	}
+	return readAddrFromBuf(data[0:], osSize, sb.Endianness), readAddrFromBuf(data[osSize:], osSize, sb.Endianness), nil
 }

@@ -54,7 +54,7 @@ func (d *DatasetDescriptor) iterateBT2(r io.ReaderAt, sb *Superblock, s *chunkSi
 	scaled := make([]uint64, rank)
 	base := codec.rawSize()
 
-	return h.walk(r, sb, func(rec []byte) error {
+	return h.walkBlocks(r, sb, s.block, func(rec []byte) error {
 		addr, nbytes, mask := codec.decode(rec)
 		if addr == undefinedAddress {
 			return fmt.Errorf("%w: v2 B-tree chunk index at 0x%X has a record with no address", utils.ErrCorrupt, h.addr)

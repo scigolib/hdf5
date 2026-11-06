@@ -104,16 +104,27 @@ func main() {
 
 When deleting many attributes, B-trees can become **sparse** (wasted disk space, slower searches). This library offers **4 rebalancing strategies**:
 
-### 1. Default (No Rebalancing)
+### 1. Default (Immediate) and None
 
-**Fast deletions, but B-tree may become sparse**
+**Default: every delete rebalances, as in the C library. `WithBTreeRebalancing(false)` skips it: fast deletions, but the B-tree may become sparse**
+
+The HDF5 C library merges and redistributes version 2 B-tree nodes on every delete
+(`H5B2__remove_internal`, `H5B2internal.c`); only its version 1 B-tree never rebalances (`H5B.c`).
+The strategies below act on the version 2 B-trees of dense attribute storage. With no options,
+this library does the same as C and rebalances on every delete; the options choose when
+rebalancing happens, or turn it off.
 
 ```go
-// No options = no rebalancing (like HDF5 C library)
+// No options = rebalance on every delete (the C library's behavior for version 2 B-trees)
 fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate)
+
+// No rebalancing at all
+fw, err = hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
+    hdf5.WithBTreeRebalancing(false),
+)
 ```
 
-**Use for**: Append-only workloads, small files (<100MB)
+**Use "none" for**: Append-only workloads, small files (<100MB)
 
 ---
 
@@ -180,7 +191,8 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 
 | Mode | Deletion Speed | Pause Time | Use Case |
 |------|----------------|------------|----------|
-| **Default** | 100% (baseline) | None | Append-only, small files |
+| **None** (`WithBTreeRebalancing(false)`) | 100% (baseline) | None | Append-only, small files |
+| **Immediate** (default) | Slowest for batch deletions | None | Few deletions |
 | **Lazy** | 95% (10-100x faster than immediate!) | 100-500ms batches | Batch deletions |
 | **Incremental** | 92% | None (background) | Large files, continuous ops |
 | **Smart** | 88% | Varies | Unknown workloads |
@@ -234,7 +246,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
   - Test coverage: 88%+ library packages (target: >70%) ✅
   - Lint issues: 0 (34+ linters) ✅
   - TODO items: 0 (all resolved) ✅
-  - Official HDF5 test suite: 433 files, 100% pass rate ✅
+  - Official HDF5 test suite: <<SUITE>> ✅
 
 - **Security** ✨ NEW:
   - 4 CVEs fixed (CVE-2025-7067, CVE-2025-6269, CVE-2025-2926, CVE-2025-44905) ✅
@@ -269,13 +281,15 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 - ✅ **ChunkIterator API** - Memory-efficient iteration over large datasets
 
 **Validation**:
-- ✅ Official HDF5 Test Suite: 100% pass rate (378/378 files)
-- ✅ Production quality confirmed
+- ✅ Official HDF5 Test Suite: <<SUITE>>
+- ✅ Files written by this library are read back by the C library's h5dump (`c-interop` CI job)
 
 **Future Enhancements**:
 - ✅ LZF filter (read + write, Pure Go) ✨ NEW
 - ✅ BZIP2 filter (read only, stdlib)
-- ⚠️ SZIP filter (stub - requires libaec)
+- ⚠️ Filters without a decoder here: SZIP (4, needs libaec), N-bit (5), Scale-offset (6) and third-party
+  filters. A dataset that uses one fails with an error that wraps `ErrNotSupported`; earlier versions
+  returned the undecoded bytes as values
 - ⚠️ Thread-safety with mutexes + SWMR mode
 - ⚠️ Parallel I/O
 
@@ -351,7 +365,7 @@ Contributions are welcome! This is an early-stage project and we'd love your hel
 | Writing | ✅ Full | ✅ Full | ❌ No |
 | HDF5 1.8+ | ✅ Yes | ⚠️ Limited | ❌ No |
 | Advanced Datatypes | ✅ All | ✅ Yes | ❌ No |
-| Test Suite Validation | ✅ 100% (378/378) | ⚠️ Unknown | ❌ No |
+| Test Suite Validation | ✅ <<SUITE>> | ⚠️ Unknown | ❌ No |
 | Maintained | ✅ Active | ⚠️ Slow | ❌ Inactive |
 | Thread-safe | ⚠️ User must sync* | ⚠️ Conditional | ❌ No |
 

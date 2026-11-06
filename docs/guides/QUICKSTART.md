@@ -380,8 +380,11 @@ Not supported: H5T_TIME (deprecated in HDF5 spec)
 
 ### Q: What compression formats work?
 **A**: Currently:
-- ✅ GZIP/Deflate (most common)
-- ❌ SZIP, LZF, BZIP2, Blosc, LZ4, Zstd (optional filters, planned for v0.14.0+)
+- ✅ GZIP/Deflate (most common), Shuffle, Fletcher32, LZF, BZIP2
+- ❌ SZIP (4), N-bit (5), Scale-offset (6), Blosc, LZ4, Zstd
+
+A dataset that uses an unsupported filter fails with an error that wraps `hdf5.ErrNotSupported`;
+earlier versions returned the undecoded bytes as values.
 
 ### Q: Is it thread-safe?
 **A**: Currently, each `File` instance should be used from a single goroutine. Thread-safe concurrent access and SWMR mode are planned for v0.14.0+.
@@ -437,8 +440,9 @@ if err != nil {
 ### Reading compressed data fails
 
 **Solution**:
-- Check if compression is GZIP (supported)
-- Other formats (SZIP, LZF) not yet supported - see [ROADMAP.md](../../ROADMAP.md)
+- Check which filters the dataset uses: `layout, _ := ds.Layout()`, then `layout.Filters`
+- SZIP, N-bit, Scale-offset and third-party filters are not supported; the error wraps
+  `hdf5.ErrNotSupported` (see [Troubleshooting](TROUBLESHOOTING.md#problem-compression-error))
 
 ---
 
@@ -457,7 +461,7 @@ if err != nil {
 - ✅ All datatypes including compound
 - ✅ Soft/external links supported
 - ✅ Named datatypes (committed datatypes) supported
-- ✅ 100% HDF5 test suite pass rate
+- ✅ Official HDF5 test suite: <<SUITE>>
 
 See [README.md](../../README.md) for full feature list.
 

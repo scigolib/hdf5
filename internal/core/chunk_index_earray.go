@@ -67,7 +67,20 @@ type earrayHeader struct {
 //   - the header passes the parameter checks C makes when it creates an array
 //     (H5EA__hdr_create, H5EAhdr.c:350-385, compiled only in debug builds):
 //     every later size computation relies on them;
-//   - a block is reached once: two pointers to one block are utils.ErrCorrupt.
+//   - a block is reached once: two pointers to one block are utils.ErrCorrupt;
+//   - the bytes of every block and page the walk reads are at most the file's
+//     size (blockBudget): distinct blocks that overlap pass the visited set,
+//     and C, whose cache keys blocks by address only, does not refuse them
+//     either. The header, one block of fixed size, is read before the walk.
+//
+// The sink's Block hook gets every block the walk reaches, at the size C
+// allocated for it. H5EA__iblock_delete and H5EA__sblock_delete free every
+// defined block, whatever max_idx_set is (H5EAiblock.c:347-410,
+// H5EAsblock.c:356-392); the walk stops at max_idx_set. In a valid file the
+// two agree: a block is created only when an index in it is set, and
+// max_idx_set never shrinks (H5EA_set). A corrupt file with blocks past
+// max_idx_set keeps those blocks allocated when its dataset is deleted: they
+// are reported only if they are read, and reading them is not the read path.
 //
 // The block_off fields of super and data blocks are not checked: C never reads
 // them back, and it stores a different value for data blocks of the index
@@ -95,12 +108,18 @@ func (d *DatasetDescriptor) iterateEArray(r io.ReaderAt, sb *Superblock, s *chun
 	if err != nil {
 		return err
 	}
+	if err := s.indexBlock(hdr.addr, earrayHeaderSize(sb)); err != nil {
+		return err
+	}
 
 	if hdr.idxBlkAddr == undefinedAddress || hdr.maxIdxSet == 0 {
 		return nil
 	}
 
-	w := &earrayWalk{s: s, r: r, sb: sb, hdr: hdr, codec: codec, lin: lin, visited: map[uint64]bool{}}
+	w := &earrayWalk{
+		s: s, r: r, sb: sb, hdr: hdr, codec: codec, lin: lin,
+		visited: map[uint64]bool{}, budget: newBlockBudget(r, sb),
+	}
 
 	return w.indexBlock()
 }
@@ -113,9 +132,8 @@ func (d *DatasetDescriptor) iterateEArray(r io.ReaderAt, sb *Superblock, s *chun
 //	idx_blk_addr(sizeof_addr) checksum(4)
 func readEArrayHeader(r io.ReaderAt, sb *Superblock, addr uint64, codec chunkElemCodec) (*earrayHeader, error) {
 	ls, os := int(sb.LengthSize), int(sb.OffsetSize)
-	size := uint64(arrayPrefixSize+6) + 6*uint64(sb.LengthSize) + uint64(sb.OffsetSize)
 
-	buf, err := readChecksummedBlock(r, sb, addr, size, "extensible array header")
+	buf, err := readChecksummedBlock(r, sb, addr, earrayHeaderSize(sb), "extensible array header")
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +168,12 @@ func readEArrayHeader(r io.ReaderAt, sb *Superblock, addr uint64, codec chunkEle
 	}
 
 	return hdr, nil
+}
+
+// earrayHeaderSize is H5EA_HEADER_SIZE (H5EApkg.h:53-77): prefix, six
+// parameter bytes, six statistics and the index block address.
+func earrayHeaderSize(sb *Superblock) uint64 {
+	return arrayPrefixSize + 6 + 6*uint64(sb.LengthSize) + uint64(sb.OffsetSize)
 }
 
 // checkParams applies the creation checks of H5EA__hdr_create
@@ -193,7 +217,11 @@ func (h *earrayHeader) init(pageBits uint8) error {
 	if h.iblkNsblks > nsblks {
 		return fmt.Errorf("index block covers %d super blocks of %d", h.iblkNsblks, nsblks)
 	}
-	if first := sblkDblkNelmts(h.iblkNsblks, h.dataBlkMin); h.iblkNsblks < nsblks && h.pageElmts < first {
+	// C makes this check whether or not super block iblkNsblks exists
+	// (H5EAhdr.c:376-381). It keeps every data block of the index block,
+	// whose super blocks are below it, no larger than a page, so unpaged
+	// (a larger block is paged, H5EAdblock.c:110-113), as indexBlock reads it.
+	if first := sblkDblkNelmts(h.iblkNsblks, h.dataBlkMin); h.pageElmts < first {
 		return fmt.Errorf("page of %d elements is smaller than the first super block's data blocks of %d",
 			h.pageElmts, first)
 	}
@@ -235,6 +263,19 @@ type earrayWalk struct {
 	codec   chunkElemCodec
 	lin     *chunkLinearizer
 	visited map[uint64]bool
+	budget  *blockBudget // Bytes of every block and page the walk reads.
+}
+
+// read charges a block against the walk's budget, then reads it and checks
+// its checksum. The visited set refuses a block reached twice; the budget
+// refuses distinct blocks that together claim more than the file, such as
+// data blocks overlapping at a small stride, each sealed to a valid checksum.
+func (w *earrayWalk) read(addr, size uint64, what string) ([]byte, error) {
+	if err := w.budget.charge(size, addr, "extensible array"); err != nil {
+		return nil, err
+	}
+
+	return readChecksummedBlock(w.r, w.sb, addr, size, what)
 }
 
 // visit refuses a block reached a second time.
@@ -265,11 +306,14 @@ func (w *earrayWalk) indexBlock() error {
 	if err := w.visit(h.idxBlkAddr, "index block"); err != nil {
 		return err
 	}
-	buf, err := readChecksummedBlock(w.r, w.sb, h.idxBlkAddr, size, "extensible array index block")
+	buf, err := w.read(h.idxBlkAddr, size, "extensible array index block")
 	if err != nil {
 		return err
 	}
 	if err := checkBlockPrefix(buf, earrayIndexBlockSig, h.class, h.addr, w.sb, "extensible array index block"); err != nil {
+		return err
+	}
+	if err := w.s.indexBlock(h.idxBlkAddr, size); err != nil { // H5EA_IBLOCK_SIZE, H5EAiblock.c:176-179.
 		return err
 	}
 
@@ -371,11 +415,14 @@ func (w *earrayWalk) superBlock(addr, u uint64) error {
 		return fmt.Errorf("%w: extensible array super block %d size overflows", utils.ErrCorrupt, u)
 	}
 
-	buf, err := readChecksummedBlock(w.r, w.sb, addr, size, "extensible array super block")
+	buf, err := w.read(addr, size, "extensible array super block")
 	if err != nil {
 		return err
 	}
 	if err := checkBlockPrefix(buf, earraySuperBlockSig, h.class, h.addr, w.sb, "extensible array super block"); err != nil {
+		return err
+	}
+	if err := w.s.indexBlock(addr, size); err != nil { // H5EA_SBLOCK_SIZE, H5EAsblock.c:190-196.
 		return err
 	}
 
@@ -424,11 +471,15 @@ func (w *earrayWalk) dataBlock(addr, first, n uint64) error {
 	if err != nil {
 		return fmt.Errorf("%w: extensible array data block of %d records overflows", utils.ErrCorrupt, n)
 	}
-	buf, err := readChecksummedBlock(w.r, w.sb, addr, arrayPrefixSize+os+h.arrOffSize+recs, "extensible array data block")
+	size := arrayPrefixSize + os + h.arrOffSize + recs
+	buf, err := w.read(addr, size, "extensible array data block")
 	if err != nil {
 		return err
 	}
 	if err := checkBlockPrefix(buf, earrayDataBlockSig, h.class, h.addr, w.sb, "extensible array data block"); err != nil {
+		return err
+	}
+	if err := w.s.indexBlock(addr, size); err != nil { // H5EA_DBLOCK_SIZE, no pages: H5EAdblock.c:163-169.
 		return err
 	}
 
@@ -449,6 +500,9 @@ func (w *earrayWalk) pagedDataBlock(addr, first, k, npages uint64, bitmap []byte
 
 	h := w.hdr
 	prefix := arrayPrefixSize + uint64(w.sb.OffsetSize) + h.arrOffSize // H5EA_DBLOCK_PREFIX_SIZE.
+	if err := w.reportPagedDataBlock(addr, prefix, npages); err != nil {
+		return err
+	}
 	for i := uint64(0); i < npages; i++ {
 		start, ok := w.start(first, i, h.pageElmts)
 		if !ok {
@@ -464,7 +518,7 @@ func (w *earrayWalk) pagedDataBlock(addr, first, k, npages uint64, bitmap []byte
 		if err != nil {
 			return fmt.Errorf("%w: extensible array page %d: %w", utils.ErrCorrupt, i, err)
 		}
-		page, err := readChecksummedBlock(w.r, w.sb, pageAddr, pageBytes, "extensible array data block page")
+		page, err := w.read(pageAddr, pageBytes, "extensible array data block page")
 		if err != nil {
 			return err
 		}
@@ -474,6 +528,34 @@ func (w *earrayWalk) pagedDataBlock(addr, first, k, npages uint64, bitmap []byte
 	}
 
 	return nil
+}
+
+// reportPagedDataBlock reports a paged data block to the sink's Block hook at
+// the size C allocated, whether or not its pages were written: the prefix,
+// npages pages of records and a checksum each (H5EA_DBLOCK_SIZE,
+// H5EApkg.h:126-133; H5EAdblock.c:110-113, :163-169), the size H5EA__dblock_delete
+// frees through the cache (H5EA__cache_dblock_fsf_size, H5EAcache.c:1826).
+// Nothing is read: the walk reads only the written pages.
+func (w *earrayWalk) reportPagedDataBlock(addr, prefix, npages uint64) error {
+	if w.s.block == nil {
+		return nil
+	}
+	page, err := utils.SafeMultiply(w.hdr.pageElmts, w.hdr.rawSize)
+	if err == nil {
+		page, err = utils.SafeAdd(page, 4)
+	}
+	size := uint64(0)
+	if err == nil {
+		size, err = utils.SafeMultiply(page, npages)
+	}
+	if err == nil {
+		size, err = utils.SafeAdd(size, prefix)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: extensible array paged data block of %d pages overflows", utils.ErrCorrupt, npages)
+	}
+
+	return w.s.indexBlock(addr, size)
 }
 
 // addRecords adds the records of raw, the first with array index first,

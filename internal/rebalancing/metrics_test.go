@@ -618,67 +618,87 @@ func TestMetricsCollector_Concurrent(t *testing.T) {
 	}
 }
 
-// TestMetricsCollector_Performance verifies low overhead.
+// TestMetricsCollector_Performance verifies the low overhead deterministically,
+// without wall-clock thresholds (they fail on loaded CI runners): recording
+// allocates nothing once a histogram key exists, and a snapshot costs the same
+// number of allocations however many events were recorded (its size is
+// bounded by the number of modes and operation types, not by the history).
+// The timings themselves are the benchmarks below.
 func TestMetricsCollector_Performance(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping performance test in short mode")
-	}
-
 	if raceEnabled {
-		t.Skip("timing thresholds are not meaningful under the race detector")
+		t.Skip("the race detector's instrumentation can allocate; allocation counts are not meaningful")
 	}
 
 	mc := NewMetricsCollector()
-
-	const iterations = 100000
-
-	// Benchmark RecordOperation (should be <10ns)
-	start := time.Now()
-	for i := 0; i < iterations; i++ {
-		mc.RecordOperation(OpWrite)
-	}
-	elapsed := time.Since(start)
-	avgRecordOp := elapsed / iterations
-
-	if avgRecordOp > 200*time.Nanosecond {
-		t.Errorf("RecordOperation too slow: avg %v (expected <200ns)", avgRecordOp)
-	}
-
-	t.Logf("RecordOperation avg: %v", avgRecordOp)
-
-	// Benchmark RecordEvaluation (should be <100ns)
 	decision := Decision{
 		Mode:       ModeLazy,
 		Confidence: 0.85,
 		Config:     &structures.LazyRebalancingConfig{},
 	}
 
-	start = time.Now()
-	for i := 0; i < iterations; i++ {
+	// The first event of each kind creates its histogram key.
+	mc.RecordOperation(OpWrite)
+	mc.RecordEvaluation(decision, time.Millisecond)
+
+	const runs = 1000
+	if allocs := testing.AllocsPerRun(runs, func() { mc.RecordOperation(OpWrite) }); allocs != 0 {
+		t.Errorf("RecordOperation allocates %v times per call, want 0", allocs)
+	}
+	if allocs := testing.AllocsPerRun(runs, func() { mc.RecordEvaluation(decision, time.Millisecond) }); allocs != 0 {
+		t.Errorf("RecordEvaluation allocates %v times per call, want 0", allocs)
+	}
+
+	// AllocsPerRun calls the function once more as a warm-up, and one event
+	// of each kind was recorded above.
+	snapshot := mc.Snapshot()
+	if want := int64(runs + 2); snapshot.TotalOperations != want {
+		t.Errorf("TotalOperations = %d, want %d", snapshot.TotalOperations, want)
+	}
+	if want := int64(runs + 2); snapshot.TotalEvaluations != want {
+		t.Errorf("TotalEvaluations = %d, want %d", snapshot.TotalEvaluations, want)
+	}
+
+	small := testing.AllocsPerRun(100, func() { _ = mc.Snapshot() })
+	const more = 100 * runs
+	for i := 0; i < more; i++ {
+		mc.RecordOperation(OpWrite)
 		mc.RecordEvaluation(decision, time.Millisecond)
 	}
-	elapsed = time.Since(start)
-	avgRecordEval := elapsed / iterations
-
-	if avgRecordEval > 500*time.Nanosecond {
-		t.Errorf("RecordEvaluation too slow: avg %v (expected <500ns)", avgRecordEval)
+	large := testing.AllocsPerRun(100, func() { _ = mc.Snapshot() })
+	if large != small {
+		t.Errorf("Snapshot allocates %v times after %d more events, %v before; want the same (bounded)",
+			large, more, small)
 	}
+}
 
-	t.Logf("RecordEvaluation avg: %v", avgRecordEval)
+// BenchmarkMetricsCollector_RecordOperation measures RecordOperation.
+func BenchmarkMetricsCollector_RecordOperation(b *testing.B) {
+	mc := NewMetricsCollector()
+	b.ReportAllocs()
+	for b.Loop() {
+		mc.RecordOperation(OpWrite)
+	}
+}
 
-	// Benchmark Snapshot (should be <100µs)
-	start = time.Now()
-	for i := 0; i < 1000; i++ {
+// BenchmarkMetricsCollector_RecordEvaluation measures RecordEvaluation.
+func BenchmarkMetricsCollector_RecordEvaluation(b *testing.B) {
+	mc := NewMetricsCollector()
+	decision := Decision{Mode: ModeLazy, Confidence: 0.85, Config: &structures.LazyRebalancingConfig{}}
+	b.ReportAllocs()
+	for b.Loop() {
+		mc.RecordEvaluation(decision, time.Millisecond)
+	}
+}
+
+// BenchmarkMetricsCollector_Snapshot measures Snapshot.
+func BenchmarkMetricsCollector_Snapshot(b *testing.B) {
+	mc := NewMetricsCollector()
+	mc.RecordOperation(OpWrite)
+	mc.RecordEvaluation(Decision{Mode: ModeLazy, Confidence: 0.85}, time.Millisecond)
+	b.ReportAllocs()
+	for b.Loop() {
 		_ = mc.Snapshot()
 	}
-	elapsed = time.Since(start)
-	avgSnapshot := elapsed / 1000
-
-	if avgSnapshot > 1*time.Millisecond {
-		t.Errorf("Snapshot too slow: avg %v (expected <1ms)", avgSnapshot)
-	}
-
-	t.Logf("Snapshot avg: %v", avgSnapshot)
 }
 
 // TestMetricsCollector_Integration_SmartRebalancer verifies integration.

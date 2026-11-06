@@ -143,6 +143,128 @@ const (
 	floatSignMask    = 0xFF
 )
 
+// Where a variable-length string keeps its padding and character set: bits
+// 4-7 and 8-11 of the class bit field (H5Odtype.c:763-765). A fixed-length
+// string keeps them in bits 0-3 and 4-7 (H5Odtype.c:295-296).
+const (
+	vlenStringPadShift  = 4
+	vlenStringCsetShift = 8
+	stringCsetShift     = 4
+)
+
+// TypeOrder is the byte order of a datatype as H5T_get_order reports it, the
+// Go counterpart of H5T_order_t (H5Tpublic.h:53-61). The values are those of
+// the C enum.
+type TypeOrder int
+
+// Byte orders (H5Tpublic.h:55-59).
+const (
+	OrderLittleEndian TypeOrder = 0 // H5T_ORDER_LE
+	OrderBigEndian    TypeOrder = 1 // H5T_ORDER_BE
+	OrderVAX          TypeOrder = 2 // H5T_ORDER_VAX
+	OrderMixed        TypeOrder = 3 // H5T_ORDER_MIXED: compound members differ
+	OrderNone         TypeOrder = 4 // H5T_ORDER_NONE: strings, opaque, references
+)
+
+// RootType follows the parent chain to the type that has no parent, as
+// H5T_get_order and H5T_get_sign do (H5Torder.c:114-116, H5Tfixed.c:73-75).
+func (dt *DatatypeMessage) RootType() *DatatypeMessage {
+	for dt.Base != nil {
+		dt = dt.Base
+	}
+
+	return dt
+}
+
+// Order mirrors H5T_get_order (H5Torder.c:108-160) on the order the decoder
+// sets for each class (H5O__dtype_decode_helper, H5Odtype.c:171-290, 641):
+// integer, float, time and bitfield store it in bit 0 of the class bit field
+// (a version 3 float with bit 6 also set is VAX, H5Odtype.c:193-201);
+// strings, opaque types and references have none; a compound reports its
+// members' order; a derived type reports the order of its root type.
+func (dt *DatatypeMessage) Order() TypeOrder {
+	dt = dt.RootType()
+
+	switch dt.Class {
+	case DatatypeFixed, DatatypeTime, DatatypeBitfield:
+		return bitFieldOrder(dt.ClassBitField)
+	case DatatypeFloat:
+		// The decoder reads VAX order only from version 3 messages
+		// (H5Odtype.c:193-201); bit 6 of an older one is not a byte order.
+		if dt.Version >= dtypeVersion3 && dt.ClassBitField&flagFloatVAX != 0 {
+			return OrderVAX
+		}
+		return bitFieldOrder(dt.ClassBitField)
+	case DatatypeCompound:
+		return dt.compoundOrder()
+	default:
+		return OrderNone
+	}
+}
+
+// bitFieldOrder reads the byte order bit of an atomic class bit field.
+func bitFieldOrder(flags uint32) TypeOrder {
+	if flags&flagBigEndian != 0 {
+		return OrderBigEndian
+	}
+
+	return OrderLittleEndian
+}
+
+// compoundOrder is the compound branch of H5T_get_order (H5Torder.c:118-152):
+// members of order NONE are ignored; the first other order is the result,
+// and a member that differs from it makes the result MIXED.
+func (dt *DatatypeMessage) compoundOrder() TypeOrder {
+	order := OrderNone
+	for _, m := range dt.Members {
+		if m.Type == nil {
+			continue
+		}
+
+		mo := m.Type.Order()
+		switch {
+		case mo == OrderNone:
+		case order == OrderNone:
+			order = mo
+		case mo != order:
+			return OrderMixed
+		}
+	}
+
+	return order
+}
+
+// Signed mirrors H5T_get_sign (H5Tfixed.c:65-85): the root of the parent
+// chain must be an integer, signed when bit 3 of its class bit field is set
+// (H5Odtype.c:174).
+func (dt *DatatypeMessage) Signed() bool {
+	root := dt.RootType()
+
+	return root.Class == DatatypeFixed && root.ClassBitField&flagSigned != 0
+}
+
+// StringProperties mirrors H5Tget_strpad and H5Tget_cset (H5Tstrpad.c:40-62,
+// H5Tcset.c:39-60; the parent walk is at H5Tstrpad.c:50-51, H5Tcset.c:49-50):
+// follow the parent chain to the first string, then read padding and
+// character set from where the decoder keeps them, bits 0-3 and 4-7 for a
+// fixed-length string, bits 4-7 and 8-11 for a variable-length one
+// (H5Odtype.c:295-296, :763-765). A type with no string in its chain reports
+// the zero values.
+func (dt *DatatypeMessage) StringProperties() (StringPadding, CharacterSet) {
+	for ; dt != nil; dt = dt.Base {
+		switch {
+		case dt.Class == DatatypeString:
+			return StringPadding(dt.ClassBitField & nibbleMask),
+				CharacterSet(dt.ClassBitField >> stringCsetShift & nibbleMask)
+		case dt.IsVariableString():
+			return StringPadding(dt.ClassBitField >> vlenStringPadShift & nibbleMask),
+				CharacterSet(dt.ClassBitField >> vlenStringCsetShift & nibbleMask)
+		}
+	}
+
+	return StringNullTerm, CharsetASCII
+}
+
 // errDatatypef reports invalid datatype bytes. The message names what was
 // wrong and the C check it mirrors; the error wraps utils.ErrCorrupt.
 func errDatatypef(format string, args ...any) error {
@@ -397,6 +519,10 @@ func decodeBitRange(c *dtCursor, dt *DatatypeMessage, kind, ref string) error {
 	if err != nil {
 		return err
 	}
+	if dt.Class == DatatypeFixed && isEarlyHDF5GoNumeric(dt.Class, dt.Version, dt.ClassBitField, dt.Size, b) {
+		dt.BitOffset, dt.Precision = 0, uint16(dt.Size*8) //nolint:gosec // G115: Size is 1, 2, 4 or 8
+		return nil
+	}
 	dt.BitOffset = binary.LittleEndian.Uint16(b[0:])
 	dt.Precision = binary.LittleEndian.Uint16(b[2:])
 	sizeBits := uint64(dt.Size) * 8
@@ -429,6 +555,10 @@ func decodeFloat(c *dtCursor, dt *DatatypeMessage) error {
 	b, err := c.take(12, "floating-point properties")
 	if err != nil {
 		return err
+	}
+	if isEarlyHDF5GoNumeric(dt.Class, dt.Version, dt.ClassBitField, dt.Size, b) {
+		normalizeIEEEFloat(dt)
+		return nil
 	}
 	dt.BitOffset = binary.LittleEndian.Uint16(b[0:])
 	dt.Precision = binary.LittleEndian.Uint16(b[2:])
