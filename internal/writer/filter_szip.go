@@ -106,18 +106,29 @@ func (f *SZIPFilter) Remove(_ []byte) ([]byte, error) {
 
 // Encode returns the filter parameters for the Pipeline message.
 //
-// For SZIP in HDF5, the client data contains:
-//   - cd_values[0]: Bits per pixel (1-32)
-//   - cd_values[1]: Coding method (NN=32, EC=4, LSB=1, MSB=2, RAW=128)
-//   - cd_values[2]: Pixels per block (even number, 8-32)
-//   - cd_values[3]: Pixels per scanline (0 for 1D data)
+// The client data is laid out as H5Zpublic.h:219-234 indexes it and
+// H5Z__filter_szip reads it (H5Zszip.c:277-280):
+//   - cd_values[0] H5Z_SZIP_PARM_MASK: option mask (NN=32, EC=4, LSB=1, MSB=2, RAW=128)
+//   - cd_values[1] H5Z_SZIP_PARM_PPB: pixels per block (even, 8-32)
+//   - cd_values[2] H5Z_SZIP_PARM_BPP: bits per pixel
+//   - cd_values[3] H5Z_SZIP_PARM_PPS: pixels per scanline
 //
-// Reference: https://github.com/HDFGroup/hdf5/blob/develop/src/H5Zszip.c
+// The filter is optional, as H5Pset_szip adds it (H5Pdcpl.c:2923).
 func (f *SZIPFilter) Encode() (flags uint16, cdValues []uint32) {
-	return 0, []uint32{
-		f.bitsPerPixel,
-		f.optionMask,
-		f.pixelsPerBlock,
-		f.pixelsPerScan,
-	}
+	cd := make([]uint32, szipNumParms)
+	cd[szipParmMask] = f.optionMask
+	cd[szipParmPPB] = f.pixelsPerBlock
+	cd[szipParmBPP] = f.bitsPerPixel
+	cd[szipParmPPS] = f.pixelsPerScan
+	return FilterFlagOptional, cd
 }
+
+// Indexes of the SZIP client data values (H5Z_SZIP_PARM_*, H5Zpublic.h:219-234)
+// and their count (H5Z_SZIP_TOTAL_NPARMS, H5Zpublic.h:214).
+const (
+	szipParmMask = 0
+	szipParmPPB  = 1
+	szipParmBPP  = 2
+	szipParmPPS  = 3
+	szipNumParms = 4
+)

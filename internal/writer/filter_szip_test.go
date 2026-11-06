@@ -134,8 +134,8 @@ func TestSZIPFilter_Encode(t *testing.T) {
 			pixelsPerBlock: 16,
 			bitsPerPixel:   32,
 			pixelsPerScan:  0,
-			wantFlags:      0,
-			wantCDValues:   []uint32{32, 36, 16, 0},
+			wantFlags:      FilterFlagOptional,      // H5Pset_szip, H5Pdcpl.c:2923
+			wantCDValues:   []uint32{36, 16, 32, 0}, // mask, ppb, bpp, pps (H5Zpublic.h:219-234)
 		},
 		{
 			name:           "RAW mode, 16 bpp, 8 ppb, 2D data",
@@ -143,8 +143,8 @@ func TestSZIPFilter_Encode(t *testing.T) {
 			pixelsPerBlock: 8,
 			bitsPerPixel:   16,
 			pixelsPerScan:  256,
-			wantFlags:      0,
-			wantCDValues:   []uint32{16, 128, 8, 256},
+			wantFlags:      FilterFlagOptional, // H5Pset_szip, H5Pdcpl.c:2923
+			wantCDValues:   []uint32{128, 8, 16, 256},
 		},
 		{
 			name:           "EC only, 8 bpp, 32 ppb",
@@ -152,8 +152,8 @@ func TestSZIPFilter_Encode(t *testing.T) {
 			pixelsPerBlock: 32,
 			bitsPerPixel:   8,
 			pixelsPerScan:  0,
-			wantFlags:      0,
-			wantCDValues:   []uint32{8, 4, 32, 0},
+			wantFlags:      FilterFlagOptional, // H5Pset_szip, H5Pdcpl.c:2923
+			wantCDValues:   []uint32{4, 32, 8, 0},
 		},
 	}
 
@@ -205,7 +205,7 @@ func TestSZIPFilter_ParameterValidation(t *testing.T) {
 
 			// Verify parameters are stored correctly
 			flags, cdValues := filter.Encode()
-			if flags != 0 {
+			if flags != FilterFlagOptional {
 				t.Errorf("unexpected flags: %d", flags)
 			}
 
@@ -213,14 +213,14 @@ func TestSZIPFilter_ParameterValidation(t *testing.T) {
 				t.Fatalf("cdValues length = %d, want 4", len(cdValues))
 			}
 
-			if cdValues[0] != tt.bitsPerPixel {
-				t.Errorf("bitsPerPixel = %d, want %d", cdValues[0], tt.bitsPerPixel)
+			if cdValues[2] != tt.bitsPerPixel {
+				t.Errorf("bitsPerPixel = %d, want %d", cdValues[2], tt.bitsPerPixel)
 			}
-			if cdValues[1] != tt.optionMask {
-				t.Errorf("optionMask = %d, want %d", cdValues[1], tt.optionMask)
+			if cdValues[0] != tt.optionMask {
+				t.Errorf("optionMask = %d, want %d", cdValues[0], tt.optionMask)
 			}
-			if cdValues[2] != tt.pixelsPerBlock {
-				t.Errorf("pixelsPerBlock = %d, want %d", cdValues[2], tt.pixelsPerBlock)
+			if cdValues[1] != tt.pixelsPerBlock {
+				t.Errorf("pixelsPerBlock = %d, want %d", cdValues[1], tt.pixelsPerBlock)
 			}
 			if cdValues[3] != tt.pixelsPerScan {
 				t.Errorf("pixelsPerScan = %d, want %d", cdValues[3], tt.pixelsPerScan)

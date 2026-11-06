@@ -988,7 +988,7 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 	}
 
 	// Create dataspace message
-	dataspaceData, err := core.EncodeDataspaceMessage(dims, nil)
+	dataspaceData, err := fw.encodeDatasetDataspace(dims, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode dataspace: %w", err)
 	}
@@ -1007,14 +1007,14 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 	}
 
 	// Create object header with messages
+	messages, err := fw.datasetHeaderMessages(datatypeData, dataspaceData, layoutData, core.LayoutContiguous, nil)
+	if err != nil {
+		return nil, err
+	}
 	ohw := &core.ObjectHeaderWriter{
-		Version: 2,
-		Flags:   0, // Minimal flags
-		Messages: []core.MessageWriter{
-			{Type: core.MsgDatatype, Data: datatypeData},
-			{Type: core.MsgDataspace, Data: dataspaceData},
-			{Type: core.MsgDataLayout, Data: layoutData},
-		},
+		Version:  2,
+		Flags:    0, // Minimal flags
+		Messages: messages,
 	}
 
 	// Pre-allocate OHDR with padding for future attributes.
@@ -1145,7 +1145,7 @@ func (fw *FileWriter) createContiguousCompound(name string, compoundType *core.D
 	}
 
 	// Create dataspace message
-	dataspaceData, err := core.EncodeDataspaceMessage(dims, nil)
+	dataspaceData, err := fw.encodeDatasetDataspace(dims, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode dataspace: %w", err)
 	}
@@ -1164,14 +1164,14 @@ func (fw *FileWriter) createContiguousCompound(name string, compoundType *core.D
 	}
 
 	// Create object header writer
+	messages, err := fw.datasetHeaderMessages(datatypeData, dataspaceData, layoutData, core.LayoutContiguous, nil)
+	if err != nil {
+		return nil, err
+	}
 	ohw := &core.ObjectHeaderWriter{
-		Version: 2,
-		Flags:   0, // Minimal flags
-		Messages: []core.MessageWriter{
-			{Type: core.MsgDatatype, Data: datatypeData},
-			{Type: core.MsgDataspace, Data: dataspaceData},
-			{Type: core.MsgDataLayout, Data: layoutData},
-		},
+		Version:  2,
+		Flags:    0, // Minimal flags
+		Messages: messages,
 	}
 
 	// Pre-allocate OHDR with padding for future attributes.
@@ -1232,6 +1232,68 @@ func calculateObjectHeaderSize(ohw *core.ObjectHeaderWriter) (uint64, error) {
 	// Use the ObjectHeaderWriter's own Size() method which correctly handles
 	// variable chunk size field width and Jenkins checksum.
 	return ohw.Size(), nil
+}
+
+// encodeDatasetDataspace encodes the dataspace message of a new dataset as
+// H5Dcreate writes it: in the version H5S_set_version picks for the file's
+// format (H5Dint.c:679, core.DataspaceVersionFor), and always with maximum
+// dimensions, which are the current ones when none are given
+// (H5S_set_extent_simple, H5S.c:1291-1298).
+func (fw *FileWriter) encodeDatasetDataspace(dims, maxDims []uint64) ([]byte, error) {
+	if len(maxDims) == 0 {
+		maxDims = dims
+	}
+	data, err := core.EncodeDataspaceMessageVersion(dims, maxDims, core.DataspaceVersionFor(fw.file.sb.Version))
+	if err != nil {
+		return nil, fmt.Errorf("encode dataspace: %w", err)
+	}
+	return data, nil
+}
+
+// datasetHeaderMessages returns the header messages of a new dataset as
+// H5Dcreate writes them for the default dataset creation property list, in
+// its order and with its flags: the dataspace (flags 0, H5S.c:1068), the
+// datatype (constant, H5Dint.c:1014), the fill value message (constant,
+// H5Dint.c:1018), then from H5D__layout_oh_create the filter pipeline of a
+// chunked dataset (constant, H5Dlayout.c:304-311) and the layout (constant
+// only for early, unfiltered allocation, which this writer never declares,
+// H5Dlayout.c:379-392).
+//
+// The fill value message is C's default for the datatype and layout
+// (core.NewDatasetFillValue). Without it a C reader takes the fill value as
+// undefined (H5Dint.c:1825-1827). The pipeline message has the version C
+// picks for the file's format: 1 in a version 0 or 1 superblock file (the
+// earliest format), 2 otherwise (H5Opline.c:85-93, H5Dint.c:1322).
+//
+// pipeline is nil or empty for a dataset without filters.
+func (fw *FileWriter) datasetHeaderMessages(datatypeData, dataspaceData, layoutData []byte,
+	layoutClass core.DataLayoutClass, pipeline *writer.FilterPipeline) ([]core.MessageWriter, error) {
+	dt, _, err := core.DecodeDatatype(datatypeData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode datatype for the fill value: %w", err)
+	}
+	fillData, err := core.EncodeFillValueMessage(core.NewDatasetFillValue(dt, layoutClass, fw.file.sb.Version))
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode fill value: %w", err)
+	}
+
+	messages := []core.MessageWriter{
+		{Type: core.MsgDataspace, Data: dataspaceData},
+		{Type: core.MsgDatatype, Data: datatypeData, Flags: core.MsgFlagConstant},
+		{Type: core.MsgFillValue, Data: fillData, Flags: core.MsgFlagConstant},
+	}
+	if pipeline != nil && !pipeline.IsEmpty() {
+		version := writer.PipelineVersion2
+		if fw.file.sb.Version < core.Version2 {
+			version = writer.PipelineVersion1
+		}
+		pipelineData, err := pipeline.EncodePipelineMessage(version)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode filter pipeline: %w", err)
+		}
+		messages = append(messages, core.MessageWriter{Type: core.MsgFilterPipeline, Data: pipelineData, Flags: core.MsgFlagConstant})
+	}
+	return append(messages, core.MessageWriter{Type: core.MsgDataLayout, Data: layoutData}), nil
 }
 
 // DatasetWriter provides write access to a dataset.
@@ -1661,8 +1723,9 @@ func (dw *DatasetWriter) Resize(newDims []uint64) error {
 	// 5. Update dimensions.
 	dataspaceMsg.Dimensions = newDims
 
-	// 6. Re-encode dataspace message.
-	newDataspaceData, err := core.EncodeDataspaceMessage(newDims, dw.maxDims)
+	// 6. Re-encode dataspace message in its own version: C sets the version
+	// only when the dataset is created (H5S_set_version, H5Dint.c:679).
+	newDataspaceData, err := core.EncodeDataspaceMessageVersion(newDims, dw.maxDims, dataspaceMsg.Version)
 	if err != nil {
 		return fmt.Errorf("encode dataspace: %w", err)
 	}

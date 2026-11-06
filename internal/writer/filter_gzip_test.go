@@ -56,7 +56,7 @@ func TestGZIPFilter_Encode(t *testing.T) {
 			filter := NewGZIPFilter(tt.level)
 			flags, cdValues := filter.Encode()
 
-			require.Equal(t, uint16(0), flags)
+			require.Equal(t, FilterFlagOptional, flags, "H5Pset_deflate adds deflate as optional (H5Pocpl.c:1065)")
 			require.Equal(t, 1, len(cdValues))
 			require.Equal(t, uint32(tt.level), cdValues[0])
 		})

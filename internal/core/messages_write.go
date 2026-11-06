@@ -5,6 +5,12 @@ import (
 	"fmt"
 )
 
+// MsgFlagConstant marks a header message whose value never changes once
+// written (H5O_MSG_FLAG_CONSTANT, H5Oprivate.h:73). H5Dcreate sets it on a
+// dataset's datatype, fill value and filter pipeline messages
+// (H5Dint.c:1014/1018, H5Dlayout.c:310).
+const MsgFlagConstant uint8 = 0x01
+
 // EncodeLayoutMessage encodes a Data Layout message.
 // This creates a version 3 layout message (most common format).
 //
@@ -182,67 +188,67 @@ func encodeChunkedLayout(chunkDims []uint64, btreeAddress uint64, sb *Superblock
 // Reference: HDF5 spec III.A (Dataspace Message)
 // C Reference: H5Osdspace.c - H5O__sdspace_encode()..
 func EncodeDataspaceMessage(dims, maxDims []uint64) ([]byte, error) {
+	return EncodeDataspaceMessageVersion(dims, maxDims, DataspaceVersion1)
+}
+
+// Dataspace message versions (H5O_SDSPACE_VERSION_1/2, H5Spkg.h:76-82).
+const (
+	DataspaceVersion1 uint8 = 1
+	DataspaceVersion2 uint8 = 2
+)
+
+// maxDataspaceRank is H5S_MAX_RANK (H5Spublic.h:55): the rank byte of the
+// message can hold more, the library cannot.
+const maxDataspaceRank = 32
+
+// DataspaceVersionFor returns the dataspace message version H5S_set_version
+// gives a new dataset or attribute (H5S.c:1990-2013): the low bound of the
+// file's format, version 1 for the earliest format (superblock 0 and 1) and
+// version 2 from the 1.8 format on (H5O_sdspace_ver_bounds, H5S.c:61-69).
+func DataspaceVersionFor(superblockVersion uint8) uint8 {
+	if superblockVersion >= Version2 {
+		return DataspaceVersion2
+	}
+	return DataspaceVersion1
+}
+
+// EncodeDataspaceMessageVersion encodes a simple dataspace as
+// H5O__sdspace_encode does (H5Osdspace.c:249-297): version, rank and flags
+// (H5S_VALID_MAX when maxDims is given), then in version 1 five reserved
+// bytes and in version 2 the dataspace type (H5S_SIMPLE); the sizes and the
+// maxima follow as 8-byte lengths.
+func EncodeDataspaceMessageVersion(dims, maxDims []uint64, version uint8) ([]byte, error) {
 	if len(dims) == 0 {
 		return nil, fmt.Errorf("dimensions cannot be empty (use [1] for scalar)")
 	}
-
+	if len(dims) > maxDataspaceRank {
+		return nil, fmt.Errorf("dataspace rank %d exceeds the maximum %d", len(dims), maxDataspaceRank)
+	}
 	if len(maxDims) > 0 && len(maxDims) != len(dims) {
 		return nil, fmt.Errorf("maxDims length %d must match dims length %d", len(maxDims), len(dims))
 	}
 
-	// Version 1 dataspace message
-	version := uint8(1)
-	dimensionality := uint8(len(dims)) //nolint:gosec // Safe: dimension count limited
-
-	// Flags: bit 0 = 1 if max dimensions present
-	flags := uint8(0)
+	var flags uint8
 	if len(maxDims) > 0 {
-		flags |= 0x01
+		flags |= 0x01 // H5S_VALID_MAX
 	}
 
-	// Calculate message size
-	// Version (1) + Dimensionality (1) + Flags (1) + Reserved (5) = 8 bytes header
-	// Dimensions: dimensionality * 8 bytes
-	// Max Dimensions: dimensionality * 8 bytes (if present)
-	headerSize := 8
-	dimsSize := int(dimensionality) * 8
-	maxDimsSize := 0
-	if len(maxDims) > 0 {
-		maxDimsSize = int(dimensionality) * 8
+	buf := make([]byte, 0, 8+16*len(dims))
+	buf = append(buf, version, uint8(len(dims)), flags) //nolint:gosec // G115: rank <= 32, checked above
+	switch version {
+	case DataspaceVersion1:
+		buf = append(buf, 0, 0, 0, 0, 0)
+	case DataspaceVersion2:
+		buf = append(buf, byte(DataspaceSimple))
+	default:
+		return nil, fmt.Errorf("dataspace message version %d is not 1 or 2", version)
 	}
 
-	messageSize := headerSize + dimsSize + maxDimsSize
-	buf := make([]byte, messageSize)
-
-	offset := 0
-
-	// Version
-	buf[offset] = version
-	offset++
-
-	// Dimensionality
-	buf[offset] = dimensionality
-	offset++
-
-	// Flags
-	buf[offset] = flags
-	offset++
-
-	// Reserved (5 bytes, all zeros)
-	offset += 5
-
-	// Dimensions (8 bytes each, little-endian)
 	for _, dim := range dims {
-		binary.LittleEndian.PutUint64(buf[offset:offset+8], dim)
-		offset += 8
+		buf = binary.LittleEndian.AppendUint64(buf, dim)
 	}
-
-	// Max Dimensions (if present)
-	if len(maxDims) > 0 {
-		for _, maxDim := range maxDims {
-			binary.LittleEndian.PutUint64(buf[offset:offset+8], maxDim)
-			offset += 8
-		}
+	for _, maxDim := range maxDims {
+		buf = binary.LittleEndian.AppendUint64(buf, maxDim)
 	}
 
 	return buf, nil

@@ -23,6 +23,27 @@ const (
 	FilterLZF         FilterID = 32000 // LZF compression (PyTables/h5py)
 )
 
+// filterReserved is the first filter ID outside the library's own range
+// (H5Z_FILTER_RESERVED, H5Zpublic.h:93); version 2 of the pipeline message
+// stores no name for filters below it (H5Opline.c:300).
+const filterReserved FilterID = 256
+
+// Filter flags of the pipeline message (H5Zpublic.h:121-125). An optional
+// filter may fail on a chunk, which is then stored unfiltered and marked in
+// the chunk's filter mask; a mandatory one fails the write.
+const (
+	FilterFlagMandatory uint16 = 0x0000 // H5Z_FLAG_MANDATORY
+	FilterFlagOptional  uint16 = 0x0001 // H5Z_FLAG_OPTIONAL
+)
+
+// Filter pipeline message versions (H5Oprivate.h:741-747) and the version
+// H5O_pline_set_version picks for the file's low bound (H5Opline.c:85-93):
+// version 1 for the earliest format, version 2 from the 1.8 format on.
+const (
+	PipelineVersion1 uint8 = 1
+	PipelineVersion2 uint8 = 2
+)
+
 // Filter interface for data transformation.
 // Filters are applied in sequence during write (e.g., Shuffle → GZIP → Fletcher32)
 // and reversed during read (Fletcher32 → GZIP → Shuffle).
@@ -123,89 +144,91 @@ func (fp *FilterPipeline) Count() int {
 	return len(fp.filters)
 }
 
-// EncodePipelineMessage encodes the filter pipeline as an HDF5 Pipeline message (0x000B).
-// This message is stored in the dataset's object header to describe which filters
-// are applied to the data.
+// EncodePipelineMessage encodes the filter pipeline as an HDF5 filter
+// pipeline message (0x000B) of the given version, byte for byte as
+// H5O__pline_encode writes it (H5Opline.c:267-350):
 //
-// Returns the encoded message bytes ready to be written to the object header.
-// Returns an error if the pipeline is empty.
-func (fp *FilterPipeline) EncodePipelineMessage() ([]byte, error) {
+//   - header: version, number of filters and, in version 1 only, six reserved
+//     zero bytes;
+//   - per filter: ID, name length, flags, number of client data values, the
+//     NUL-terminated name and the client data values. Version 1 pads the name
+//     to a multiple of 8 bytes (and stores the padded length) and adds a zero
+//     value after an odd number of values; version 2 does neither and stores
+//     no name length or name for a filter below 256 (H5Opline.c:300).
+//
+// It returns an error for an empty pipeline, more filters than the format
+// allows or an unknown version.
+func (fp *FilterPipeline) EncodePipelineMessage(version uint8) ([]byte, error) {
 	if fp.IsEmpty() {
 		return nil, errors.New("empty filter pipeline")
 	}
-
-	// Pipeline message format (version 1):
-	// Bytes 0:    Version (1 byte) = 1
-	// Bytes 1:    Number of filters (1 byte)
-	// Bytes 2-7:  Reserved (6 bytes, must be 0)
-	//
-	// For each filter:
-	//   Filter ID (2 bytes)
-	//   Name length (2 bytes) - padded length, 0 if no name
-	//   Flags (2 bytes)
-	//   Number of CD values (2 bytes)
-	//   Name (null-terminated, padded to 8-byte boundary) - only if name length > 0
-	//   CD values (4 bytes each), followed by 4 pad bytes if the count is odd
-	//
-	// Version 2 has a different body layout (no reserved bytes, no name for
-	// filter IDs < 256); version 1 is readable by every HDF5 release.
-
-	buf := make([]byte, 0, 8+len(fp.filters)*32) // Pre-allocate for header + filters
-	header := make([]byte, 8)
-	header[0] = 1                     // Version 1
-	header[1] = byte(len(fp.filters)) //nolint:gosec // G115: filter count bounded by HDF5 format
-	// Reserved bytes 2-7 are already zero
-	buf = append(buf, header...)
-
-	for _, filter := range fp.filters {
-		filterBuf := encodeFilter(filter)
-		buf = append(buf, filterBuf...)
+	if version != PipelineVersion1 && version != PipelineVersion2 {
+		return nil, fmt.Errorf("filter pipeline message version %d is not 1 or 2", version)
+	}
+	if len(fp.filters) > maxFilters {
+		return nil, fmt.Errorf("filter pipeline has %d filters, the format allows %d", len(fp.filters), maxFilters)
 	}
 
+	buf := make([]byte, 0, 8+len(fp.filters)*32)
+	buf = append(buf, version, byte(len(fp.filters))) //nolint:gosec // G115: at most maxFilters, checked above
+	if version == PipelineVersion1 {
+		buf = append(buf, 0, 0, 0, 0, 0, 0) // reserved
+	}
+	for _, filter := range fp.filters {
+		var err error
+		if buf, err = appendFilter(buf, filter, version); err != nil {
+			return nil, err
+		}
+	}
 	return buf, nil
 }
 
-// encodeFilter encodes a single filter for the pipeline message.
-func encodeFilter(f Filter) []byte {
+// maxFilters is H5Z_MAX_NFILTERS (H5Zpublic.h:111): the C library holds no
+// more filters in one pipeline.
+const maxFilters = 32
+
+// appendFilter appends the encoding of filter f in a pipeline message of the
+// given version to buf (H5Opline.c:292-348).
+func appendFilter(buf []byte, f Filter, version uint8) ([]byte, error) {
 	flags, cdValues := f.Encode()
-	name := f.Name()
-	nameLen := uint16(len(name)) //nolint:gosec // G115: Filter names are short (<256), always fit in uint16
+	if len(cdValues) > 0xFFFF {
+		return nil, fmt.Errorf("filter %s has %d client data values, the format allows 65535", f.Name(), len(cdValues))
+	}
 
-	// Padded name length: null terminator included, aligned to 8-byte boundary.
-	// Version 1 stores the padded length in the name-length field.
-	var paddedNameLen uint16
+	// The name is written NUL-terminated; version 1 pads it to 8 bytes and
+	// stores the padded length (H5O_ALIGN_OLD), version 2 writes none for the
+	// library's own filters.
+	var name string
+	if version == PipelineVersion1 || f.ID() >= filterReserved {
+		name = f.Name()
+	}
+	nameLen := 0
+	if name != "" {
+		nameLen = len(name) + 1
+	}
+	storedNameLen := nameLen
+	if version == PipelineVersion1 {
+		storedNameLen = (nameLen + 7) &^ 7
+	}
+	if storedNameLen > 0xFFFF {
+		return nil, fmt.Errorf("filter name of %d bytes is too long for the pipeline message", len(name))
+	}
+
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(f.ID()))
+	if version == PipelineVersion1 || f.ID() >= filterReserved {
+		buf = binary.LittleEndian.AppendUint16(buf, uint16(storedNameLen))
+	}
+	buf = binary.LittleEndian.AppendUint16(buf, flags)
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(len(cdValues))) //nolint:gosec // G115: <= 0xFFFF, checked above
 	if nameLen > 0 {
-		paddedNameLen = ((nameLen + 1 + 7) / 8) * 8
+		buf = append(buf, name...)
+		buf = append(buf, make([]byte, storedNameLen-len(name))...) // NUL and, in version 1, the padding
 	}
-
-	// CD values are padded to an 8-byte boundary (4 extra bytes if count is odd).
-	cdPad := 0
-	if len(cdValues)%2 != 0 {
-		cdPad = 4
+	for _, v := range cdValues {
+		buf = binary.LittleEndian.AppendUint32(buf, v)
 	}
-
-	bufSize := 8 + int(paddedNameLen) + len(cdValues)*4 + cdPad
-	buf := make([]byte, bufSize)
-
-	// Filter header (8 bytes)
-	binary.LittleEndian.PutUint16(buf[0:2], uint16(f.ID()))
-	binary.LittleEndian.PutUint16(buf[2:4], paddedNameLen)
-	binary.LittleEndian.PutUint16(buf[4:6], flags)
-	binary.LittleEndian.PutUint16(buf[6:8], uint16(len(cdValues))) //nolint:gosec // G115: HDF5 limits CD values array to uint16
-
-	offset := 8
-
-	// Name (null-terminated via zeroed padding)
-	if nameLen > 0 {
-		copy(buf[offset:], name)
-		offset += int(paddedNameLen)
+	if version == PipelineVersion1 && len(cdValues)%2 != 0 {
+		buf = binary.LittleEndian.AppendUint32(buf, 0)
 	}
-
-	// CD values (4 bytes each); trailing pad bytes stay zero.
-	for _, val := range cdValues {
-		binary.LittleEndian.PutUint32(buf[offset:], val)
-		offset += 4
-	}
-
-	return buf
+	return buf, nil
 }
