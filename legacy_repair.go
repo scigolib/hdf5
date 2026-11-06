@@ -46,8 +46,11 @@ func scanForWrite(f *File) error {
 
 // refuseUnrepairableHeaders returns an ErrNeedsRepack error when a scanned
 // version 2 object header or continuation chunk has no valid checksum
-// (WarnHeaderChecksum, WarnHeaderChunkSize) or a datatype is in the encoding
-// of hdf5-go v0.13.9 and earlier (WarnLegacyDatatype). Writing into such a
+// (WarnHeaderChecksum, WarnHeaderChunkSize), a datatype is in the encoding
+// of hdf5-go v0.13.9 and earlier (WarnLegacyDatatype), or an external link
+// is in the layout of hdf5-go v0.14.2 and earlier (WarnLegacyExternalLink:
+// an object header of its own that the C library cannot read, which only a
+// new link replaces). Writing into such a
 // file would leave it no more readable by the C library, and repairing it in
 // place needs every header rewritten, so OpenForWrite refuses before it writes
 // anything. Every dataset header the early datatype encoder came with is a
@@ -57,7 +60,7 @@ func scanForWrite(f *File) error {
 // The decision is made by code (core.Superblock.HasWarning), not from the
 // kept list: a finding suppressed past the warning limit still refuses.
 func refuseUnrepairableHeaders(f *File) error {
-	for _, code := range []WarningCode{WarnHeaderChecksum, WarnHeaderChunkSize, WarnLegacyDatatype} {
+	for _, code := range []WarningCode{WarnHeaderChecksum, WarnHeaderChunkSize, WarnLegacyDatatype, WarnLegacyExternalLink} {
 		if !f.sb.HasWarning(core.WarningCode(code)) {
 			continue
 		}

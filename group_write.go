@@ -472,6 +472,7 @@ func (fw *FileWriter) CreateDenseGroup(name string, links map[string]string) err
 	dgw := writer.NewDenseGroupWriter(name)
 
 	// Add all links
+	targets := make([]uint64, 0, len(links))
 	for linkName, targetPath := range links {
 		// Resolve target path to object header address
 		targetAddr, err := fw.resolveObjectAddress(targetPath)
@@ -483,18 +484,64 @@ func (fw *FileWriter) CreateDenseGroup(name string, links map[string]string) err
 		if err != nil {
 			return fmt.Errorf("failed to add link %s: %w", linkName, err)
 		}
+		targets = append(targets, targetAddr)
+	}
+
+	// Each hard link counts one reference of its target, as H5L__link_cb
+	// does through H5O_link (H5L.c, H5Oint.c); otherwise deleting the
+	// target's other link would free an object the new group still names.
+	if err := fw.adjustRefCounts(targets, 1); err != nil {
+		return err
+	}
+	undo := func(cause error) error {
+		if rbErr := fw.adjustRefCounts(targets, -1); rbErr != nil {
+			return errors.Join(cause, fmt.Errorf("restore reference counts: %w", rbErr))
+		}
+		return cause
 	}
 
 	// Write dense group
 	ohAddr, err := dgw.WriteToFile(fw.writer, fw.writer.Allocator(), fw.file.sb)
 	if err != nil {
-		return fmt.Errorf("failed to write dense group: %w", err)
+		return undo(fmt.Errorf("failed to write dense group: %w", err))
 	}
 
 	if err := fw.linkToParent(parent, childName, ohAddr); err != nil {
-		return fw.discardUnlinkedObject(ohAddr, fmt.Errorf("failed to link to parent: %w", err))
+		return undo(fw.discardUnlinkedObject(ohAddr, fmt.Errorf("failed to link to parent: %w", err)))
 	}
 
+	return nil
+}
+
+// adjustRefCounts adds delta (+1 or -1) to the reference count of the object
+// at each address of addrs, once per occurrence, as CreateHardLink does for
+// one link. On a failure the counts already changed are restored.
+func (fw *FileWriter) adjustRefCounts(addrs []uint64, delta int) error {
+	apply := func(addr uint64, d int) error {
+		oh, err := core.ReadObjectHeader(fw.writer, addr, fw.file.sb)
+		if err != nil {
+			return fmt.Errorf("read object header at 0x%X: %w", addr, err)
+		}
+		if d > 0 {
+			oh.IncrementReferenceCount()
+		} else {
+			oh.DecrementReferenceCount()
+		}
+		if err := writeObjectHeaderWithRefCount(fw, addr, oh); err != nil {
+			return fmt.Errorf("update the reference count at 0x%X: %w", addr, err)
+		}
+		return nil
+	}
+	for i, addr := range addrs {
+		if err := apply(addr, delta); err != nil {
+			for _, done := range addrs[:i] {
+				if rbErr := apply(done, -delta); rbErr != nil {
+					return errors.Join(err, rbErr)
+				}
+			}
+			return err
+		}
+	}
 	return nil
 }
 

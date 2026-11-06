@@ -343,9 +343,11 @@ func (fw *FileWriter) resolveSoftLink(linkAddr uint64, visitedPaths map[string]b
 //
 // Behavior:
 //   - Validates all paths
-//   - Creates link message with external link type
-//   - Stores external file name and object path
-//   - Adds link entry in parent group's symbol table
+//   - Stores the link as a link message of type 64 in the parent group, with
+//     the value H5Lcreate_external builds (H5L.c:644-656)
+//   - A symbol table cannot hold an external link, so a parent group in the
+//     symbol table format is first converted to the 1.8 format, its existing
+//     links kept, as H5G_obj_insert does (H5Gobj.c:512-552)
 //   - No file existence check (lazy resolution)
 //
 // Security:
@@ -353,9 +355,7 @@ func (fw *FileWriter) resolveSoftLink(linkAddr uint64, visitedPaths map[string]b
 //   - File path stored as-is (absolute or relative)
 //
 // Limitations:
-//   - Symbol table format only (dense groups not yet supported)
 //   - No external link resolution yet (reading external links not implemented)
-//   - No file caching or performance optimization
 //
 // HDF5 Spec: Section IV.A.2.f "Link Message" - Type 64 (External Link)
 // Reference: H5Lcreate_external() in H5L.c.
@@ -383,94 +383,24 @@ func (fw *FileWriter) CreateExternalLink(linkPath, fileName, objectPath string) 
 	if err := fw.checkLinkNameFree(parent, linkName); err != nil {
 		return err
 	}
-
-	// Create external link message
-	linkMsg := &core.LinkMessage{
-		Version: 1,
-		Flags:   core.LinkFlagLinkTypeFieldBit | core.LinkFlagCharSetBit, // Bits 3 + 4 set
-		Type:    core.LinkTypeExternal,
-		CharSet: 0, // ASCII
-		Name:    linkName,
-		// LinkValue: file name + object path (will be set below)
+	target := newLinkTarget{extFile: fileName, extPath: objectPath}
+	// The value must encode before the parent is converted.
+	if _, err := core.EncodeExternalLinkValue(fileName, objectPath); err != nil {
+		return fmt.Errorf("invalid external link: %w", err)
 	}
 
-	// Encode external link value
-	// External link format: fileNameLength(2) + fileName + pathLength(2) + path
-	fileNameBytes := []byte(fileName)
-	objectPathBytes := []byte(objectPath)
-
-	// Validate lengths fit in uint16
-	if len(fileNameBytes) > 65535 {
-		return fmt.Errorf("file name too long: %d bytes (max 65535)", len(fileNameBytes))
+	groupAddr, ok := fw.linkMessageGroup(parent)
+	if !ok {
+		if err := fw.convertToLinkMessageGroup(parent); err != nil {
+			return fmt.Errorf("convert group %q to hold an external link: %w", parent, err)
+		}
+		if groupAddr, ok = fw.linkMessageGroup(parent); !ok {
+			return fmt.Errorf("group %q still has a symbol table after its conversion", parent)
+		}
 	}
-	if len(objectPathBytes) > 65535 {
-		return fmt.Errorf("object path too long: %d bytes (max 65535)", len(objectPathBytes))
+	if err := fw.insertLink(groupAddr, linkName, target); err != nil {
+		return fmt.Errorf("failed to add external link to parent group: %w", err)
 	}
-
-	linkValue := make([]byte, 2+len(fileNameBytes)+2+len(objectPathBytes))
-	offset := 0
-
-	// Write file name length (2 bytes)
-	fw.file.sb.Endianness.PutUint16(linkValue[offset:offset+2], uint16(len(fileNameBytes))) //nolint:gosec // Validated above
-	offset += 2
-
-	// Write file name
-	copy(linkValue[offset:], fileNameBytes)
-	offset += len(fileNameBytes)
-
-	// Write object path length (2 bytes)
-	fw.file.sb.Endianness.PutUint16(linkValue[offset:offset+2], uint16(len(objectPathBytes))) //nolint:gosec // Validated above
-	offset += 2
-
-	// Write object path
-	copy(linkValue[offset:], objectPathBytes)
-
-	linkMsg.LinkValue = linkValue
-
-	// Encode link message
-	linkMsgData, err := core.EncodeLinkMessage(linkMsg, fw.file.sb)
-	if err != nil {
-		return fmt.Errorf("failed to encode external link message: %w", err)
-	}
-
-	// Create object header writer for the external link
-	linkOHW := &core.ObjectHeaderWriter{
-		Version: 2, // Use v2 for modern format
-		Flags:   0,
-		Messages: []core.MessageWriter{
-			{
-				Type: core.MsgLinkMessage, // 0x0006 - Link message
-				Data: linkMsgData,
-			},
-		},
-	}
-
-	// Pre-allocate with padding for future attributes.
-	linkOHW.PadToSize(core.MinOHDRAllocSize)
-
-	// Calculate object header size
-	headerSize, err := calculateObjectHeaderSize(linkOHW)
-	if err != nil {
-		return fmt.Errorf("failed to calculate header size: %w", err)
-	}
-
-	// Allocate space for object header
-	linkAddr, err := fw.writer.Allocate(headerSize)
-	if err != nil {
-		return fmt.Errorf("failed to allocate space for external link object header: %w", err)
-	}
-
-	// Write object header
-	_, err = linkOHW.WriteTo(fw.writer, linkAddr)
-	if err != nil {
-		return fmt.Errorf("failed to write external link object header: %w", err)
-	}
-
-	// Add link to parent group's symbol table
-	if err := fw.linkToParent(parent, linkName, linkAddr); err != nil {
-		return fw.discardUnlinkedObject(linkAddr, fmt.Errorf("failed to add external link to parent group: %w", err))
-	}
-
 	return nil
 }
 
