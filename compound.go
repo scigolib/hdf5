@@ -57,7 +57,7 @@ func (dt Datatype) compoundMemberDatatype() (*core.DatatypeMessage, error) {
 		return nil, errors.New("enum datatype constants have no members: use hdf5.EnumType")
 	case Opaque, VLenString, VLenInt32, VLenInt64, VLenFloat32, VLenFloat64, VLenUint32,
 		VLenUint64, VLenUint8:
-		return nil, fmt.Errorf("datatype %d is not supported as a compound member", dt)
+		return nil, fmt.Errorf("datatype %d is not supported as a compound member: %w", dt, ErrNotSupported)
 	default:
 		return nil, fmt.Errorf("unknown datatype %d", dt)
 	}

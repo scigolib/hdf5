@@ -364,64 +364,6 @@ func validateElementStorage(numElements, elemSize uint64, data []byte, what stri
 	return nil
 }
 
-// ReadDatasetInfo returns dataset metadata without reading actual data.
-func ReadDatasetInfo(header *ObjectHeader, sb *Superblock) (*DatasetInfo, error) {
-	var datatypeMsg, dataspaceMsg, layoutMsg *HeaderMessage
-
-	for _, msg := range header.Messages {
-		switch msg.Type {
-		case MsgDatatype:
-			datatypeMsg = msg
-		case MsgDataspace:
-			dataspaceMsg = msg
-		case MsgDataLayout:
-			layoutMsg = msg
-		}
-	}
-
-	if datatypeMsg == nil || dataspaceMsg == nil || layoutMsg == nil {
-		return nil, errors.New("missing required messages")
-	}
-
-	datatype, err := ParseDatatypeMessage(datatypeMsg.Data)
-	if err != nil {
-		return nil, err
-	}
-
-	dataspace, err := ParseDataspaceMessage(dataspaceMsg.Data)
-	if err != nil {
-		return nil, err
-	}
-
-	layout, err := ParseDataLayoutMessage(layoutMsg.Data, sb)
-	if err != nil {
-		return nil, err
-	}
-
-	return &DatasetInfo{
-		Datatype:  datatype,
-		Dataspace: dataspace,
-		Layout:    layout,
-	}, nil
-}
-
-// DatasetInfo holds metadata about a dataset.
-type DatasetInfo struct {
-	Datatype  *DatatypeMessage
-	Dataspace *DataspaceMessage
-	Layout    *DataLayoutMessage
-}
-
-// String returns human-readable dataset info.
-func (di *DatasetInfo) String() string {
-	return fmt.Sprintf(
-		"Dataset: %s, %s, %s",
-		di.Datatype.String(),
-		di.Dataspace.String(),
-		di.Layout.String(),
-	)
-}
-
 // readChunkedData reads every chunk of a chunked dataset into one buffer.
 //
 // The buffer is sized by DatasetDescriptor.ResultSize under the read limit: a

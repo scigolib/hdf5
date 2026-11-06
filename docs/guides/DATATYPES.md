@@ -306,6 +306,107 @@ Record 1:
   Location: Lab B
 ```
 
+**Unsigned members**: unsigned 4- and 8-byte members read as `uint32` and `uint64`.
+v0.14.2 and earlier returned them as `int32` and `int64`, so values above 2^31 (or 2^63)
+read as negative numbers. A type assertion written for the old types now panics: use a type
+switch.
+
+### Writing Compound Datasets
+
+Describe the type with `NewCompoundType` (explicit member offsets and total size, like a C
+struct with padding) or `NewPackedCompoundType` (members one after another, no gaps), create
+the dataset with `FileWriter.CreateCompound` and write one `map[string]any` per element:
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+
+    "github.com/scigolib/hdf5"
+)
+
+func main() {
+    // struct { int64 timestamp; uint32 id; double value; char name[16]; }
+    // laid out without gaps (H5Tpack).
+    ct, err := hdf5.NewPackedCompoundType([]hdf5.CompoundMember{
+        {Name: "timestamp", Type: hdf5.Int64},
+        {Name: "id", Type: hdf5.Uint32},
+        {Name: "value", Type: hdf5.Float64},
+        {Name: "name", Type: hdf5.FixedString{Size: 16}},
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fw, err := hdf5.CreateForWrite("measurements.h5", hdf5.CreateTruncate)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    ds, err := fw.CreateCompound("/measurements", ct, []uint64{2})
+    if err != nil {
+        log.Fatal(err)
+    }
+    err = ds.Write([]map[string]any{
+        {"timestamp": 1500000000, "id": 4000000000, "value": 25.3, "name": "Lab A"},
+        {"timestamp": 1500000060, "id": 7, "value": 26.1, "name": "Lab B"},
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    if err := fw.Close(); err != nil {
+        log.Fatal(err)
+    }
+
+    f, err := hdf5.Open("measurements.h5")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer f.Close()
+
+    f.Walk(func(path string, obj hdf5.Object) {
+        d, ok := obj.(*hdf5.Dataset)
+        if !ok {
+            return
+        }
+        rows, err := d.ReadCompound()
+        if err != nil {
+            log.Fatal(err)
+        }
+        for _, r := range rows {
+            // "id" is an unsigned 4-byte member: it reads as uint32.
+            fmt.Printf("%s: id=%d value=%.1f name=%s\n", path, r["id"].(uint32), r["value"], r["name"])
+        }
+    })
+}
+```
+
+With explicit offsets, `NewCompoundType(size, members)` takes the size of the whole
+compound in bytes and an `Offset` for every member. Gaps and trailing padding are allowed
+and are written as zeros:
+
+```go
+// struct { int32 id; /* 4 bytes padding */ double value; }
+ct, err := hdf5.NewCompoundType(16, []hdf5.CompoundMember{
+    {Name: "id", Offset: 0, Type: hdf5.Int32},
+    {Name: "value", Offset: 8, Type: hdf5.Float64},
+})
+```
+
+Rules (all from the C library's `H5Tinsert`): a name is non-empty and unique, members
+do not overlap and do not extend past the end, and there are between 1 and 65535 of them.
+Member types are the fixed-size scalar `hdf5.Datatype` constants (`Int8` ... `Float64`,
+object and region references), `hdf5.FixedString`, `hdf5.ArrayType`, `hdf5.EnumType` and a
+nested `*hdf5.CompoundType`. A fixed string holds at most `Size-1` bytes unless its padding
+is `PaddingNullPad` or `PaddingSpacePad`. `Write` rejects a value that does not fit its member
+instead of truncating it. `DatasetWriter.WriteRaw` takes the packed little-endian bytes of
+all elements. The godoc of `CreateCompound` lists the accepted Go value for each member type.
+
+`FileWriter.CreateCompoundDataset` (which took an internal type) is deprecated; use
+`CreateCompound`.
+
 ### Nested Compound Types
 
 Compound types can contain other compound types:

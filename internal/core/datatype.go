@@ -155,6 +155,9 @@ func ResolveDatatypeHeaderMessage(r io.ReaderAt, sb *Superblock, msg *HeaderMess
 	if err != nil {
 		return nil, fmt.Errorf("datatype message at 0x%x: %w", msg.Offset, err)
 	}
+	if IsEarlyHDF5GoDatatype(dt) {
+		sb.Warnf(WarnLegacyDatatype, msg.Offset, legacyDatatypeMessage, "datatype message", msg.Offset)
+	}
 
 	return dt, nil
 }
@@ -190,7 +193,7 @@ func (dt *DatatypeMessage) IsFixedPoint() bool {
 // (two's-complement). Per HDF5 spec III.A.1.b the sign bit lives at bit 3
 // of the class bit field. Undefined for non-fixed-point types.
 func (dt *DatatypeMessage) IsSignedFixedPoint() bool {
-	return dt.Class == DatatypeFixed && dt.ClassBitField&0x08 != 0
+	return dt.Class == DatatypeFixed && dt.ClassBitField&flagSigned != 0
 }
 
 // IsString checks if datatype is a string type.
@@ -216,8 +219,7 @@ func (dt *DatatypeMessage) IsVariableString() bool {
 		// - Bits 0-3: Type (0=Sequence, 1=String)
 		// - Bits 4-7: Padding type (for strings)
 		// - Bits 8-11: Character set (for strings, 0=ASCII, 1=UTF-8)
-		vlType := dt.ClassBitField & 0x0F
-		return vlType == 1 // 1 = variable-length string
+		return dt.ClassBitField&nibbleMask == vlenString
 	}
 	return false
 }
@@ -230,7 +232,7 @@ func (dt *DatatypeMessage) IsCompound() bool {
 // GetStringPadding returns the string padding type.
 // 0 = null-terminated, 1 = null-padded, 2 = space-padded.
 func (dt *DatatypeMessage) GetStringPadding() uint8 {
-	return uint8(dt.ClassBitField & 0x0F)
+	return uint8(dt.ClassBitField & nibbleMask)
 }
 
 // String returns human-readable datatype description.
@@ -258,7 +260,7 @@ func (dt *DatatypeMessage) String() string {
 func (dt *DatatypeMessage) GetByteOrder() binary.ByteOrder {
 	// Bit 0 of class bit field indicates byte order for numeric types.
 	// 0 = little-endian, 1 = big-endian.
-	if dt.ClassBitField&0x01 == 0 {
+	if dt.ClassBitField&flagBigEndian == 0 {
 		return binary.LittleEndian
 	}
 	return binary.BigEndian

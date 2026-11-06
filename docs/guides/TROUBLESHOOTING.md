@@ -245,8 +245,9 @@ with h5py.File('original.h5', 'r') as f_in:
 
 **Possible Causes**:
 1. Dataset is actually empty
-2. Unsupported layout (e.g., external storage)
-3. Compression format not supported
+2. External storage that is not enabled (`File.SetExternalFilePrefix`)
+3. Compression format not supported (the read returns an error wrapping `hdf5.ErrNotSupported`)
+4. Storage that was never written reads as the dataset's fill value, not as an empty result
 
 **Debugging**:
 
@@ -271,6 +272,77 @@ if err != nil {
     fmt.Printf("Read %d values\n", len(data))
 }
 ```
+
+### Problem: External Storage Is Refused
+
+**Symptoms**: reading a dataset fails with an error that wraps `hdf5.ErrNotSupported` and
+`fs.ErrPermission` and names `SetExternalFilePrefix`.
+
+**Cause**: The dataset keeps its raw data in external files. They are not opened by
+default, because the names come from the file.
+
+**Solution**: Name the directory they are opened in, usually the one that holds the HDF5
+file (`File.SetExternalFilePrefix`; see [Reading Data](READING_DATA.md#external-raw-data-files)).
+Names that are absolute, climb out with `..` or reach outside through a link are refused
+even then.
+
+### Problem: Read Fails With ErrLimit
+
+**Symptoms**: a read fails with an error that wraps `hdf5.ErrLimit` and names a requested
+size and a limit.
+
+**Cause**: The read would allocate more than `File.ReadLimit()` (4 GiB by default). A chunked
+dataset can legitimately be larger than its file, and corrupt metadata can claim any size, so
+the library refuses before it allocates.
+
+**Solution**: If the file is trusted and the machine has the memory, raise the limit with
+`File.SetReadLimit`. Otherwise read the dataset in parts (`ReadSlice`, `ReadHyperslab` or the
+chunk iterator). See [Reading Data](READING_DATA.md#read-limit).
+
+### Problem: Files Written By Older Versions
+
+**Symptoms**: `File.Warnings()` returns entries such as `legacy superblock checksum` or
+`object header checksum`; h5dump, h5py or MATLAB refuse a file this library opens; or
+`OpenForWrite` fails with an error that wraps `hdf5.ErrNeedsRepack`.
+
+**Cause**: Earlier releases of this library wrote some structures in a form the HDF5 C library
+cannot read. Such files keep reading here, and every finding is reported, never accepted
+silently:
+
+| Written by | What is wrong | `Warnings()` code | `OpenForWrite` |
+|---|---|---|---|
+| v0.13.4 and earlier | metadata checksums are CRC32 instead of Jenkins lookup3 | `WarnLegacySuperblockChecksum`, `WarnLegacyMetadataChecksum` | repaired in place |
+| v0.13.8 and earlier | version 2 object headers carry no checksum | `WarnHeaderChecksum` | refused, `ErrNeedsRepack` |
+| v0.13.9 | version 2 object header chunk size counts its checksum | `WarnHeaderChunkSize` | refused, `ErrNeedsRepack` |
+| v0.13.9 and earlier | integer and floating-point types in an early encoding | `WarnLegacyDatatype` | refused, `ErrNeedsRepack` |
+| v0.14.2 and earlier | dense attribute storage in a non-C layout | `WarnLegacyDenseLayout` | migrated on the first attribute change |
+
+`WarnHeaderChecksum` also appears for a file whose header was damaged after it was written;
+the library cannot tell the two apart, so it reports what it found.
+
+**Solution**:
+
+```go
+f, err := hdf5.Open("old.h5")
+if err != nil {
+    log.Fatal(err)
+}
+defer f.Close()
+
+// Warnings are collected as structures are read: opening and walking finds
+// header and checksum findings; reading attributes and datasets adds the rest.
+f.Walk(func(path string, obj hdf5.Object) {})
+for _, w := range f.Warnings() {
+    fmt.Println(w) // "<code> at 0xADDR: <what was found and how to fix it>"
+}
+```
+
+- Checksum-only findings are repaired by opening the file with `OpenForWrite` and closing it.
+- A file refused with `ErrNeedsRepack` cannot be repaired in place: there is no room in its
+  headers for the missing checksums. Read it with `Open` and write the data into a new file.
+  A `Repack` function that does this for a whole file is planned.
+- A file written by this release has no warnings. Versions v0.13.9 and earlier are retracted
+  for this reason.
 
 ### Problem: String Decoding Issues
 
@@ -308,15 +380,22 @@ for i, str := range strings {
 
 **Error Message**:
 ```
-Error: gzip: invalid header
-Error: unsupported filter: 6
+Error: required filter 6 (...) is not supported: ...
 ```
 
-**Cause**: Unsupported compression format.
+**Cause**: The dataset uses a filter this library has no decoder for. The error wraps
+`hdf5.ErrNotSupported`, so `errors.Is(err, hdf5.ErrNotSupported)` matches it. The file is
+valid HDF5, and the C library reads it. Before v0.14.3 such a dataset returned the
+undecoded bytes as values, without an error.
 
-**Supported**: GZIP/Deflate (filter ID 1)
+**Supported**: deflate (1), shuffle (2), Fletcher32 (3, verified on read), BZIP2 (307),
+LZF (32000)
 
-**Unsupported**: SZIP (2), LZF (32000), BZIP2 (307)
+**Unsupported**: SZIP (4, needs libaec), N-bit (5), scale-offset (6) and third-party
+filters
+
+A filter that is supported but fails on the stored bytes (for example `gzip: invalid header`)
+reports `hdf5.ErrCorrupt`.
 
 **Solution**:
 

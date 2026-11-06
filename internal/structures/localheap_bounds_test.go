@@ -92,10 +92,14 @@ func TestLoadLocalHeap_RejectsUndefinedDataSegmentAddress(t *testing.T) {
 
 // TestLoadLocalHeap_ParsesFreeListHead checks that a valid free-list head
 // (neither H5HL_FREE_NULL nor outside the data segment) is accepted and
-// exposed on the heap.
+// exposed on the heap. The block at the head must hold its two length
+// fields and end inside the segment (H5HLcache.c:239-240, :255-256).
 func TestLoadLocalHeap_ParsesFreeListHead(t *testing.T) {
-	file := buildTestHeapHeader(binary.LittleEndian, 16, 8, testHeapHeaderSize)
-	file = append(file, make([]byte, 16)...)
+	file := buildTestHeapHeader(binary.LittleEndian, 32, 8, testHeapHeaderSize)
+	seg := make([]byte, 32)
+	binary.LittleEndian.PutUint64(seg[8:], 1)   // next: H5HL_FREE_NULL
+	binary.LittleEndian.PutUint64(seg[16:], 24) // size: to the end of the segment
+	file = append(file, seg...)
 	reader := &mockReaderAt{data: file}
 
 	heap, err := LoadLocalHeap(reader, 0, createMockSuperblock())
@@ -103,5 +107,6 @@ func TestLoadLocalHeap_ParsesFreeListHead(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, heap)
 	require.Equal(t, uint64(8), heap.FreeList)
-	require.Len(t, heap.Data, 16)
+	require.Len(t, heap.Data, 32)
+	require.Equal(t, []localHeapFreeBlock{{offset: 8, size: 24}}, heap.free)
 }

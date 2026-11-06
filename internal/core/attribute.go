@@ -13,7 +13,17 @@ import (
 
 // Attribute represents an HDF5 attribute with metadata and data.
 type Attribute struct {
-	Name      string
+	Name string
+
+	// Datatype is the decoded datatype of the attribute. It must be treated
+	// as read-only: when the attribute's datatype is committed (a shared
+	// datatype message), this is the one decoded copy the File keeps for that
+	// committed type, shared by every attribute and dataset that refers to it
+	// (resolveSharedDatatype), so a change would alter how all of them read,
+	// and would race with concurrent reads. Not copying it is deliberate: a
+	// copy per attribute made a file of many references to one large compound
+	// type cost hundreds of KiB per attribute. Dataset.Datatype in the public
+	// package returns a value (DatatypeInfo) instead.
 	Datatype  *DatatypeMessage
 	Dataspace *DataspaceMessage
 	Data      []byte
@@ -484,6 +494,10 @@ func ParseAttributesFromMessages(r io.ReaderAt, messages []*HeaderMessage, sb *S
 		if err != nil {
 			return nil, fmt.Errorf("%w: attribute info message at 0x%x: %w", utils.ErrCorrupt, msg.Offset, err)
 		}
+		if msg.Type == MsgSharedMessageTable {
+			sb.Warnf(WarnLegacyDenseLayout, msg.Offset, legacyDenseLayoutMessage,
+				"attribute info message", msg.Offset, "message ID 0x000F instead of 0x0015")
+		}
 	}
 
 	// Second pass: collect compact attributes
@@ -564,6 +578,9 @@ func parseCompactAttribute(r io.ReaderAt, sb *Superblock, msg *HeaderMessage) (*
 	if err != nil {
 		return nil, err
 	}
+	if IsEarlyHDF5GoDatatype(attr.Datatype) {
+		sb.Warnf(WarnLegacyDatatype, msg.Offset, legacyDatatypeMessage, "attribute message", msg.Offset)
+	}
 
 	// The reader resolves variable-length values in the global heap.
 	attr.reader = r
@@ -614,6 +631,10 @@ func readDenseAttributes(r io.ReaderAt, attrInfo *AttributeInfoMessage, sb *Supe
 		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse attribute %d: %w", i, err)
+		}
+		if IsEarlyHDF5GoDatatype(attr.Datatype) {
+			sb.Warnf(WarnLegacyDatatype, attrInfo.FractalHeapAddr, legacyDatatypeMessage,
+				"an attribute in the dense attribute heap", attrInfo.FractalHeapAddr)
 		}
 
 		// Set reader for variable-length type resolution

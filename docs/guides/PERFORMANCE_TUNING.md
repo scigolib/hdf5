@@ -105,7 +105,7 @@ Result: Compact tree, efficient searches
 - ❌ **Very expensive**: Each deletion triggers node merging, parent updates, disk writes
 - ❌ **10-100x slower** for batch deletion workloads
 
-**No Rebalancing** (this library's default, like C library):
+**No Rebalancing** (`WithBTreeRebalancing(false)`; the default is immediate rebalancing, as in the C library for version 2 B-trees):
 - ✅ **Fast deletions**: Just remove record, no restructuring
 - ❌ B-tree becomes sparse over time
 - ❌ Wastes disk space, slower subsequent operations
@@ -118,15 +118,17 @@ Result: Compact tree, efficient searches
 
 This library offers **4 rebalancing modes**, from simplest to most sophisticated:
 
-### 1. No Rebalancing (Default)
+### 1. No Rebalancing (`WithBTreeRebalancing(false)`)
 
-**What it does**: Never rebalances automatically. B-trees can become sparse.
+**What it does**: Never rebalances automatically. B-trees can become sparse. Without this
+option, every delete rebalances immediately (the C library does the same for version 2
+B-trees).
 
 **When to use**:
 - Append-only workloads (no deletions)
 - Small files (<100MB)
 - Read-heavy workloads where write performance is critical
-- You want **identical behavior to HDF5 C library**
+- You rebalance yourself at the end (`FileWriter.RebalanceAllBTrees`) or never
 
 **Performance**:
 - ✅ **Fastest deletion**: 0% overhead
@@ -136,8 +138,10 @@ This library offers **4 rebalancing modes**, from simplest to most sophisticated
 
 **Example**:
 ```go
-// No options = no rebalancing (default, like C library)
-fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate)
+// No rebalancing (without the option, every delete rebalances immediately)
+fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
+    hdf5.WithBTreeRebalancing(false),
+)
 if err != nil {
     return err
 }
@@ -450,7 +454,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate)
 **Why**:
 - No deletions → B-tree never becomes sparse
 - Rebalancing has zero benefit, only overhead
-- Matches HDF5 C library behavior (users expect this)
+- Nothing to gain from rebalancing
 
 ---
 
@@ -1233,9 +1237,8 @@ go func() {
 ### Comparison with HDF5 C Library
 
 **C Library Behavior**:
-- **Default**: No automatic rebalancing (same as this library's default)
-- **Manual API**: `H5Ocompact()` to trigger manual compaction
-- **Trade-off**: Users responsible for rebalancing
+- **Version 2 B-trees** (dense attributes and links): nodes are merged and redistributed on every delete (`H5B2__remove_internal`, `H5B2internal.c`). This is this library's default too.
+- **Version 1 B-trees** (old-style groups and chunk indexes): never rebalanced (`H5B.c`)
 
 **This Library's Advantage**:
 - **Lazy mode**: Automatic batch rebalancing (10-100x faster than naive approach)
@@ -1243,7 +1246,7 @@ go func() {
 - **Smart mode**: Auto-tuning (not available in C library)
 
 **Compatibility**:
-- Default mode (no rebalancing) → **100% compatible** with C library
+- Default mode (immediate rebalancing) and `WithBTreeRebalancing(false)` → Files readable by C library (standard HDF5 format)
 - Lazy/incremental modes → Files readable by C library (standard HDF5 format)
 - File format unchanged → Interoperability guaranteed
 

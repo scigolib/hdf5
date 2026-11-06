@@ -547,7 +547,6 @@ const snodTotalSize = 8 + snodCapacity*snodEntrySize // 328
 // Used for tracking non-root groups to enable nested dataset creation.
 type GroupMetadata struct {
 	heapAddr      uint64 // Local heap address (stores link names)
-	stNodeAddr    uint64 // Symbol table node address (stores entries)
 	btreeAddr     uint64 // B-tree address (indexes symbol table)
 	headerAddr    uint64 // Object header address (for attribute writing)
 	headerAllocSz uint64 // Original allocation size of the object header
@@ -2255,26 +2254,17 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 		opt(cfg)
 	}
 
-	// Step 1: Open existing HDF5 file for reading (to load structure)
-	f, err := Open(filename)
+	// Step 1: open the file for reading and refuse what cannot be written
+	// before anything is written.
+	f, err := openReadSideForWrite(filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
-	}
-
-	// The write path still addresses the file absolutely: enabling it for a
-	// user block requires the allocator and every write call to apply the base
-	// address too. Refuse instead of corrupting the file.
-	if base := f.sb.BaseAddress; base != 0 {
-		_ = f.Close()
-		return nil, fmt.Errorf("opening a file with a user block (base address %d) for writing is not supported yet", base)
+		return nil, err
 	}
 
 	// Step 2: Create low-level writer for RMW operations
-	var writerMode writer.CreateMode
+	writerMode := writer.ModeReadOnly
 	if mode == OpenReadWrite {
-		writerMode = writer.ModeReadWrite // New mode for RMW
-	} else {
-		writerMode = writer.ModeReadOnly // Read-only mode
+		writerMode = writer.ModeReadWrite
 	}
 
 	// Determine initial offset from superblock
@@ -2285,8 +2275,7 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 
 	fw, err := writer.OpenFileWriter(filename, writerMode, superblockSize)
 	if err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("failed to create writer: %w", err)
+		return nil, errors.Join(fmt.Errorf("failed to create writer: %w", err), f.Close())
 	}
 
 	// The read-side File must see the file through the writer. Its allocator is
@@ -2296,62 +2285,86 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 	// walk the file after it has grown (ADR-003).
 	f.reader = fw
 
-	// Step 3: Extract root group information from existing file
-	rootGroupAddr := f.sb.RootGroup
-	rootBTreeAddr := f.sb.RootBTreeAddr // v0: cached in superblock
-	rootHeapAddr := f.sb.RootHeapAddr   // v0: cached in superblock
-	rootStNodeAddr := uint64(0)
+	fileWriter, err := newFileWriterForExisting(f, fw, filename, cfg, mode)
+	if err != nil {
+		return nil, errors.Join(err, fw.Close(), f.Close())
+	}
+	return fileWriter, nil
+}
+
+// openReadSideForWrite opens filename for reading and refuses, before anything
+// is written, a file this library cannot modify: object headers without a valid
+// checksum (structures of earlier hdf5-go releases, legacy_repair.go) and files
+// with a user block, whose base address the write path does not apply yet.
+func openReadSideForWrite(filename string) (*File, error) {
+	f, err := Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	if err := scanForWrite(f); err != nil {
+		return nil, errors.Join(fmt.Errorf("failed to scan file: %w", err), f.Close())
+	}
+	if err := refuseUnrepairableHeaders(f); err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
+	if base := f.sb.BaseAddress; base != 0 {
+		return nil, errors.Join(
+			fmt.Errorf("opening a file with a user block (base address %d) for writing: %w", base, ErrNotSupported),
+			f.Close())
+	}
+	return f, nil
+}
+
+// newFileWriterForExisting repairs same-size legacy checksums (read-write mode
+// only, before any other write) and builds the FileWriter of an existing file:
+// the root group's symbol table, the space of its header and the groups the
+// file already holds. The caller closes f and fw when it fails.
+func newFileWriterForExisting(f *File, fw *writer.FileWriter, filename string, cfg *FileWriteConfig, mode OpenMode) (*FileWriter, error) {
+	// Same-size repairs first: CRC32 checksums of hdf5-go v0.13.4 and earlier
+	// become lookup3 in place, before any other write.
+	if mode == OpenReadWrite {
+		if err := repairLegacyChecksums(f, fw.Reader(), fw); err != nil {
+			return nil, fmt.Errorf("failed to repair legacy checksums: %w", err)
+		}
+	}
 
 	// For v2/v3 superblocks the B-tree and local-heap addresses are NOT
 	// stored in the superblock — they live inside the root group's object
 	// header Symbol Table message. Read them the same way the read path
 	// does (see group.go:292-298).
-	reader := fw.Reader()
-	rootOH, ohErr := core.ReadObjectHeader(reader, rootGroupAddr, f.sb)
-	if ohErr != nil {
-		_ = fw.Close()
-		_ = f.Close()
-		return nil, fmt.Errorf("failed to read root group object header: %w", ohErr)
+	rootGroupAddr := f.sb.RootGroup
+	rootOH, err := core.ReadObjectHeader(fw.Reader(), rootGroupAddr, f.sb)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read root group object header: %w", err)
 	}
+	rootBTreeAddr, rootHeapAddr := symbolTableAddrs(rootOH, f.sb, f.sb.RootBTreeAddr, f.sb.RootHeapAddr)
 
-	if rootBTreeAddr == 0 || rootHeapAddr == 0 {
-		for _, msg := range rootOH.Messages {
-			// The symbol table message holds two addresses of the file's
-			// offset size (H5Ostab.c:H5O__stab_decode).
-			if off := int(f.sb.OffsetSize); msg.Type == core.MsgSymbolTable && len(msg.Data) >= 2*off {
-				rootBTreeAddr = readAddressLE(msg.Data[:off])
-				rootHeapAddr = readAddressLE(msg.Data[off : 2*off])
-				break
-			}
-		}
-	}
-
-	// Step 4: Create FileWriter with loaded structures
 	fileWriter := &FileWriter{
-		file:           f,
-		writer:         fw,
-		filename:       filename,
-		config:         cfg,
-		rootGroupAddr:  rootGroupAddr,
-		rootBTreeAddr:  rootBTreeAddr,
-		rootHeapAddr:   rootHeapAddr,
-		rootStNodeAddr: rootStNodeAddr,
-		groups:         make(map[string]*GroupMetadata),
-		headerAllocs:   make(map[uint64]uint64),
+		file:          f,
+		writer:        fw,
+		filename:      filename,
+		config:        cfg,
+		rootGroupAddr: rootGroupAddr,
+		rootBTreeAddr: rootBTreeAddr,
+		rootHeapAddr:  rootHeapAddr,
+		groups:        make(map[string]*GroupMetadata),
+		headerAllocs:  make(map[uint64]uint64),
 	}
-
 	fileWriter.globalHeapWriter = newGlobalHeapWriter(fileWriter)
 
 	// The root header may only be rewritten within the space of its chunk 0
 	// on disk (H5Ocache.c:1012-1140 decode its size from the prefix).
 	rootSpace, err := readChunk0Size(fileWriter, rootGroupAddr)
 	if err != nil {
-		_ = fw.Close()
-		_ = f.Close()
 		return nil, fmt.Errorf("failed to read root group object header size: %w", err)
 	}
 	fileWriter.rootHeaderAllocSz = rootSpace
 
+	// Groups the file already holds, so objects can be added to them
+	// (CreateGroup registers the groups it creates the same way).
+	if err := fileWriter.loadExistingGroups(); err != nil {
+		return nil, fmt.Errorf("failed to load groups: %w", err)
+	}
 	return fileWriter, nil
 }
 
@@ -3043,8 +3056,11 @@ func createRootGroupStructureV0(fw *writer.FileWriter) (*rootGroupInfo, error) {
 func writeSymbolTableNodeAt(fw *writer.FileWriter, addr uint64, offsetSize int) error {
 	rootStNode := structures.NewSymbolTableNode(snodCapacity) // 2*K where K=4 (GroupLeafNodeK)
 
+	// sizeof_size of every file this writer creates (snodEntrySize assumes 8/8).
+	const lengthSize = 8
+
 	// Write symbol table node (empty initially)
-	if err := rootStNode.WriteAt(fw, addr, uint8(offsetSize), snodCapacity, binary.LittleEndian); err != nil { //nolint:gosec // Safe: offsetSize validated to be 8
+	if err := rootStNode.WriteAt(fw, addr, uint8(offsetSize), lengthSize, snodCapacity, binary.LittleEndian); err != nil { //nolint:gosec // Safe: offsetSize validated to be 8
 		return fmt.Errorf("failed to write symbol table node: %w", err)
 	}
 
@@ -3078,8 +3094,11 @@ func createSymbolTableNode(fw *writer.FileWriter, offsetSize int) (uint64, error
 		return 0, fmt.Errorf("failed to allocate root symbol table node: %w", err)
 	}
 
+	// sizeof_size of every file this writer creates (snodEntrySize assumes 8/8).
+	const lengthSize = 8
+
 	// Write symbol table node (empty initially)
-	if err := rootStNode.WriteAt(fw, rootStNodeAddr, uint8(offsetSize), snodCapacity, binary.LittleEndian); err != nil { //nolint:gosec // Safe: offsetSize validated to be 8
+	if err := rootStNode.WriteAt(fw, rootStNodeAddr, uint8(offsetSize), lengthSize, snodCapacity, binary.LittleEndian); err != nil { //nolint:gosec // Safe: offsetSize validated to be 8
 		return 0, fmt.Errorf("failed to write root symbol table node: %w", err)
 	}
 
@@ -3182,5 +3201,6 @@ func writeRootGroupHeader(fw *writer.FileWriter, btreeAddr, heapAddr uint64, off
 // errCommittedDatatypeData refuses data writes to a dataset opened with
 // OpenDataset whose datatype is a committed (shared) datatype: the library
 // does not resolve committed datatypes yet, so it does not know the element
-// layout. Attributes of such a dataset can still be written.
-var errCommittedDatatypeData = errors.New("dataset has a committed (shared) datatype: writing its data is not supported yet")
+// layout. Attributes of such a dataset can still be written. The file is valid
+// HDF5, so the error wraps ErrNotSupported.
+var errCommittedDatatypeData = fmt.Errorf("writing the data of a dataset with a committed (shared) datatype: %w", ErrNotSupported)

@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/scigolib/hdf5/internal/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -93,7 +92,7 @@ func TestSymbolTableNode_WriteAt(t *testing.T) {
 		buf := &bytes.Buffer{}
 		bufAt := newBytesWriterAt(buf)
 
-		err := node.WriteAt(bufAt, 0, 8, 32, binary.LittleEndian)
+		err := node.WriteAt(bufAt, 0, 8, 8, 32, binary.LittleEndian)
 		require.NoError(t, err)
 
 		data := buf.Bytes()
@@ -135,7 +134,7 @@ func TestSymbolTableNode_WriteAt(t *testing.T) {
 		buf := &bytes.Buffer{}
 		bufAt := newBytesWriterAt(buf)
 
-		err := node.WriteAt(bufAt, 0, 8, 32, binary.LittleEndian)
+		err := node.WriteAt(bufAt, 0, 8, 8, 32, binary.LittleEndian)
 		require.NoError(t, err)
 
 		data := buf.Bytes()
@@ -186,7 +185,7 @@ func TestSymbolTableNode_WriteAt(t *testing.T) {
 		buf := &bytes.Buffer{}
 		bufAt := newBytesWriterAt(buf)
 
-		err := node.WriteAt(bufAt, 0, 8, 32, binary.LittleEndian)
+		err := node.WriteAt(bufAt, 0, 8, 8, 32, binary.LittleEndian)
 		require.NoError(t, err)
 
 		// Read it back
@@ -279,33 +278,40 @@ func (bwa *bytesWriterAt) WriteAt(p []byte, off int64) (n int, err error) {
 // TestSymbolTableNode_ScratchPadRoundTrip verifies that cache-type-specific
 // scratch-pad data survives a write→parse round trip: cached STAB addresses
 // (type 1) and soft-link target offsets (type 2). Type 0 keeps zero scratch.
+// It runs for every sizeof_addr/sizeof_size pair, so the writer's entry width
+// (sizeof_size + sizeof_addr + 24, H5G_SIZEOF_ENTRY) must match the reader's.
 func TestSymbolTableNode_ScratchPadRoundTrip(t *testing.T) {
-	node := NewSymbolTableNode(8)
-	entries := []SymbolTableEntry{
-		{LinkNameOffset: 8, ObjectAddress: 0x1000, CacheType: 0},
-		{LinkNameOffset: 16, ObjectAddress: 0x2000, CacheType: 1,
-			CachedBTreeAddr: 0x3000, CachedHeapAddr: 0x4000},
-		{LinkNameOffset: 24, ObjectAddress: 0xFFFFFFFFFFFFFFFF,
-			CacheType: CacheTypeSoftLink, CachedSoftLinkOffset: 42},
+	for _, p := range sizePairs {
+		node := NewSymbolTableNode(8)
+		entries := []SymbolTableEntry{
+			{LinkNameOffset: 8, ObjectAddress: 0x1000, CacheType: 0},
+			{LinkNameOffset: 16, ObjectAddress: 0x2000, CacheType: 1,
+				CachedBTreeAddr: 0x3000, CachedHeapAddr: 0x4000},
+			{LinkNameOffset: 24, ObjectAddress: undefinedAddress,
+				CacheType: CacheTypeSoftLink, CachedSoftLinkOffset: 42},
+		}
+		for _, e := range entries {
+			require.NoError(t, node.AddEntry(e))
+		}
+
+		buf := &bytes.Buffer{}
+		require.NoError(t, node.WriteAt(newBytesWriterAt(buf), 0, uint8(p.a), uint8(p.s), 8, binary.LittleEndian))
+		require.Len(t, buf.Bytes(), 8+8*(p.s+p.a+24), "addr %d size %d", p.a, p.s)
+
+		sb := testSB(uint8(p.a), uint8(p.s))
+		parsed, err := ParseSymbolTableNode(&mockReaderAt{data: buf.Bytes()}, 0, sb)
+		require.NoError(t, err, "addr %d size %d", p.a, p.s)
+		require.Len(t, parsed.Entries, 3)
+
+		require.Equal(t, entries[0], parsed.Entries[0], "addr %d size %d", p.a, p.s)
+
+		require.Equal(t, uint64(16), parsed.Entries[1].LinkNameOffset)
+		require.Equal(t, uint32(1), parsed.Entries[1].CacheType)
+		require.Equal(t, uint64(0x3000), parsed.Entries[1].CachedBTreeAddr)
+		require.Equal(t, uint64(0x4000), parsed.Entries[1].CachedHeapAddr)
+
+		require.True(t, parsed.Entries[2].IsSoftLink())
+		require.Equal(t, undefinedAddress, parsed.Entries[2].ObjectAddress)
+		require.Equal(t, uint32(42), parsed.Entries[2].CachedSoftLinkOffset)
 	}
-	for _, e := range entries {
-		require.NoError(t, node.AddEntry(e))
-	}
-
-	buf := &bytes.Buffer{}
-	require.NoError(t, node.WriteAt(newBytesWriterAt(buf), 0, 8, 8, binary.LittleEndian))
-
-	sb := &core.Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian}
-	parsed, err := ParseSymbolTableNode(&mockReaderAt{data: buf.Bytes()}, 0, sb)
-	require.NoError(t, err)
-	require.Len(t, parsed.Entries, 3)
-
-	require.Equal(t, entries[0], parsed.Entries[0])
-
-	require.Equal(t, uint32(1), parsed.Entries[1].CacheType)
-	require.Equal(t, uint64(0x3000), parsed.Entries[1].CachedBTreeAddr)
-	require.Equal(t, uint64(0x4000), parsed.Entries[1].CachedHeapAddr)
-
-	require.True(t, parsed.Entries[2].IsSoftLink())
-	require.Equal(t, uint32(42), parsed.Entries[2].CachedSoftLinkOffset)
 }

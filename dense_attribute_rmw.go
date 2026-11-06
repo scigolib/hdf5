@@ -323,8 +323,22 @@ func (st *denseAttributeStorage) remove(name string, rebalance bool) error {
 }
 
 // flush writes the heap and the indexes back in place, and the attribute info
-// message when it changed.
+// message when it changed. Every check runs before the first write, so a
+// corrupt attribute info message fails the operation without touching the file.
 func (st *denseAttributeStorage) flush(fw *FileWriter, sb *core.Superblock) error {
+	var info []byte
+	if st.infoDirty {
+		// The message keeps its size: only the maximum creation index and the
+		// message ID change, so it is patched where it is.
+		info = append([]byte(nil), st.msg.Data...)
+		if st.info.Flags&ainfoTrackCorder != 0 {
+			if len(info) < ainfoMaxCrtIdxOffset+2 {
+				return fmt.Errorf("attribute info message of %d bytes: %w", len(info), utils.ErrCorrupt)
+			}
+			binary.LittleEndian.PutUint16(info[ainfoMaxCrtIdxOffset:], uint16(st.info.MaxCreationIndex)) //nolint:gosec // at most 65535
+		}
+	}
+
 	if err := st.heap.WriteAt(fw.writer, sb); err != nil {
 		return fmt.Errorf("failed to write updated heap: %w", err)
 	}
@@ -336,20 +350,10 @@ func (st *denseAttributeStorage) flush(fw *FileWriter, sb *core.Superblock) erro
 			return fmt.Errorf("failed to write attribute creation order index: %w", err)
 		}
 	}
-	if !st.infoDirty {
+	if info == nil {
 		return nil
 	}
-
-	// The message keeps its size: only the maximum creation index and the
-	// message ID change, so it is patched where it is.
-	data := append([]byte(nil), st.msg.Data...)
-	if st.info.Flags&ainfoTrackCorder != 0 {
-		if len(data) < ainfoMaxCrtIdxOffset+2 {
-			return fmt.Errorf("attribute info message of %d bytes: %w", len(data), utils.ErrCorrupt)
-		}
-		binary.LittleEndian.PutUint16(data[ainfoMaxCrtIdxOffset:], uint16(st.info.MaxCreationIndex)) //nolint:gosec // at most 65535
-	}
-	if err := fw.patchHeaderMessage(st.objAddr, st.oh, st.msg, core.MsgAttributeInfo, data); err != nil {
+	if err := fw.patchHeaderMessage(st.objAddr, st.oh, st.msg, core.MsgAttributeInfo, info); err != nil {
 		return fmt.Errorf("write attribute info message: %w", err)
 	}
 	return nil

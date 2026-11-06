@@ -371,19 +371,14 @@ func (a *Allocator) Free(offset, size uint64) error {
 		return fmt.Errorf("cannot free zero bytes")
 	}
 
-	// Remove from allocated blocks list.
-	removed := false
+	// Remove from the allocated blocks list. A block not tracked exactly (a
+	// file opened for writing tracks none of its existing objects) is still
+	// added to the free list.
 	for i, b := range a.blocks {
 		if b.Offset == offset && b.Size == size {
 			a.blocks = append(a.blocks[:i], a.blocks[i+1:]...)
-			removed = true
 			break
 		}
-	}
-	if !removed {
-		// Allow freeing sub-blocks that aren't exactly tracked (e.g., chunk data
-		// within a larger allocation). Still add to free list for future reuse.
-		_ = removed
 	}
 
 	// EOF optimization: if freed block is at the end of file, shrink EOF
@@ -399,6 +394,105 @@ func (a *Allocator) Free(offset, size uint64) error {
 	// Add to free list and coalesce with adjacent blocks.
 	a.addToFreeList(offset, size)
 	return nil
+}
+
+// CheckFree reports whether every block of ranges can be freed, without
+// changing the allocator: each has a nonzero size, ends at or before the end
+// of the file, overlaps no free block and no other block of ranges. A caller
+// that frees several blocks as one operation (Delete) checks them first, so a
+// bad range refuses the whole operation before anything is written or freed;
+// Free itself trusts its caller, as H5MF_xfree does.
+//
+// The C library has no such check: H5MF_xfree (H5MF.c:1055-1228) refuses only
+// temporary file space and hands the section to the free-space manager. Here
+// the ranges come from file metadata (ADR-003), and a
+// freed range that overlaps a live object would let a later allocation
+// overwrite it.
+func (a *Allocator) CheckFree(ranges []FreeBlock) error {
+	sorted := make([]FreeBlock, len(ranges))
+	copy(sorted, ranges)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Offset < sorted[j].Offset })
+
+	for i, r := range sorted {
+		if r.Size == 0 {
+			return fmt.Errorf("free of zero bytes at 0x%X", r.Offset)
+		}
+		end := r.Offset + r.Size
+		if end < r.Offset || end > a.nextOffset {
+			return fmt.Errorf("free of [0x%X, +%d) passes the end of the file at 0x%X", r.Offset, r.Size, a.nextOffset)
+		}
+		if i > 0 && sorted[i-1].Offset+sorted[i-1].Size > r.Offset {
+			return fmt.Errorf("free of [0x%X, +%d) overlaps [0x%X, +%d) freed with it",
+				r.Offset, r.Size, sorted[i-1].Offset, sorted[i-1].Size)
+		}
+		// The free list is sorted and coalesced: the first block ending past
+		// r's start is the only one that can overlap it.
+		k := sort.Search(len(a.freeList), func(k int) bool {
+			return a.freeList[k].Offset+a.freeList[k].Size > r.Offset
+		})
+		if k < len(a.freeList) && a.freeList[k].Offset < end {
+			return fmt.Errorf("free of [0x%X, +%d) overlaps free space [0x%X, +%d)",
+				r.Offset, r.Size, a.freeList[k].Offset, a.freeList[k].Size)
+		}
+	}
+
+	return nil
+}
+
+// TryExtend grows the block [addr, addr+size) in place by extra bytes when
+// the space right after it is available, and reports whether it did. Nothing
+// changes when it returns false; the caller then moves the block.
+//
+// It mirrors H5MF_try_extend (H5MF.c:1250): the block is extended when it
+// ends at the end of the file (H5F__try_extend at the EOA, H5MF.c:1314) or
+// when a free section starting at its end is large enough (H5MF.c:1360-1380,
+// the free section shrinks or disappears). The C metadata aggregators have no
+// counterpart here: this allocator keeps no aggregation blocks.
+func (a *Allocator) TryExtend(addr, size, extra uint64) bool {
+	if extra == 0 {
+		return true
+	}
+	end := addr + size
+	if end < addr || end+extra < end {
+		return false // Address arithmetic would wrap: never extendable.
+	}
+
+	if end == a.nextOffset {
+		a.nextOffset = end + extra
+	} else if !a.takeFreeAt(end, extra) {
+		return false
+	}
+
+	// Track the new bytes: grow the allocation that ends at end, or record
+	// them as their own block when the extended range was never tracked (a
+	// structure of a file opened for writing).
+	for i, b := range a.blocks {
+		if b.Offset+b.Size == end {
+			a.blocks[i].Size += extra
+			return true
+		}
+	}
+	a.blocks = append(a.blocks, AllocatedBlock{Offset: end, Size: extra})
+	return true
+}
+
+// takeFreeAt takes the first extra bytes of the free block that starts at
+// addr, when it holds at least that many, and reports whether it did. The
+// free block shrinks or disappears (H5MF.c:1360-1380).
+func (a *Allocator) takeFreeAt(addr, extra uint64) bool {
+	for i, fb := range a.freeList {
+		if fb.Offset != addr || fb.Size < extra {
+			continue
+		}
+		if fb.Size == extra {
+			a.freeList = append(a.freeList[:i], a.freeList[i+1:]...)
+		} else {
+			a.freeList[i].Offset += extra
+			a.freeList[i].Size -= extra
+		}
+		return true
+	}
+	return false
 }
 
 // addToFreeList inserts a free block into the sorted free list and coalesces

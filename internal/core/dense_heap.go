@@ -67,6 +67,10 @@ func readDenseHeapObjects(r io.ReaderAt, sb *Superblock, btreeAddr, heapAddr uin
 	if err != nil {
 		return nil, err
 	}
+	if kind == denseAttributes && h.typ == bt2TypeGroupName {
+		sb.Warnf(WarnLegacyDenseLayout, btreeAddr, legacyDenseLayoutMessage,
+			"attribute name index", btreeAddr, "link name records (B-tree type 5)")
+	}
 	layout := denseRecordLayout[h.typ]
 	if h.rrecSize != layout.size {
 		return nil, fmt.Errorf("%w: v2 B-tree at 0x%X has %d-byte records, type %d records are %d bytes",

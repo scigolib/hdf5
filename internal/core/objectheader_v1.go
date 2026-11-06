@@ -124,15 +124,15 @@ type continuationInfo struct {
 // included, so a cycle cannot loop forever. It also caps the bytes of all
 // blocks at the readable end of the file: distinct blocks lie in the file,
 // so together they cannot be larger, and a chain of many small blocks stays
-// bounded by the file's size.
+// bounded by the file's size (blockBudget, as for the chunk indexes and the
+// fractal heap).
 type continuationWalk struct {
-	seen  map[uint64]bool
-	total uint64
-	limit uint64 // 0: unknown, only repeats are refused.
+	seen   map[uint64]bool
+	budget blockBudget // Limit 0: unknown, only repeats are refused.
 }
 
 func newContinuationWalk(r io.ReaderAt, sb *Superblock, headerAddr uint64) *continuationWalk {
-	return &continuationWalk{seen: map[uint64]bool{headerAddr: true}, limit: dataLimit(r, sb)}
+	return &continuationWalk{seen: map[uint64]bool{headerAddr: true}, budget: blockBudget{limit: dataLimit(r, sb)}}
 }
 
 // admit records a continuation block, or refuses it with utils.ErrCorrupt.
@@ -143,14 +143,7 @@ func (w *continuationWalk) admit(c continuationInfo) error {
 	}
 	w.seen[c.Address] = true
 
-	total, err := utils.SafeAdd(w.total, c.Size)
-	if err != nil || (w.limit > 0 && total > w.limit) {
-		return fmt.Errorf("%w: object header continuation blocks claim more than the file's %d bytes "+
-			"(block of %d bytes at 0x%X)", utils.ErrCorrupt, w.limit, c.Size, c.Address)
-	}
-	w.total = total
-
-	return nil
+	return w.budget.charge(c.Size, c.Address, "object header continuation")
 }
 
 // findContinuations extracts continuation block information from messages.

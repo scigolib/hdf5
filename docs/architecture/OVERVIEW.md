@@ -545,6 +545,7 @@ All errors are detected early:
 - Invalid signature → immediate error
 - Out-of-bounds address → immediate error
 - Unsupported version → immediate error
+- Invalid metadata wraps `ErrCorrupt`, an over-limit read wraps `ErrLimit`, valid HDF5 the library does not read (an undecodable filter, for example) wraps `ErrNotSupported`; callers match them with `errors.Is`
 - Attribute modification errors → clear error messages
 
 ### 3. **Resource Safety**
@@ -625,7 +626,7 @@ func CreateForWrite(filename string, mode CreateMode) (*FileWriter, error) {
 
 ## 📚 References
 
-- [HDF5 Format Specification v3.0](https://docs.hdfgroup.org/hdf5/latest/_f_m_t3.html)
+- [HDF5 Format Specification v3.0](https://docs.hdfgroup.org/documentation/hdf5/latest/_f_m_t3.html)
 - [HDF5 C Library Source](https://github.com/HDFGroup/hdf5) - Reference implementation at `D:\projects\scigolibs\hdf5c\src`
 - [Go Standard Library Design](https://go.dev/blog/package-names)
 

@@ -477,37 +477,23 @@ func BenchmarkLocalHeap_GetString(b *testing.B) {
 
 // --- Write Support Tests ---
 
+// TestNewLocalHeap follows the C library: H5HL_create raises the size hint
+// to H5HL_SIZEOF_FREE (16) and aligns it to 8 (H5HL.c:99-177), and the empty
+// name then takes the first aligned slot (H5Gstab.c:144). An insert only
+// splits a free block whose remainder is at least H5HL_SIZEOF_FREE
+// (H5HL.c:557-590), so a 16-byte segment grows before the empty name fits.
 func TestNewLocalHeap(t *testing.T) {
 	tests := []struct {
 		name         string
 		initialSize  uint64
 		expectedSize uint64
+		wantFree     []localHeapFreeBlock
 	}{
-		{
-			name:         "minimum size",
-			initialSize:  0,
-			expectedSize: 16, // Rounded up to minimum
-		},
-		{
-			name:         "small size",
-			initialSize:  10,
-			expectedSize: 16, // Rounded up to 8-byte alignment
-		},
-		{
-			name:         "aligned size",
-			initialSize:  64,
-			expectedSize: 64, // Already aligned
-		},
-		{
-			name:         "unaligned size",
-			initialSize:  65,
-			expectedSize: 72, // Rounded up to next 8-byte boundary
-		},
-		{
-			name:         "large size",
-			initialSize:  1000,
-			expectedSize: 1000, // Already aligned
-		},
+		{name: "minimum size", initialSize: 0, expectedSize: 32, wantFree: []localHeapFreeBlock{{offset: 8, size: 24}}},
+		{name: "small size", initialSize: 10, expectedSize: 32, wantFree: []localHeapFreeBlock{{offset: 8, size: 24}}},
+		{name: "aligned size", initialSize: 64, expectedSize: 64, wantFree: []localHeapFreeBlock{{offset: 8, size: 56}}},
+		{name: "unaligned size", initialSize: 65, expectedSize: 72, wantFree: []localHeapFreeBlock{{offset: 8, size: 64}}},
+		{name: "large size", initialSize: 1000, expectedSize: 1000, wantFree: []localHeapFreeBlock{{offset: 8, size: 992}}},
 	}
 
 	for _, tt := range tests {
@@ -515,61 +501,34 @@ func TestNewLocalHeap(t *testing.T) {
 			heap := NewLocalHeap(tt.initialSize)
 			require.NotNil(t, heap)
 			require.Equal(t, tt.expectedSize, heap.DataSegmentSize)
-			require.Equal(t, uint64(1), heap.OffsetToHeadFreeList) // H5HL_FREE_NULL
-			require.NotNil(t, heap.strings)
-			require.Equal(t, 1, len(heap.strings)) // Root group empty string at offset 0
+			require.Equal(t, tt.wantFree, heap.free)
+			name, err := heap.GetString(0)
+			require.NoError(t, err)
+			require.Empty(t, name) // the group's empty name at offset 0
 		})
 	}
 }
 
+// TestLocalHeap_AddString: names are stored at 8-byte aligned offsets after
+// the empty name at 0 (H5HL_ALIGN, H5HL.c:557-590). A block whose remainder
+// would be smaller than H5HL_SIZEOF_FREE is not split: AddString reports
+// ErrLocalHeapFull and the caller grows the segment.
 func TestLocalHeap_AddString(t *testing.T) {
 	tests := []struct {
 		name            string
 		heapSize        uint64
 		stringsToAdd    []string
 		expectedOffsets []uint64
-		expectError     bool
+		errAt           int // index of the first string that does not fit; -1 when all fit
 	}{
-		{
-			name:            "single string",
-			heapSize:        64,
-			stringsToAdd:    []string{"hello"},
-			expectedOffsets: []uint64{1}, // offset 0 is root group empty string
-			expectError:     false,
-		},
-		{
-			name:            "multiple strings",
-			heapSize:        64,
-			stringsToAdd:    []string{"first", "second", "third"},
-			expectedOffsets: []uint64{1, 7, 14}, // +1 for root empty string; "first\0" (6), "second\0" (7), "third\0" (6)
-			expectError:     false,
-		},
-		{
-			name:            "empty string",
-			heapSize:        64,
-			stringsToAdd:    []string{""},
-			expectedOffsets: []uint64{1}, // offset 0 is root group empty string
-			expectError:     false,
-		},
-		{
-			name:            "strings with spaces",
-			heapSize:        64,
-			stringsToAdd:    []string{"hello world", "foo bar"},
-			expectedOffsets: []uint64{1, 13}, // +1 for root empty string; "hello world\0" (12)
-			expectError:     false,
-		},
-		{
-			name:         "heap overflow",
-			heapSize:     16, // Very small heap
-			stringsToAdd: []string{"this is a very long string that won't fit"},
-			expectError:  true,
-		},
-		{
-			name:         "multiple strings overflow",
-			heapSize:     20,
-			stringsToAdd: []string{"first", "second", "third"}, // Total: 6+7+6 = 19 bytes (fits)
-			expectError:  false,
-		},
+		{name: "single string", heapSize: 64, stringsToAdd: []string{"hello"}, expectedOffsets: []uint64{8}, errAt: -1},
+		{name: "multiple strings", heapSize: 64, stringsToAdd: []string{"first", "second", "third"}, expectedOffsets: []uint64{8, 16, 24}, errAt: -1},
+		{name: "empty string", heapSize: 64, stringsToAdd: []string{""}, expectedOffsets: []uint64{8}, errAt: -1},
+		// "hello world\0" is 12 bytes, aligned to 16.
+		{name: "strings with spaces", heapSize: 64, stringsToAdd: []string{"hello world", "foo bar"}, expectedOffsets: []uint64{8, 24}, errAt: -1},
+		{name: "heap overflow", heapSize: 16, stringsToAdd: []string{"this is a very long string that won't fit"}, errAt: 0},
+		// 24 bytes: "" leaves a 16-byte block; "first" (8) would leave 8 < H5HL_SIZEOF_FREE.
+		{name: "remainder below free-block size", heapSize: 24, stringsToAdd: []string{"first"}, errAt: 0},
 	}
 
 	for _, tt := range tests {
@@ -579,21 +538,14 @@ func TestLocalHeap_AddString(t *testing.T) {
 
 			for i, str := range tt.stringsToAdd {
 				offset, err := heap.AddString(str)
-
-				if tt.expectError {
-					if err != nil {
-						// Expected error occurred
-						return
-					}
-					// Continue to next string
-					continue
+				if i == tt.errAt {
+					require.ErrorIs(t, err, ErrLocalHeapFull)
+					return
 				}
-
 				require.NoError(t, err)
-				if i < len(tt.expectedOffsets) {
-					require.Equal(t, tt.expectedOffsets[i], offset, "offset mismatch for string %d", i)
-				}
+				require.Equal(t, tt.expectedOffsets[i], offset, "offset mismatch for string %d", i)
 			}
+			require.Equal(t, -1, tt.errAt, "expected string %d not to fit", tt.errAt)
 		})
 	}
 }
@@ -604,21 +556,9 @@ func TestLocalHeap_Size(t *testing.T) {
 		heapSize     uint64
 		expectedSize uint64
 	}{
-		{
-			name:         "minimum heap",
-			heapSize:     16,
-			expectedSize: 32 + 16, // header (32) + data (16)
-		},
-		{
-			name:         "medium heap",
-			heapSize:     128,
-			expectedSize: 32 + 128,
-		},
-		{
-			name:         "large heap",
-			heapSize:     1024,
-			expectedSize: 32 + 1024,
-		},
+		{name: "minimum heap", heapSize: 16, expectedSize: 32 + 32}, // grown to fit "" (TestNewLocalHeap)
+		{name: "medium heap", heapSize: 128, expectedSize: 32 + 128},
+		{name: "large heap", heapSize: 1024, expectedSize: 32 + 1024},
 	}
 
 	for _, tt := range tests {
@@ -629,125 +569,89 @@ func TestLocalHeap_Size(t *testing.T) {
 	}
 }
 
+// TestLocalHeap_WriteTo checks the on-disk image: the prefix
+// (H5HLcache.c:535-600) with the head of the free list, and each free block
+// serialized in the data segment as (next offset, size), both sizeof_size,
+// H5HL_FREE_NULL (1) ending the list (H5HL__fl_serialize, H5HLcache.c:289-315).
 func TestLocalHeap_WriteTo(t *testing.T) {
+	const dataStart = 32 // prefix of 8-byte sizes and addresses
 	tests := []struct {
 		name    string
-		setup   func() (*LocalHeap, []string)
+		setup   func() *LocalHeap
 		address uint64
-		verify  func(*testing.T, []byte, *LocalHeap)
+		verify  func(*testing.T, []byte)
 	}{
 		{
-			name: "empty heap",
-			setup: func() (*LocalHeap, []string) {
-				return NewLocalHeap(64), []string{}
-			},
+			name:    "empty heap",
+			setup:   func() *LocalHeap { return NewLocalHeap(64) },
 			address: 0,
-			verify: func(t *testing.T, data []byte, _ *LocalHeap) {
-				// Verify header
+			verify: func(t *testing.T, data []byte) {
 				require.Equal(t, "HEAP", string(data[0:4]))
-				require.Equal(t, byte(0), data[4]) // Version
-				require.Equal(t, byte(0), data[5]) // Reserved
-				require.Equal(t, byte(0), data[6])
-				require.Equal(t, byte(0), data[7])
-
-				// Verify data segment size
-				dataSegSize := binary.LittleEndian.Uint64(data[8:16])
-				require.Equal(t, uint64(64), dataSegSize)
-
-				// Verify free list offset (should be 1 = NULL)
-				freeListOffset := binary.LittleEndian.Uint64(data[16:24])
-				require.Equal(t, uint64(1), freeListOffset)
-
-				// Verify data segment address
-				dataSegAddr := binary.LittleEndian.Uint64(data[24:32])
-				require.Equal(t, uint64(32), dataSegAddr) // 0 + 32 (header size)
+				require.Equal(t, []byte{0, 0, 0, 0}, data[4:8]) // version 0, reserved
+				require.Equal(t, uint64(64), binary.LittleEndian.Uint64(data[8:16]))
+				require.Equal(t, uint64(8), binary.LittleEndian.Uint64(data[16:24]), "free list head")
+				require.Equal(t, uint64(dataStart), binary.LittleEndian.Uint64(data[24:32]))
+				// The empty name, then the free block {next: NULL, size: 56}.
+				require.Equal(t, make([]byte, 8), data[dataStart:dataStart+8])
+				require.Equal(t, uint64(1), binary.LittleEndian.Uint64(data[dataStart+8:]))
+				require.Equal(t, uint64(56), binary.LittleEndian.Uint64(data[dataStart+16:]))
 			},
 		},
 		{
 			name: "heap with single string",
-			setup: func() (*LocalHeap, []string) {
+			setup: func() *LocalHeap {
 				heap := NewLocalHeap(64)
-				_, _ = heap.AddString("hello")
-				return heap, []string{"hello"}
+				_, err := heap.AddString("hello")
+				require.NoError(t, err)
+				return heap
 			},
 			address: 0,
-			verify: func(t *testing.T, data []byte, _ *LocalHeap) {
-				// Verify header
-				require.Equal(t, "HEAP", string(data[0:4]))
-
-				// Verify root group empty string at offset 0
-				dataStart := 32
-				require.Equal(t, byte(0), data[dataStart]) // Root group empty string
-
-				// Verify data contains "hello\0" at offset 1
-				require.Equal(t, "hello", string(data[dataStart+1:dataStart+6]))
-				require.Equal(t, byte(0), data[dataStart+6]) // Null terminator
+			verify: func(t *testing.T, data []byte) {
+				require.Equal(t, uint64(16), binary.LittleEndian.Uint64(data[16:24]), "free list head")
+				require.Equal(t, "hello\x00\x00\x00", string(data[dataStart+8:dataStart+16]))
+				require.Equal(t, uint64(1), binary.LittleEndian.Uint64(data[dataStart+16:]))
+				require.Equal(t, uint64(48), binary.LittleEndian.Uint64(data[dataStart+24:]))
 			},
 		},
 		{
 			name: "heap with multiple strings",
-			setup: func() (*LocalHeap, []string) {
+			setup: func() *LocalHeap {
 				heap := NewLocalHeap(128)
-				_, _ = heap.AddString("first")
-				_, _ = heap.AddString("second")
-				_, _ = heap.AddString("third")
-				return heap, []string{"first", "second", "third"}
+				for _, s := range []string{"first", "second", "third"} {
+					_, err := heap.AddString(s)
+					require.NoError(t, err)
+				}
+				return heap
 			},
 			address: 0,
-			verify: func(t *testing.T, data []byte, _ *LocalHeap) {
-				// Verify all strings are present (offset 0 = root group empty string)
-				dataStart := 32
-				offset := dataStart
-
-				// Root group empty string at offset 0
-				require.Equal(t, byte(0), data[offset])
-				offset++
-
-				// "first\0"
-				require.Equal(t, "first", string(data[offset:offset+5]))
-				require.Equal(t, byte(0), data[offset+5])
-				offset += 6
-
-				// "second\0"
-				require.Equal(t, "second", string(data[offset:offset+6]))
-				require.Equal(t, byte(0), data[offset+6])
-				offset += 7
-
-				// "third\0"
-				require.Equal(t, "third", string(data[offset:offset+5]))
-				require.Equal(t, byte(0), data[offset+5])
+			verify: func(t *testing.T, data []byte) {
+				require.Equal(t, "first\x00", string(data[dataStart+8:dataStart+14]))
+				require.Equal(t, "second\x00", string(data[dataStart+16:dataStart+23]))
+				require.Equal(t, "third\x00", string(data[dataStart+24:dataStart+30]))
+				require.Equal(t, uint64(32), binary.LittleEndian.Uint64(data[16:24]), "free list head")
 			},
 		},
 		{
 			name: "heap at non-zero address",
-			setup: func() (*LocalHeap, []string) {
+			setup: func() *LocalHeap {
 				heap := NewLocalHeap(64)
-				_, _ = heap.AddString("test")
-				return heap, []string{"test"}
+				_, err := heap.AddString("test")
+				require.NoError(t, err)
+				return heap
 			},
 			address: 1000,
-			verify: func(t *testing.T, data []byte, _ *LocalHeap) {
-				// Verify data segment address accounts for heap address
-				dataSegAddr := binary.LittleEndian.Uint64(data[1024:1032])
-				require.Equal(t, uint64(1032), dataSegAddr) // 1000 + 32
+			verify: func(t *testing.T, data []byte) {
+				require.Equal(t, uint64(1032), binary.LittleEndian.Uint64(data[1024:1032])) // 1000 + 32
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			heap, _ := tt.setup()
-
-			// Create buffer for writing
+			heap := tt.setup()
 			buf := make([]byte, 10000)
-			writer := &mockWriter{data: buf}
-
-			// Write heap
-			err := heap.WriteTo(writer, tt.address)
-			require.NoError(t, err)
-
-			// Verify
-			tt.verify(t, buf, heap)
+			require.NoError(t, heap.WriteTo(&mockWriter{data: buf}, tt.address))
+			tt.verify(t, buf)
 		})
 	}
 }
@@ -826,6 +730,8 @@ func TestLocalHeap_WriteToAndRead(t *testing.T) {
 	}
 }
 
+// TestLocalHeap_AddString_Errors: an aligned name that equals a free block
+// takes it whole; one larger than every block is refused (H5HL.c:557-590).
 func TestLocalHeap_AddString_Errors(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -834,15 +740,17 @@ func TestLocalHeap_AddString_Errors(t *testing.T) {
 		expectError  bool
 	}{
 		{
+			// 24 bytes: "" at 0 leaves one 16-byte block; 15 chars + NUL fill it exactly.
 			name:         "exact fit",
-			heapSize:     19, // "hello\0" (6) + "world\0" (6) + "!\0" (2) = 14, but aligned to 24
-			stringsToAdd: []string{"hello", "world", "!"},
+			heapSize:     24,
+			stringsToAdd: []string{"123456789012345"},
 			expectError:  false,
 		},
 		{
-			name:         "overflow by one byte",
+			// 32 bytes after the growth of NewLocalHeap: one 24-byte block; 24 chars need 32.
+			name:         "overflow",
 			heapSize:     16,
-			stringsToAdd: []string{"1234567890123456"}, // 17 bytes with null
+			stringsToAdd: []string{"123456789012345678901234"},
 			expectError:  true,
 		},
 	}
@@ -853,18 +761,17 @@ func TestLocalHeap_AddString_Errors(t *testing.T) {
 
 			var lastErr error
 			for _, s := range tt.stringsToAdd {
-				_, err := heap.AddString(s)
-				if err != nil {
+				if _, err := heap.AddString(s); err != nil {
 					lastErr = err
 					break
 				}
 			}
 
 			if tt.expectError {
-				require.Error(t, lastErr)
-				require.Contains(t, lastErr.Error(), "local heap is full")
+				require.ErrorIs(t, lastErr, ErrLocalHeapFull)
 			} else {
 				require.NoError(t, lastErr)
+				require.Empty(t, heap.free)
 			}
 		})
 	}

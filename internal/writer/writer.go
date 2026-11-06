@@ -178,6 +178,25 @@ func (w *FileWriter) Allocate(size uint64) (uint64, error) {
 	return w.allocator.Allocate(size)
 }
 
+// TryExtend grows the block [addr, addr+size) in place by extra bytes when the
+// space after it is free, as H5MF_try_extend does (H5MF.c:1250). It reports
+// whether the block was extended; a closed writer never extends.
+func (w *FileWriter) TryExtend(addr, size, extra uint64) bool {
+	if w.file == nil {
+		return false
+	}
+	return w.allocator.TryExtend(addr, size, extra)
+}
+
+// Free returns the block [addr, addr+size) to the allocator, as H5MF_xfree
+// does (H5MF.c).
+func (w *FileWriter) Free(addr, size uint64) error {
+	if w.file == nil {
+		return fmt.Errorf("writer is closed")
+	}
+	return w.allocator.Free(addr, size)
+}
+
 // WriteAt writes data at a specific address in the file.
 // Implements io.WriterAt interface.
 //

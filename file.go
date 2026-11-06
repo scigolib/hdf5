@@ -24,7 +24,7 @@ type File struct {
 	root           *Group
 	visitedBTrees  map[uint64]bool // Track visited B-tree addresses to prevent cycles
 	loadingObjects map[uint64]bool // Objects currently on the load path, to break cycles
-	readLimit      atomic.Uint64   // Bytes a chunked read may allocate; 0 = utils.DefaultReadLimit (read_limit.go).
+	readLimit      atomic.Uint64   // The read limit (SetReadLimit); 0 = utils.DefaultReadLimit (read_limit.go).
 
 	// externalDir is the directory external raw data files are opened in
 	// (SetExternalFilePrefix); nil refuses them, the default.

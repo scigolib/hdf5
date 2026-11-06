@@ -181,7 +181,7 @@ func TestParseV2ContinuationBlock(t *testing.T) {
 
 	// Now parse it back using the reader.
 	r := bytes.NewReader(buf[:size])
-	parsedMsgs, name, err := parseV2ContinuationBlock(r, addr, size, 0, false)
+	parsedMsgs, name, err := parseV2ContinuationBlock(r, nil, addr, size, 0, false)
 	require.NoError(t, err)
 	assert.Empty(t, name)
 	require.Len(t, parsedMsgs, 2)
@@ -197,7 +197,7 @@ func TestParseV2ContinuationBlock(t *testing.T) {
 func TestParseV2ContinuationBlock_TooSmall(t *testing.T) {
 	buf := []byte("OCHK")
 	r := bytes.NewReader(buf)
-	_, _, err := parseV2ContinuationBlock(r, 0, 4, 0, false)
+	_, _, err := parseV2ContinuationBlock(r, nil, 0, 4, 0, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "too small")
 }
@@ -207,7 +207,7 @@ func TestParseV2ContinuationBlock_BadSignature(t *testing.T) {
 	buf := make([]byte, 16)
 	copy(buf, "XXXX")
 	r := bytes.NewReader(buf)
-	_, _, err := parseV2ContinuationBlock(r, 0, 16, 0, false)
+	_, _, err := parseV2ContinuationBlock(r, nil, 0, 16, 0, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid OCHK signature")
 }

@@ -13,11 +13,10 @@ import (
 
 // fileClassification holds the classification of a test file.
 type fileClassification struct {
-	isCorruptFile            bool   // Files intentionally corrupted - expect error handling
-	requiresSpecialDriver    bool   // Files needing special file drivers
-	requiresOldLayoutVersion bool   // Files with layout version 1-2 (HDF5 1.6 era)
-	expectError              bool   // We expect this file to fail (either open or operations)
-	expectErrorReason        string // Why we expect error
+	isCorruptFile         bool   // Files intentionally corrupted - expect error handling
+	requiresSpecialDriver bool   // Files needing special file drivers
+	expectError           bool   // We expect this file to fail (either open or operations)
+	expectErrorReason     string // Why we expect error
 }
 
 // classifyFile determines the classification of a reference test file.
@@ -29,24 +28,15 @@ func classifyFile(name string) fileClassification {
 			strings.Contains(name, "cve_") ||
 			strings.Contains(name, "err_"),
 
-		// Files requiring special file drivers not yet implemented.
-		requiresSpecialDriver: (strings.Contains(name, "family_v16-") && name != "family_v16-000000.h5") ||
-			(strings.Contains(name, "multi_file_v16") && name != "multi_file_v16-s.h5"),
-
-		// Files with older data layout versions (v1-v2, HDF5 1.6 era).
-		requiresOldLayoutVersion: name == "btree_idx_1_6.h5" ||
-			name == "deflate.h5" ||
-			name == "family_v16-000000.h5" ||
-			name == "filespace_1_6.h5" ||
-			name == "fill_old.h5" ||
-			name == "multi_file_v16-s.h5" ||
-			name == "tarrold.h5" ||
-			name == "test_filters_be.h5" ||
-			name == "test_filters_le.h5" ||
-			name == "th5s.h5" ||
-			name == "tlayouto.h5" ||
-			name == "tmtimen.h5" ||
-			name == "tmtimeo.h5",
+		// Members of family and multi files: one logical file split across
+		// several physical files, which needs the family or multi driver. The
+		// superblock's end-of-file address covers the whole logical file, so
+		// opening one member alone fails as C's default sec2 driver does
+		// ("truncated file", H5Fsuper.c:572-577). Version 1-2 data layouts
+		// (the 1.6-era files btree_idx_1_6, deflate, tlayouto, ...) are read
+		// and no longer skipped.
+		requiresSpecialDriver: strings.Contains(name, "family_v16-") ||
+			strings.Contains(name, "multi_file_v16"),
 	}
 
 	// Files that are known to be invalid - even h5dump fails on them.
@@ -64,6 +54,13 @@ func classifyFile(name string) fileClassification {
 		// H5D__chunk_set_sizes does (element-size dim 4 vs datatype size 65525).
 		class.expectErrorReason = "intentionally corrupt: datatype size contradicts the chunk element size (C's test_misc38 expects open to fail)"
 	}
+	if name == "th5s.h5" {
+		class.expectError = true
+		// /dset has a rank-33 dataspace; C refuses ranks above H5S_MAX_RANK (32)
+		// in H5O__sdspace_decode (H5Osdspace.c:137-138), and test_h5s_basic
+		// requires H5Dopen2 to fail on it (test/th5s.c:209-220).
+		class.expectErrorReason = "intentionally invalid: /dset's dataspace rank 33 exceeds H5S_MAX_RANK (C's test_h5s_basic expects H5Dopen2 to fail)"
+	}
 	if name == "memleak_H5O_dtype_decode_helper_H5Odtype.h5" {
 		class.expectError = true
 		// /image carries an attribute whose name runs past the end of its
@@ -78,18 +75,19 @@ func classifyFile(name string) fileClassification {
 
 // shouldSkip returns true if the file should be skipped during testing.
 func (c fileClassification) shouldSkip() bool {
-	return c.requiresSpecialDriver || c.requiresOldLayoutVersion
+	return c.requiresSpecialDriver
 }
 
 // skipReason returns the reason for skipping the file.
 func (c fileClassification) skipReason() string {
 	if c.requiresSpecialDriver {
-		return "requires special file driver"
+		return "member of a family or multi file: needs the family or multi file driver (H5Fsuper.c:572-577)"
 	}
-	return "requires old layout version (v1-v2)"
+	return ""
 }
 
-// TestReference_AllFiles tests all 57 reference files from HDF5 C library.
+// TestReference_AllFiles tests every reference file from the HDF5 C library
+// in testdata/reference.
 // This comprehensive test validates our implementation against the official test suite.
 func TestReference_AllFiles(t *testing.T) {
 	files, err := filepath.Glob("testdata/reference/*.h5")

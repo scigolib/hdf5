@@ -73,8 +73,8 @@ func (d *Dataset) ChunkIteratorWithContext(ctx context.Context) (*ChunkIterator,
 		return nil, errors.New("ChunkIterator only supports chunked datasets; use Read() or ReadSlice() for compact/contiguous datasets")
 	}
 
-	// Get chunk coordinates from B-tree.
-	chunkCoords, err := d.collectChunkCoordinates(desc)
+	// Get chunk coordinates from the chunk index; ctx also bounds this walk.
+	chunkCoords, err := d.collectChunkCoordinates(ctx, desc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to collect chunk coordinates: %w", err)
 	}
@@ -91,11 +91,15 @@ func (d *Dataset) ChunkIteratorWithContext(ctx context.Context) (*ChunkIterator,
 	}, nil
 }
 
-// collectChunkCoordinates retrieves all chunk coordinates from the B-tree,
-// through the validated, bounded walk (DatasetDescriptor.CollectChunks),
-// whose entries count against the file's read limit.
-func (d *Dataset) collectChunkCoordinates(desc *core.DatasetDescriptor) ([][]uint64, error) {
-	allChunks, err := desc.CollectChunks(d.file.reader, d.file.sb, d.file.ReadLimit())
+// collectChunkCoordinates retrieves all chunk coordinates from the chunk
+// index, through the validated, bounded walk
+// (DatasetDescriptor.CollectChunksContext), whose entries count against the
+// file's read limit and which stops when ctx is done.
+func (d *Dataset) collectChunkCoordinates(ctx context.Context, desc *core.DatasetDescriptor) ([][]uint64, error) {
+	if ctx == nil {
+		ctx = context.Background() // Next accepts a nil context too.
+	}
+	allChunks, err := desc.CollectChunksContext(ctx, d.file.reader, d.file.sb, d.file.ReadLimit())
 	if err != nil {
 		return nil, fmt.Errorf("failed to collect chunks: %w", err)
 	}

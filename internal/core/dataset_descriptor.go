@@ -531,7 +531,8 @@ func (d *DatasetDescriptor) iterateBTreeV1(r io.ReaderAt, sb *Superblock, s *chu
 	}
 
 	ndims := len(layout.ChunkSize)
-	root, err := ParseBTreeV1Node(r, layout.DataAddress, sb.OffsetSize, ndims, layout.ChunkSize)
+	budget := newBlockBudget(r, sb)
+	root, err := parseBTreeV1Node(r, layout.DataAddress, sb.OffsetSize, ndims, layout.ChunkSize, budget)
 	if err != nil {
 		return fmt.Errorf("failed to parse chunk B-tree: %w", err)
 	}
@@ -542,14 +543,34 @@ func (d *DatasetDescriptor) iterateBTreeV1(r io.ReaderAt, sb *Superblock, s *chu
 		maxEntries = min(maxEntries, limit/entryBytes)
 	}
 
+	var onNode func(addr uint64) error
+	if s.block != nil {
+		nodeSize := chunkBTreeNodeSize(sb, ndims)
+		onNode = func(addr uint64) error { return s.indexBlock(addr, nodeSize) }
+	}
+
 	rank := ndims - 1
-	return root.walkChunks(r, sb.OffsetSize, layout.ChunkSize, maxEntries, func(e ChunkEntry) error {
+	return root.walkChunks(r, sb.OffsetSize, layout.ChunkSize, maxEntries, budget, onNode, func(e ChunkEntry) error {
 		if e.Key.Scaled[rank] != 0 {
 			return fmt.Errorf("%w: chunk at 0x%X has a nonzero element-size coordinate", utils.ErrCorrupt, e.Address)
 		}
 
 		return s.add(e.Key.Scaled[:rank], e.Address, uint64(e.Key.Nbytes), e.Key.FilterMask)
 	})
+}
+
+// chunkBTreeNodeSize is the size C allocates for every node of a version 1
+// chunk B-tree, whatever its entry count: sizeof_rnode = H5B_SIZEOF_HDR +
+// 2K child addresses + 2K+1 keys (H5B.c:111-114, :1676-1678), with K the
+// file's chunk B-tree K and a key of 4 + 4 + ndims × 8 bytes, ndims counting
+// the element-size dimension (H5Dbtree.c:774-776). H5B_delete frees each node
+// at this size (H5B.c:1580-1638). ndims <= 33 and K < 2^16 keep it small.
+func chunkBTreeNodeSize(sb *Superblock, ndims int) uint64 {
+	os := uint64(sb.OffsetSize)
+	twoK := 2 * uint64(sb.ChunkInternalK)
+	rkey := 4 + 4 + 8*uint64(ndims) //nolint:gosec // G115: ndims is a layout rank, at most 33.
+
+	return 4 + 4 + 2*os + twoK*os + (twoK+1)*rkey
 }
 
 // ChunkBytes returns the byte size of one chunk (the product of the chunk

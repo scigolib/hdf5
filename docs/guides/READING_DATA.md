@@ -239,6 +239,10 @@ if ds, ok := obj.(*hdf5.Dataset); ok {
 }
 ```
 
+Unsigned 4- and 8-byte members come back as `uint32` and `uint64`; earlier versions
+returned them as `int32` and `int64`, so values above 2^31 (or 2^63) read as negative
+numbers. To write compound datasets, see [Datatypes Guide](DATATYPES.md#compound-types).
+
 **Example output**:
 ```
 Compound dataset: /measurements
@@ -293,7 +297,7 @@ if ds, ok := obj.(*hdf5.Dataset); ok {
 ```
 
 `MaxShape()` reports the maximum dimensions (`hdf5.Unlimited` for an extendible
-one). A compound datatype lists its members in `dt.Members` (name, offset, type),
+one). A scalar dataset has rank 0: `Shape()` returns an empty slice. A compound datatype lists its members in `dt.Members` (name, offset, type),
 an enumeration its names and values in `dt.EnumMembers`. `Info()` returns the same
 facts as one line of text for people to read; programs should use the accessors
 above instead of parsing it.
@@ -514,6 +518,56 @@ if err != nil {
 // data is already decompressed!
 ```
 
+Decoded filters: deflate (1), shuffle (2), Fletcher32 (3, verified), BZIP2 (307) and LZF
+(32000). A dataset that uses any other filter (SZIP (4), N-bit (5), scale-offset (6) or a
+third-party filter) fails with an error that wraps `hdf5.ErrNotSupported`. Earlier versions
+returned the undecoded bytes as values.
+
+### External Raw Data Files
+
+A dataset can keep its raw data in files outside the HDF5 file (an External File List,
+`H5Pset_external` in C). They are not opened by default, because the names come from the
+file and an untrusted file could otherwise make the program read other files. To read such
+a dataset, name the directory they are opened in:
+
+```go
+file, err := hdf5.Open("data.h5")
+if err != nil {
+    log.Fatal(err)
+}
+defer file.Close()
+
+// The directory of the HDF5 file, as C's H5Pset_efile_prefix("${ORIGIN}").
+if err := file.SetExternalFilePrefix(filepath.Dir("data.h5")); err != nil {
+    log.Fatal(err)
+}
+```
+
+Only names that stay inside that directory are opened: an absolute name, a name that
+climbs out with `..` and a symbolic link that leads outside are refused. This is stricter
+than the C library, which opens names as given. Without a prefix the read fails with an
+error that wraps `hdf5.ErrNotSupported`.
+
+### Read Limit
+
+A few bytes of damaged or hostile metadata can claim a dataset of any size, and a failed
+allocation ends a Go program instead of returning an error. Reads of data that the file
+itself does not bound (chunked datasets, whose unwritten chunks read as the fill value;
+unallocated storage; external storage), and conversions that multiply the stored size, are
+therefore capped. `File.SetReadLimit` sets the cap in bytes, `File.ReadLimit` returns it:
+
+```go
+fmt.Println(file.ReadLimit()) // 4294967296 (4 GiB; 512 MiB on 32-bit platforms)
+
+file.SetReadLimit(16 << 30) // allow reads of up to 16 GiB
+```
+
+A read over the limit fails with an error that wraps `hdf5.ErrLimit` and names the
+requested size and the limit. The file may be valid: raising the limit lets the read
+proceed. `SetReadLimit(0)` restores the default and `math.MaxUint64` removes the limit. The
+limit also bounds the metadata kept to resolve shared messages (committed datatypes, the
+name heaps of External File Lists). The godoc of `SetReadLimit` lists everything it covers.
+
 ---
 
 ## ❌ Error Handling
@@ -535,37 +589,44 @@ if err != nil {
 defer file.Close()
 ```
 
-#### Unsupported Datatype
+#### Sentinel Errors
+
+Errors from reading carry one of these sentinels. Match them with `errors.Is`, never by
+the text of the message:
+
+| Sentinel | Meaning | What to do |
+|---|---|---|
+| `hdf5.ErrCorrupt` | The file's metadata is invalid: a size that overflows, data past the end of the file, a value the format does not allow | The file is damaged; do not retry |
+| `hdf5.ErrLimit` | The read would allocate more than the read limit | The file may be valid; raise `File.SetReadLimit` |
+| `hdf5.ErrNotSupported` | Valid HDF5 that this library does not read yet: a filter without a decoder, a datatype it cannot represent, external storage without `SetExternalFilePrefix` | Convert the file (for example with `h5repack`) or read it with another tool |
+| `hdf5.ErrNoData` | The dataset has no stored data and no defined fill value, so there is nothing to return (the C library fails the same read) | Not an error in the file; write the data first |
 
 ```go
 data, err := ds.Read()
-if err != nil {
-    if strings.Contains(err.Error(), "unsupported datatype") {
-        fmt.Println("This dataset uses an unsupported datatype")
-        fmt.Println("Supported: int32, int64, float32, float64, string, compound")
-    } else {
-        fmt.Printf("Error: %v\n", err)
-    }
-    return
+switch {
+case err == nil:
+    process(data)
+case errors.Is(err, hdf5.ErrNotSupported):
+    fmt.Printf("%s: valid HDF5, but not readable here: %v\n", path, err)
+case errors.Is(err, hdf5.ErrLimit):
+    fmt.Printf("%s: too large for the read limit (%d bytes): %v\n", path, file.ReadLimit(), err)
+case errors.Is(err, hdf5.ErrCorrupt):
+    fmt.Printf("%s: the file is damaged: %v\n", path, err)
+case errors.Is(err, hdf5.ErrNoData):
+    fmt.Printf("%s: no data stored\n", path)
+default:
+    fmt.Printf("%s: %v\n", path, err)
 }
 ```
 
-#### Corrupted or Invalid File
+`Dataset.Info()` returns `ErrCorrupt` or `ErrLimit` for invalid metadata instead of a
+summary. A damaged attribute message is reported as an error instead of being skipped.
 
-```go
-file, err := hdf5.Open("data.h5")
-if err != nil {
-    if strings.Contains(err.Error(), "not an HDF5 file") {
-        fmt.Println("File is not a valid HDF5 file")
-    } else if strings.Contains(err.Error(), "unsupported superblock version") {
-        fmt.Println("File uses unsupported HDF5 format version")
-    } else {
-        fmt.Printf("Error: %v\n", err)
-    }
-    return
-}
-defer file.Close()
-```
+#### Not an HDF5 File
+
+`hdf5.Open` fails with "not an HDF5 file" when no HDF5 signature is found, and with
+"unsupported superblock version" for a superblock version the library does not read (it reads
+0, 2 and 3). The message names the cause.
 
 ### Robust Error Handling Pattern
 
@@ -847,11 +908,18 @@ func main() {
                 }
             }
 
-            // Get dataset info
-            info, err := ds.Info()
-            if err == nil {
-                fmt.Printf("  %s\n", info)
+            // Get dataset shape and datatype
+            shape, err := ds.Shape()
+            if err != nil {
+                log.Printf("  shape: %v", err)
+                return
             }
+            dt, err := ds.Datatype()
+            if err != nil {
+                log.Printf("  datatype: %v", err)
+                return
+            }
+            fmt.Printf("  shape %v, %s, %d bytes per element\n", shape, dt.Class, dt.Size)
         }
     })
 }

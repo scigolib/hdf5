@@ -13,7 +13,7 @@ go run ./default
 ```
 
 **What it demonstrates**:
-- Default behavior (no rebalancing, like HDF5 C library)
+- No rebalancing (`WithBTreeRebalancing(false)`); without the option, every delete rebalances, as the HDF5 C library does for version 2 B-trees
 - Fastest deletion (0% overhead)
 - B-tree may become sparse after many deletions
 

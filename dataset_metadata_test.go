@@ -416,6 +416,14 @@ func TestDatasetMetadata_Error(t *testing.T) {
 
 func metaPtr[T any](v T) *T { return &v }
 
+// Fixed-point class bit field flags as the file stores them (H5Odtype.c:171,
+// :174). The tests spell the bytes out instead of sharing the decoder's
+// constants, so a wrong constant there cannot hide in the fixtures.
+const (
+	testFlagBigEndian = 0x01
+	testFlagSigned    = 0x08
+)
+
 // metaFixed is a fixed-point datatype message as the decoder returns it.
 func metaFixed(size, flags uint32, bitOffset, precision uint16) *core.DatatypeMessage {
 	return &core.DatatypeMessage{
@@ -430,7 +438,7 @@ func metaFixed(size, flags uint32, bitOffset, precision uint16) *core.DatatypeMe
 func TestMetaEnumMembers_BigEndianNegative(t *testing.T) {
 	dt := &core.DatatypeMessage{
 		Class: core.DatatypeEnum, Version: 1, Size: 2,
-		Base:       metaFixed(2, metaFlagBigEndian|metaFlagSigned, 0, 16),
+		Base:       metaFixed(2, testFlagBigEndian|testFlagSigned, 0, 16),
 		EnumNames:  []string{"A", "B", "C"},
 		EnumValues: []byte{0xFF, 0xFF, 0xFE, 0xD4, 0x00, 0x07}, // -1, -300, 7 big-endian.
 	}
@@ -462,7 +470,7 @@ func TestMetaEnumMembers_WideBase(t *testing.T) {
 	}
 
 	_, err := metaDatatypeInfo(dt)
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrNotSupported, "valid HDF5 this library cannot describe")
 	assert.Contains(t, err.Error(), "not supported")
 }
 
@@ -491,7 +499,7 @@ func TestMetaIntegerValue_OffsetPrecision(t *testing.T) {
 func TestMetaOrder_Compound(t *testing.T) {
 	str := &core.DatatypeMessage{Class: core.DatatypeString, Version: 1, Size: 8}
 	le := metaFixed(4, 0, 0, 32)
-	be := metaFixed(4, metaFlagBigEndian, 0, 32)
+	be := metaFixed(4, testFlagBigEndian, 0, 32)
 	compound := func(types ...*core.DatatypeMessage) *core.DatatypeMessage {
 		dt := &core.DatatypeMessage{Class: core.DatatypeCompound, Version: 1}
 		for i, typ := range types {
@@ -500,9 +508,15 @@ func TestMetaOrder_Compound(t *testing.T) {
 		return dt
 	}
 
-	assert.Equal(t, OrderMixed, metaOrder(compound(le, be)), "LE + BE")
-	assert.Equal(t, OrderBigEndian, metaOrder(compound(str, be)), "string + BE")
-	assert.Equal(t, OrderNone, metaOrder(compound(str)), "strings only")
+	order := func(dt *core.DatatypeMessage) ByteOrder {
+		info, err := metaDatatypeInfo(dt)
+		require.NoError(t, err)
+		return info.Order
+	}
+
+	assert.Equal(t, OrderMixed, order(compound(le, be)), "LE + BE")
+	assert.Equal(t, OrderBigEndian, order(compound(str, be)), "string + BE")
+	assert.Equal(t, OrderNone, order(compound(str)), "strings only")
 }
 
 // TestMetaOrder_FloatVAX: the decoder reads VAX order (bits 0 and 6) only
@@ -513,9 +527,43 @@ func TestMetaOrder_FloatVAX(t *testing.T) {
 		return &core.DatatypeMessage{Class: core.DatatypeFloat, Version: version, Size: 4, ClassBitField: flags}
 	}
 
-	assert.Equal(t, OrderVAX, metaOrder(float(3, 0x41)), "version 3, bits 0 and 6")
-	assert.Equal(t, OrderBigEndian, metaOrder(float(1, 0x41)), "version 1, bits 0 and 6")
-	assert.Equal(t, OrderLittleEndian, metaOrder(float(1, 0x40)), "version 1, bit 6 only")
+	order := func(dt *core.DatatypeMessage) ByteOrder {
+		info, err := metaDatatypeInfo(dt)
+		require.NoError(t, err)
+		return info.Order
+	}
+
+	assert.Equal(t, OrderVAX, order(float(3, 0x41)), "version 3, bits 0 and 6")
+	assert.Equal(t, OrderBigEndian, order(float(1, 0x41)), "version 1, bits 0 and 6")
+	assert.Equal(t, OrderLittleEndian, order(float(1, 0x40)), "version 1, bit 6 only")
+}
+
+// TestMetaCoreEnumValues: metaDatatypeInfo converts the decoder's order,
+// padding and character set by value, which is right only while both sides
+// hold the C enum values (H5Tpublic.h H5T_order_t, H5T_str_t, H5T_cset_t).
+func TestMetaCoreEnumValues(t *testing.T) {
+	orders := map[core.TypeOrder]ByteOrder{
+		core.OrderLittleEndian: OrderLittleEndian,
+		core.OrderBigEndian:    OrderBigEndian,
+		core.OrderVAX:          OrderVAX,
+		core.OrderMixed:        OrderMixed,
+		core.OrderNone:         OrderNone,
+	}
+	for c, want := range orders {
+		assert.Equal(t, want, ByteOrder(c))
+	}
+
+	paddings := map[core.StringPadding]StringPadding{
+		core.StringNullTerm: PaddingNullTerm,
+		core.StringNullPad:  PaddingNullPad,
+		core.StringSpacePad: PaddingSpacePad,
+	}
+	for c, want := range paddings {
+		assert.Equal(t, want, StringPadding(c))
+	}
+
+	assert.Equal(t, CharsetASCII, Charset(core.CharsetASCII))
+	assert.Equal(t, CharsetUTF8, Charset(core.CharsetUTF8))
 }
 
 // TestDatasetMaxShape_NoStoredMax: a dataspace without stored maximum

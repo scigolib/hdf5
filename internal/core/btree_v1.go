@@ -42,6 +42,15 @@ type ChunkKey struct {
 // The chunk dimensions in the layout message can be uint32 or uint64 depending on file version,
 // but the B-tree keys always use uint64 for backward compatibility.
 func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int, chunkDims []uint64) (*BTreeV1Node, error) {
+	return parseBTreeV1Node(r, address, offsetSize, ndims, chunkDims, nil)
+}
+
+// parseBTreeV1Node is ParseBTreeV1Node with the node's bytes charged against
+// budget (nil: no budget) once its header gives their number, before the
+// keys and children are read.
+func parseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int, chunkDims []uint64,
+	budget *blockBudget,
+) (*BTreeV1Node, error) {
 	// Read node header (fixed size part).
 	headerSize := 4 + 1 + 1 + 2 + int(offsetSize)*2 // signature + type + level + entries + 2 siblings.
 	header := make([]byte, headerSize)
@@ -98,6 +107,10 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 	// not the B-tree key coordinates!
 
 	if node.EntriesUsed == 0 {
+		if err := budget.charge(uint64(headerSize), address, "chunk B-tree"); err != nil {
+			return nil, err
+		}
+
 		return node, nil
 	}
 
@@ -116,6 +129,10 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 	// the direct read stays; ADR-003 records the bound.
 	dataSize := int(node.EntriesUsed)*entrySize + keySize // +keySize for final key.
 
+	//nolint:gosec // G115: both sizes are positive and at most about 134 MB (above).
+	if err := budget.charge(uint64(headerSize+dataSize), address, "chunk B-tree"); err != nil {
+		return nil, err
+	}
 	data := make([]byte, dataSize)
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(data, int64(address)+int64(headerSize)); err != nil {
@@ -276,7 +293,7 @@ const btreeTypeChunk = 1
 // grid and checks every key against it.
 func (node *BTreeV1Node) CollectAllChunks(r io.ReaderAt, offsetSize uint8, chunkDims []uint64) ([]ChunkEntry, error) {
 	var chunks []ChunkEntry
-	err := node.walkChunks(r, offsetSize, chunkDims, math.MaxUint64, func(e ChunkEntry) error {
+	err := node.walkChunks(r, offsetSize, chunkDims, math.MaxUint64, newBlockBudget(r, nil), nil, func(e ChunkEntry) error {
 		chunks = append(chunks, e)
 		return nil
 	})
@@ -300,11 +317,21 @@ func (node *BTreeV1Node) CollectAllChunks(r io.ReaderAt, offsetSize uint8, chunk
 //     pointing back up, or many entries pointing to one subtree, would loop or
 //     multiply the work beyond the size of the file;
 //   - the number of leaf entries may not exceed maxEntries, which the caller
-//     derives from the chunk grid (each chunk has one entry).
+//     derives from the chunk grid (each chunk has one entry);
+//   - the bytes of every node read, internal nodes included, are charged
+//     against budget, at most the file's size (blockBudget). Without it,
+//     internal nodes at distinct addresses that overlap each pass the visited
+//     set, and a node of up to 65535 entries (about 1 MB at rank 1) repeated
+//     at a small stride multiplies the reads far beyond the file: v1 nodes
+//     carry no checksum, so such a file is easy to craft. The caller charges
+//     the root it parsed.
+//
+// onNode, when not nil, gets the address of every node the walk reads, the
+// root included, before its entries; it adds no read.
 //
 // Every violation wraps utils.ErrCorrupt.
 func (node *BTreeV1Node) walkChunks(r io.ReaderAt, offsetSize uint8, chunkDims []uint64, maxEntries uint64,
-	emit func(ChunkEntry) error,
+	budget *blockBudget, onNode func(addr uint64) error, emit func(ChunkEntry) error,
 ) error {
 	w := &chunkWalk{
 		r:          r,
@@ -312,6 +339,8 @@ func (node *BTreeV1Node) walkChunks(r io.ReaderAt, offsetSize uint8, chunkDims [
 		chunkDims:  chunkDims,
 		maxEntries: maxEntries,
 		visited:    map[uint64]bool{node.Address: true},
+		budget:     budget,
+		onNode:     onNode,
 		emit:       emit,
 	}
 
@@ -326,10 +355,15 @@ type chunkWalk struct {
 	maxEntries uint64
 	visited    map[uint64]bool
 	entries    uint64
+	budget     *blockBudget
+	onNode     func(addr uint64) error
 	emit       func(ChunkEntry) error
 }
 
 func (w *chunkWalk) walk(node *BTreeV1Node) error {
+	if err := w.reportNode(node.Address); err != nil {
+		return err
+	}
 	if node.NodeLevel == 0 {
 		if w.entries+uint64(node.EntriesUsed) > w.maxEntries {
 			return fmt.Errorf("%w: chunk B-tree has more than %d entries, the most its chunk grid allows",
@@ -352,7 +386,7 @@ func (w *chunkWalk) walk(node *BTreeV1Node) error {
 		}
 		w.visited[childAddr] = true
 
-		child, err := ParseBTreeV1Node(w.r, childAddr, w.offsetSize, len(w.chunkDims), w.chunkDims)
+		child, err := parseBTreeV1Node(w.r, childAddr, w.offsetSize, len(w.chunkDims), w.chunkDims, w.budget)
 		if err != nil {
 			return fmt.Errorf("failed to parse child node at 0x%x: %w", childAddr, err)
 		}
@@ -368,4 +402,13 @@ func (w *chunkWalk) walk(node *BTreeV1Node) error {
 	}
 
 	return nil
+}
+
+// reportNode passes a node's address to onNode, when it is set.
+func (w *chunkWalk) reportNode(addr uint64) error {
+	if w.onNode == nil {
+		return nil
+	}
+
+	return w.onNode(addr)
 }

@@ -27,7 +27,7 @@ When you delete attributes from dense storage (8+ attributes), the B-tree index 
 - **Redistributes** records for balanced tree structure
 - **Decreases depth** when root becomes empty (future feature)
 
-**Default behavior**: Auto-rebalancing **enabled** (matches HDF5 C library).
+**Default behavior**: Auto-rebalancing **enabled**: every delete rebalances, as the HDF5 C library does for version 2 B-trees (`H5B2__remove_internal`, `H5B2internal.c`; only its version 1 B-tree never rebalances, `H5B.c`).
 
 ### Performance Impact
 

@@ -76,7 +76,7 @@ This is a **pure Go implementation** of the HDF5 file format for reading and wri
 - ✅ Attributes (dense & compact storage, RMW operations)
 - ✅ Compression (GZIP, Shuffle, Fletcher32)
 - ✅ Advanced datatypes (arrays, enums, references, opaque)
-- ✅ Links (hard links full, soft/external MVP)
+- ✅ Links (hard links, soft links and external links)
 
 **Read Enhancements**:
 - ✅ Hyperslab selection (efficient data slicing) - 10-250x faster!
@@ -157,7 +157,8 @@ enumDs, _ := fw.CreateDataset("/status", hdf5.EnumInt8, []uint64{5},
 **Current limitations**:
 - Some advanced filters
 
-**Quality**: Feature complete write support with 100% HDF5 test suite pass rate!
+**Quality**: Official HDF5 test suite: <<SUITE>>. Files written by this library are read back
+by the C library's `h5dump` in CI.
 
 See [ROADMAP.md](../../ROADMAP.md) for future plans.
 
@@ -214,13 +215,19 @@ See [Datatypes Guide](DATATYPES.md) for detailed type mapping.
 ### What compression formats work?
 
 **Supported**:
-- ✅ **GZIP/Deflate** (filter ID 1) - Covers 95%+ of files
+- ✅ **GZIP/Deflate** (filter ID 1) - Covers 95%+ of files (read + write)
+- ✅ **Shuffle** (2) and **Fletcher32** (3, verified on read) (read + write)
+- ✅ **LZF** (32000, read + write) and **BZIP2** (307, read only)
 
 **Not Yet Supported**:
-- ❌ SZIP (filter ID 2)
-- ❌ LZF (filter ID 32000)
-- ❌ BZIP2 (filter ID 307)
+- ❌ SZIP (filter ID 4, needs libaec)
+- ❌ N-bit (filter ID 5)
+- ❌ Scale-offset (filter ID 6)
 - ❌ Blosc, LZ4, Zstd (custom filters)
+
+A dataset that uses an unsupported filter fails with an error that wraps `hdf5.ErrNotSupported`
+(`errors.Is(err, hdf5.ErrNotSupported)`). Earlier versions returned the undecoded bytes as
+values, without an error.
 
 **Workaround**: Convert files to GZIP:
 
@@ -342,20 +349,31 @@ wg.Wait()
 
 ### Can I stream large datasets?
 
-**Current**: No - entire dataset read into memory.
-
-**Future**: Streaming/chunked reading API planned for future releases:
+**Yes, for chunked datasets**: `Read()` loads the whole dataset into memory, but
+`Dataset.ReadSlice`, `Dataset.ReadHyperslab` and `Dataset.ChunkIterator` read parts of it.
+The iterator reads one chunk at a time and follows the `bufio.Scanner` pattern:
 
 ```go
-// Future API (not available yet)
-reader, _ := ds.ChunkReader()
-for reader.Next() {
-    chunk := reader.Chunk()  // Process one chunk at a time
+iter, err := ds.ChunkIterator() // chunked datasets only
+if err != nil {
+    return err
+}
+for iter.Next() {
+    chunk, err := iter.Chunk()
+    if err != nil {
+        return err
+    }
     processChunk(chunk)
+}
+if err := iter.Err(); err != nil {
+    return err
 }
 ```
 
-**Workaround**: Use `Shape()` and `Datatype()` to check the size before reading:
+`ChunkIteratorWithContext` also stops when its context is cancelled, inside the index walk too.
+
+To decide whether a whole-dataset read fits in memory, use `Shape()` and `Datatype()` to check
+the size before reading:
 
 ```go
 shape, err := ds.Shape()
@@ -383,9 +401,10 @@ if max(storedSize, resultSize) < threshold {
 
 The result in memory can be larger than the stored data: `Read()` converts every
 element to a `float64`, so a `uint8` dataset takes eight times its stored size, and
-`ReadCompound()` builds a map per record. Reads of chunked datasets are also capped
-by `File.SetReadLimit` (4 GiB by default); a read over the limit fails with an error
-that wraps `hdf5.ErrLimit`.
+`ReadCompound()` builds a map per record. Reads of data that the file does not bound
+(chunked datasets, unallocated or external storage) are also capped by `File.SetReadLimit`
+(4 GiB by default); a read over the limit fails with an error that wraps `hdf5.ErrLimit`
+(see [Reading Data](READING_DATA.md#read-limit)).
 
 ---
 
@@ -586,7 +605,7 @@ if err == nil {
 - ✅ Groups: symbol table and dense formats
 - ✅ Attributes: compact (0-7) and dense (8+) storage
 - ✅ Attribute modification and deletion
-- ✅ Links support (hard links full, soft/external MVP)
+- ✅ Links support (hard links, soft links and external links)
 - ✅ Advanced datatypes: arrays, enums, references, opaque
 - ✅ Legacy format support (v0 superblock + Object Header v1)
 
@@ -614,7 +633,7 @@ See [ROADMAP.md](../../ROADMAP.md) for complete roadmap.
 - Thread-safety with mutexes
 - SWMR (Single Writer Multiple Reader)
 - Streaming API for large datasets
-- Advanced filters (LZF, SZIP)
+- Advanced filters (SZIP, N-bit, scale-offset, Blosc, LZ4, Zstd)
 - Parallel I/O
 - ✅ HDF5 2.0.0 supported (format specification v4.0, superblock v0-v3)
 
@@ -628,10 +647,9 @@ See [ROADMAP.md](../../ROADMAP.md) for complete roadmap.
 - Deprecations will be announced in advance
 
 **Version strategy**:
-- v0.x.x (current): Stable API, production-ready
-- v1.0.0 (future): LTS release with long-term support guarantee
-- v0.14.0+ (future): Community-driven enhancements (compression filters, parallel I/O, SWMR mode)
-- v1.0.0 (future): Production-ready stable release
+- v0.14.x (current): Stable API, maintenance and C-library parity fixes
+- v0.15+ (future): Community-driven enhancements (compression filters, parallel I/O, SWMR mode)
+- v1.0.0 (future, no date): LTS release with long-term support guarantee; it ships when it is ready
 
 See [ROADMAP.md](../../ROADMAP.md) for versioning strategy.
 
