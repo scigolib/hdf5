@@ -355,18 +355,37 @@ for reader.Next() {
 }
 ```
 
-**Workaround**: Use `Info()` to check size before reading:
+**Workaround**: Use `Shape()` and `Datatype()` to check the size before reading:
 
 ```go
-info, _ := ds.Info()
-fmt.Println(info)  // Check "Total size" before reading
+shape, err := ds.Shape()
+if err != nil {
+    return err
+}
+dt, err := ds.Datatype()
+if err != nil {
+    return err
+}
+
+elements := uint64(1)
+for _, n := range shape {
+    elements *= n
+}
+storedSize := elements * dt.Size // Bytes of the elements as stored in the file.
+resultSize := elements * 8       // Read() returns []float64: 8 bytes per element.
 
 // Only read if size is acceptable
-if /* size < threshold */ {
+if max(storedSize, resultSize) < threshold {
     data, _ := ds.Read()
     processData(data)
 }
 ```
+
+The result in memory can be larger than the stored data: `Read()` converts every
+element to a `float64`, so a `uint8` dataset takes eight times its stored size, and
+`ReadCompound()` builds a map per record. Reads of chunked datasets are also capped
+by `File.SetReadLimit` (4 GiB by default); a read over the limit fails with an error
+that wraps `hdf5.ErrLimit`.
 
 ---
 

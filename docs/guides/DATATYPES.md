@@ -54,9 +54,10 @@ HDF5 uses its own type system that maps to native types in different programming
 // HDF5 file contains int32 dataset
 data, err := ds.Read()  // Returns []float64
 
-// Or preserve original type information
-info, _ := ds.Info()
-// info shows: "Datatype: int32"
+// The original type information stays available
+dt, _ := ds.Datatype()
+// dt.Class == hdf5.ClassInteger, dt.Size == 4, dt.Signed == true,
+// dt.Order == hdf5.OrderLittleEndian (or OrderBigEndian)
 
 // Value conversion: int32 → float64
 // Example: 42 (int32) becomes 42.0 (float64)
@@ -431,21 +432,23 @@ fmt.Printf("%.6f\n", value)  // 3.141593 (shows only 6 digits)
 ### 1. Check Dataset Type Before Reading
 
 ```go
-info, err := ds.Info()
-if err == nil {
-    fmt.Println(info)  // Shows datatype
+dt, err := ds.Datatype()
+if err != nil {
+    return err
+}
 
-    // Choose appropriate read method
-    if strings.Contains(info, "string") {
-        strings, _ := ds.ReadStrings()
-        // ...
-    } else if strings.Contains(info, "compound") {
-        compounds, _ := ds.ReadCompound()
-        // ...
-    } else {
-        data, _ := ds.Read()  // Numeric
-        // ...
-    }
+// Choose appropriate read method
+switch dt.Class {
+case hdf5.ClassString:
+    values, _ := ds.ReadStrings()
+    // ...
+case hdf5.ClassCompound:
+    records, _ := ds.ReadCompound()
+    // dt.Members lists each member's name, offset and type
+    // ...
+default:
+    data, _ := ds.Read() // Numeric
+    // ...
 }
 ```
 
@@ -479,8 +482,8 @@ If your application requires exact integer values > 2^53:
 
 ```go
 // Check if dataset contains large integers
-info, _ := ds.Info()
-if strings.Contains(info, "int64") {
+dt, _ := ds.Datatype()
+if dt.Class == hdf5.ClassInteger && dt.Size == 8 {
     log.Println("Warning: int64 dataset may lose precision when converted to float64")
     log.Println("Safe range: -2^53 to 2^53 (±9,007,199,254,740,992)")
     log.Println("For exact int64 values, wait for v1.0.0")

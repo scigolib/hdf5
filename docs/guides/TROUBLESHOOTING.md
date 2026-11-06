@@ -197,24 +197,26 @@ variable-length string support for attributes.
 
 **Solution**:
 
-Check datatype before reading:
+Check the datatype before reading and pick the read method from its class:
 
 ```go
-info, err := ds.Info()
-if err == nil {
-    fmt.Println(info)  // Shows datatype information
+dt, err := ds.Datatype()
+if err != nil {
+    log.Fatalf("cannot describe datatype: %v", err)
 }
 
-// Try different read methods
-data, err := ds.Read()  // For numeric types
-if err != nil {
-    strings, err := ds.ReadStrings()  // For string types
-    if err != nil {
-        compounds, err := ds.ReadCompound()  // For compound types
-        if err != nil {
-            log.Printf("Dataset uses unsupported datatype: %v", err)
-        }
-    }
+switch dt.Class {
+case hdf5.ClassInteger, hdf5.ClassFloat:
+    data, err := ds.Read()
+    // ...
+case hdf5.ClassString: // fixed-length or variable-length (dt.VariableString)
+    strs, err := ds.ReadStrings()
+    // ...
+case hdf5.ClassCompound:
+    records, err := ds.ReadCompound()
+    // ...
+default:
+    log.Printf("datatype %s (%d bytes) has no Go read method", dt.Class, dt.Size)
 }
 ```
 
@@ -249,10 +251,14 @@ with h5py.File('original.h5', 'r') as f_in:
 **Debugging**:
 
 ```go
-// Check dataset size
-info, err := ds.Info()
+// Check dataset size: a dimension of 0 means no elements.
+shape, err := ds.Shape()
 if err == nil {
-    fmt.Println(info)  // Shows dimensions and size
+    fmt.Println("shape:", shape)
+}
+layout, err := ds.Layout()
+if err == nil {
+    fmt.Println("layout:", layout.Class)
 }
 
 // Try reading
@@ -509,9 +515,13 @@ elapsed := time.Since(start)
 
 fmt.Printf("Read %d values in %v\n", len(data), elapsed)
 if elapsed > time.Second {
-    info, _ := ds.Info()
-    fmt.Println("Dataset info:", info)
     // Check if heavily compressed or chunked
+    if layout, err := ds.Layout(); err == nil {
+        fmt.Println("layout:", layout.Class, "chunks:", layout.ChunkDims)
+        for _, f := range layout.Filters {
+            fmt.Println("filter:", f.ID, f.ClientData)
+        }
+    }
 }
 ```
 

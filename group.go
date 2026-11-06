@@ -184,19 +184,21 @@ func (d *Dataset) ReadVLenBytes() ([][]byte, error) {
 	return core.ReadVLenBytes(d.file.reader, d.file.sb, desc, d.file.ReadLimit())
 }
 
-// Info returns metadata about the dataset without reading actual values.
+// Info returns a one-line, human-readable summary of the dataset's datatype,
+// dataspace and storage layout without reading its values, for example
+// "Dataset: integer (size=4 bytes), 2D array [10 x 20], contiguous (...)".
+//
+// The text is meant for people and may change; programs should use Shape,
+// MaxShape, Datatype and Layout. It is built from the same validated
+// descriptor as those accessors and the readers, so a dataset that cannot be
+// read reports the same error here.
 func (d *Dataset) Info() (string, error) {
-	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
+	desc, err := d.descriptor()
 	if err != nil {
 		return "", err
 	}
 
-	info, err := core.ReadDatasetInfo(header, d.file.sb)
-	if err != nil {
-		return "", err
-	}
-
-	return info.String(), nil
+	return metaInfoString(desc), nil
 }
 
 // Group represents an HDF5 group that can contain other groups and datasets.

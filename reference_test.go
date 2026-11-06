@@ -57,6 +57,13 @@ func classifyFile(name string) fileClassification {
 		// committed compound type has zero members (H5Odtype.c:358-360).
 		class.expectErrorReason = "intentionally invalid: /dataset's datatype does not decode (h5dump also fails)"
 	}
+	if name == "tmisc38a.h5" {
+		class.expectError = true
+		// C's test_misc38 (test/tmisc.c:6355-6365) requires H5Dopen2 to fail on
+		// this corrupted datatype; our descriptor rejects it at open as
+		// H5D__chunk_set_sizes does (element-size dim 4 vs datatype size 65525).
+		class.expectErrorReason = "intentionally corrupt: datatype size contradicts the chunk element size (C's test_misc38 expects open to fail)"
+	}
 
 	return class
 }
