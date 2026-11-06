@@ -203,6 +203,34 @@ func TestCInterop_WriteMatrix(t *testing.T) {
 			want: []string{"H5T_ARRAY", "H5T_STD_I32LE"},
 		},
 		{
+			// A chunked array dataset: the chunk and B-tree element size is
+			// the whole array element (12 bytes), not its int32 base.
+			name: "array_type_chunked",
+			build: func(t *testing.T, fw *FileWriter) {
+				ds, err := fw.CreateDataset("/vecs", ArrayInt32, []uint64{4},
+					WithArrayDims([]uint64{3}), WithChunkDims([]uint64{2}))
+				require.NoError(t, err)
+				require.NoError(t, ds.Write([]int32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}))
+			},
+			want: []string{"H5T_ARRAY", "CHUNKED ( 2 )", "SIZE 48",
+				"[ 1, 2, 3 ], [ 4, 5, 6 ], [ 7, 8, 9 ], [ 10, 11, 12 ]"},
+		},
+		{
+			// Resize sizes the data from the whole array element too.
+			name: "array_type_chunked_resized",
+			build: func(t *testing.T, fw *FileWriter) {
+				ds, err := fw.CreateDataset("/vecs", ArrayInt32, []uint64{2},
+					WithArrayDims([]uint64{3}), WithChunkDims([]uint64{2}),
+					WithMaxDims([]uint64{Unlimited}))
+				require.NoError(t, err)
+				require.NoError(t, ds.Write([]int32{1, 2, 3, 4, 5, 6}))
+				require.NoError(t, ds.Resize([]uint64{4}))
+				require.NoError(t, ds.Write([]int32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}))
+			},
+			want: []string{"H5T_ARRAY", "( 4 ) / ( H5S_UNLIMITED )",
+				"[ 1, 2, 3 ], [ 4, 5, 6 ], [ 7, 8, 9 ], [ 10, 11, 12 ]"},
+		},
+		{
 			name: "superblock_v0",
 			opts: []interface{}{WithSuperblockVersion(SuperblockV0)},
 			build: func(t *testing.T, fw *FileWriter) {

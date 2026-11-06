@@ -3,6 +3,7 @@ package hdf5
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/scigolib/hdf5/internal/core"
 	"github.com/scigolib/hdf5/internal/structures"
@@ -24,23 +25,10 @@ import (
 // - No compression (filter pipeline empty)
 // - B-tree v1 for chunk indexing
 // - Single-level B-tree (no splits).
-//
-//nolint:gocognit,gocyclo,cyclop,funlen // Complex by nature: chunked dataset creation involves many steps
 func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []uint64, config *datasetConfig) (*DatasetWriter, error) {
 	// 1. Validate chunk dimensions
-	if len(config.chunkDims) != len(dims) {
-		return nil, fmt.Errorf("chunk dimensions (%d) must match dataset dimensions (%d)",
-			len(config.chunkDims), len(dims))
-	}
-
-	for i, chunkDim := range config.chunkDims {
-		if chunkDim == 0 {
-			return nil, fmt.Errorf("chunk dimension %d cannot be zero", i)
-		}
-		if chunkDim > dims[i] {
-			return nil, fmt.Errorf("chunk dimension %d (%d) cannot exceed dataset dimension (%d)",
-				i, chunkDim, dims[i])
-		}
+	if err := validateChunkDims(dims, config.chunkDims, config.maxDims); err != nil {
+		return nil, err
 	}
 
 	// 2. Get datatype info
@@ -49,22 +37,116 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 		return nil, fmt.Errorf("invalid datatype: %w", err)
 	}
 
-	// 3. Create chunk coordinator
-	chunkCoordinator, err := writer.NewChunkCoordinator(dims, config.chunkDims)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create chunk coordinator: %w", err)
-	}
-
-	// 4. B-tree address will be 0 initially (written during Write())
-	// This is standard HDF5 practice for empty chunked datasets
-	btreeAddress := uint64(0)
-
-	// 5. Encode datatype message
+	// 3. Encode datatype message
 	handler := datatypeRegistry[dtype]
 	datatypeData, err := handler.EncodeDatatypeMessage(dtInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode datatype: %w", err)
 	}
+
+	// 4. The datatype Write encodes values with
+	var dsMsgForWriter *core.DatatypeMessage
+	if dtInfo.baseType != nil {
+		// For array/enum, use base type for data writing
+		dsMsgForWriter = &core.DatatypeMessage{
+			Class:   dtInfo.baseType.class,
+			Version: 1,
+			Size:    dtInfo.baseType.size,
+		}
+	} else {
+		// For simple types, use the datatype itself
+		dsMsgForWriter = &core.DatatypeMessage{
+			Class:   dtInfo.class,
+			Version: 1,
+			Size:    dtInfo.size,
+		}
+	}
+
+	return fw.createChunkedDatasetEncoded(name, dims, config, datatypeData, dtInfo.size, dsMsgForWriter)
+}
+
+// validateChunkDims checks that chunkDims has one non-zero extent per
+// dataset dimension and, as H5D__chunk_construct does (H5Dchunk.c:1073-1081),
+// that no chunk extent exceeds the maximum size of a fixed-size dimension.
+// Without maxDims every dimension is fixed at its current size (as with
+// H5Screate_simple and a NULL maxdims); a dimension whose maximum is
+// Unlimited, or larger than the current size, may have a chunk larger than
+// its current extent, so a growing table can start with one row in a large
+// chunk.
+func validateChunkDims(dims, chunkDims, maxDims []uint64) error {
+	if len(chunkDims) != len(dims) {
+		return fmt.Errorf("chunk dimensions (%d) must match dataset dimensions (%d)",
+			len(chunkDims), len(dims))
+	}
+
+	for i, chunkDim := range chunkDims {
+		if chunkDim == 0 {
+			return fmt.Errorf("chunk dimension %d cannot be zero", i)
+		}
+		if len(maxDims) == 0 {
+			if chunkDim > dims[i] {
+				return fmt.Errorf("chunk dimension %d (%d) cannot exceed dataset dimension (%d)",
+					i, chunkDim, dims[i])
+			}
+			continue
+		}
+		if maxDims[i] != Unlimited && chunkDim > maxDims[i] {
+			return fmt.Errorf("chunk dimension %d (%d) cannot exceed maximum dimension (%d) of a fixed-size dimension",
+				i, chunkDim, maxDims[i])
+		}
+	}
+	return nil
+}
+
+// maxV1BTreeChunkSize is the largest chunk, in bytes, that a v1 B-tree chunk
+// index can record: its chunk size field is 32 bits (H5Dchunk.c:1197-1199).
+const maxV1BTreeChunkSize = math.MaxUint32
+
+// chunkedDatasetByteSize returns the data size of a chunked dataset, after
+// checking that the sizes of the data and of one chunk fit: a chunk must be
+// below 4 GiB.
+func chunkedDatasetByteSize(dims, chunkDims []uint64, elemSize uint32) (uint64, error) {
+	dataSize, err := datasetByteSize(dims, elemSize)
+	if err != nil {
+		return 0, err
+	}
+	chunkSize, err := datasetByteSize(chunkDims, elemSize)
+	if err != nil {
+		return 0, fmt.Errorf("chunk dimensions: %w", err)
+	}
+	if chunkSize > maxV1BTreeChunkSize {
+		// H5D__chunk_init: "chunk size must be < 4GB with v1 b-tree index"
+		// (H5Dchunk.c:1197-1199). A larger chunk needs the layout version 5
+		// indexes of HDF5 2.0, which this writer does not produce.
+		return 0, fmt.Errorf("chunk size must be < 4GB with v1 b-tree index: chunk %v of %d-byte elements is %d bytes",
+			chunkDims, elemSize, chunkSize)
+	}
+	return dataSize, nil
+}
+
+// createChunkedDatasetEncoded creates a chunked dataset whose datatype message
+// is already encoded: datatypeData is the message, elemSize the size of one
+// element, and writerDtype the datatype DatasetWriter encodes values with.
+// The chunk dimensions must have been checked with validateChunkDims.
+//
+//nolint:gocyclo,cyclop // Complex by nature: chunked dataset creation involves many steps
+func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, config *datasetConfig,
+	datatypeData []byte, elemSize uint32, writerDtype *core.DatatypeMessage) (*DatasetWriter, error) {
+	// Sizes first, before anything is allocated or written.
+	dataSize, err := chunkedDatasetByteSize(dims, config.chunkDims, elemSize)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create chunk coordinator
+	chunkCoordinator, err := writer.NewChunkCoordinator(dims, config.chunkDims)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create chunk coordinator: %w", err)
+	}
+
+	// B-tree address will be 0 initially (written during Write())
+	// This is standard HDF5 practice for empty chunked datasets
+	btreeAddress := uint64(0)
 
 	// 6. Create dataspace message
 	dataspaceData, err := core.EncodeDataspaceMessage(dims, config.maxDims)
@@ -81,7 +163,7 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 		btreeAddress, // B-tree address (0 for now)
 		fw.file.sb,
 		config.chunkDims,
-		dtInfo.size, // element size for trailing dimension
+		elemSize, // element size for trailing dimension
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode chunked layout: %w", err)
@@ -97,7 +179,7 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 		// Add shuffle filter at beginning if requested
 		if config.enableShuffle {
 			// Element size from datatype
-			shuffleFilter := writer.NewShuffleFilter(dtInfo.size)
+			shuffleFilter := writer.NewShuffleFilter(elemSize)
 			config.pipeline.AddFilterAtStart(shuffleFilter)
 		}
 	}
@@ -180,33 +262,14 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 	}
 
 	// 10. Create DatasetWriter
-	var dsMsgForWriter *core.DatatypeMessage
-	if dtInfo.baseType != nil {
-		// For array/enum, use base type for data writing
-		dsMsgForWriter = &core.DatatypeMessage{
-			Class:   dtInfo.baseType.class,
-			Version: 1,
-			Size:    dtInfo.baseType.size,
-		}
-	} else {
-		// For simple types, use the datatype itself
-		dsMsgForWriter = &core.DatatypeMessage{
-			Class:   dtInfo.class,
-			Version: 1,
-			Size:    dtInfo.size,
-		}
-	}
-
-	totalElements := calculateTotalElements(dims)
-	dataSize := totalElements * uint64(dtInfo.size)
-
 	return &DatasetWriter{
 		fileWriter:        fw,
 		name:              name,
 		address:           headerAddress,
 		dataAddress:       btreeAddress, // Will be updated on Write()
 		dataSize:          dataSize,
-		dtype:             dsMsgForWriter,
+		elementSize:       elemSize,
+		dtype:             writerDtype,
 		dims:              dims,
 		maxDims:           config.maxDims, // Maximum dimensions for resize support
 		isChunked:         true,
@@ -242,7 +305,9 @@ func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 		return fmt.Errorf("data size mismatch: expected %d bytes, got %d", dw.dataSize, len(buf))
 	}
 
-	elemSize := dw.dtype.Size
+	// The on-disk element size: for an array datatype the whole array
+	// element, not the base type that dtype describes.
+	elemSize := dw.elementSize
 
 	// 1. Create B-tree writer
 	// Per C reference (H5Dbtree.c:687-690), B-tree keys store byte offsets,
@@ -280,8 +345,13 @@ func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 			return fmt.Errorf("failed to write chunk %v: %w", coord, err)
 		}
 
-		// Add to B-tree index with chunk size
-		//nolint:gosec // G115: chunk size is validated and fits in uint32
+		// Add to B-tree index with chunk size. The raw chunk is below 4 GiB
+		// (checked at create time), but a filter may enlarge it: the v1
+		// B-tree records the stored size in 32 bits (H5Dchunk.c:1197-1199).
+		if uint64(len(chunkData)) > maxV1BTreeChunkSize {
+			return fmt.Errorf("chunk %v: filtered size %d bytes must be < 4GB with v1 b-tree index", coord, len(chunkData))
+		}
+		//nolint:gosec // G115: checked against maxV1BTreeChunkSize (MaxUint32) above
 		if err := btreeWriter.AddChunkWithSize(coord, chunkAddr, uint32(len(chunkData))); err != nil {
 			return fmt.Errorf("failed to add chunk %v to index: %w", coord, err)
 		}

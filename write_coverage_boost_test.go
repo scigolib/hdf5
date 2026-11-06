@@ -1423,7 +1423,9 @@ func TestWriteCov_Write_TypeMismatch(t *testing.T) {
 	require.Contains(t, err.Error(), "unsupported data type")
 }
 
-// TestWriteCov_CreateCompoundDataset_ChunkedError tests that chunked compound is rejected.
+// TestWriteCov_CreateCompoundDataset_ChunkedError tests the chunked path of the
+// deprecated method: chunked compounds are supported since v0.14.3 (TASK-065),
+// so valid chunk dimensions succeed and invalid ones are rejected.
 func TestWriteCov_CreateCompoundDataset_ChunkedError(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "compound_chunked_error.h5")
@@ -1442,8 +1444,12 @@ func TestWriteCov_CreateCompoundDataset_ChunkedError(t *testing.T) {
 
 	_, err = fw.CreateCompoundDataset("/data", compoundType, []uint64{10},
 		WithChunkDims([]uint64{5}))
+	require.NoError(t, err)
+
+	_, err = fw.CreateCompoundDataset("/bad", compoundType, []uint64{10},
+		WithChunkDims([]uint64{5, 5}))
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "chunked compound")
+	require.Contains(t, err.Error(), "chunk dimensions (2) must match dataset dimensions (1)")
 }
 
 // TestWriteCov_WriteAttribute_StringSlice tests writing string slice attribute.
