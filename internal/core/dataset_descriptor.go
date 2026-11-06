@@ -32,6 +32,10 @@ type DatasetDescriptor struct {
 	layout         *DataLayoutMessage
 	filterPipeline *FilterPipelineMessage
 
+	// fill is the fill value message 0x0005, else 0x0004, else the default
+	// (H5Dint.c:1779-1829); never nil.
+	fill *FillValueMessage
+
 	nelmts   uint64 // Number of elements in the dataspace, overflow-checked.
 	elemSize uint64 // Datatype size in bytes, never zero.
 
@@ -62,12 +66,22 @@ func NewDatasetDescriptor(r io.ReaderAt, header *ObjectHeader, sb *Superblock) (
 		return nil, err
 	}
 
-	datatype, err := ParseDatatypeMessage(msgs.datatype.Data)
+	// A committed datatype is resolved here, so every reader sees a plain
+	// datatype (H5O__shared_decode, H5Oshared.c:289).
+	datatype, err := ResolveDatatypeHeaderMessage(r, sb, msgs.datatype)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse datatype: %w", err)
 	}
 
-	dataspace, err := ParseDataspaceMessage(msgs.dataspace.Data)
+	// The dataspace and the filter pipeline are sharable message classes too
+	// (H5Osdspace.c, H5Opline.c use H5Oshared.h); C writes them shared only
+	// into the shared message heap, which messageBody reports as unsupported.
+	dataspaceBody, err := messageBody(r, sb, msgs.dataspace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse dataspace: %w", err)
+	}
+
+	dataspace, err := ParseDataspaceMessage(dataspaceBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse dataspace: %w", err)
 	}
@@ -79,18 +93,59 @@ func NewDatasetDescriptor(r io.ReaderAt, header *ObjectHeader, sb *Superblock) (
 
 	var pipeline *FilterPipelineMessage
 	if msgs.pipeline != nil {
-		pipeline, err = ParseFilterPipelineMessage(msgs.pipeline.Data)
+		pipelineBody, bodyErr := messageBody(r, sb, msgs.pipeline)
+		if bodyErr != nil {
+			return nil, fmt.Errorf("failed to parse filter pipeline: %w", bodyErr)
+		}
+
+		pipeline, err = ParseFilterPipelineMessage(pipelineBody)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse filter pipeline: %w", err)
 		}
 	}
 
-	return newDatasetDescriptor(r, sb, datatype, dataspace, layout, pipeline)
+	fill, err := parseFillMessages(r, sb, msgs, datatype)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse fill value: %w", err)
+	}
+
+	d, err := newDatasetDescriptor(r, sb, datatype, dataspace, layout, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	if fill != nil {
+		d.fill = fill
+	}
+
+	return d, nil
+}
+
+// parseFillMessages decodes the new fill value message if the header has one,
+// else the old one, as H5D__open_oid does (H5Dint.c:1779-1798); nil means
+// neither is present and the default applies. Both classes are sharable.
+func parseFillMessages(r io.ReaderAt, sb *Superblock, msgs *datasetMessages, datatype *DatatypeMessage) (*FillValueMessage, error) {
+	switch {
+	case msgs.fillNew != nil:
+		body, err := messageBody(r, sb, msgs.fillNew)
+		if err != nil {
+			return nil, err
+		}
+		return ParseFillValueMessage(body)
+	case msgs.fillOld != nil:
+		body, err := messageBody(r, sb, msgs.fillOld)
+		if err != nil {
+			return nil, err
+		}
+		return ParseFillValueOldMessage(body, datatype.Size)
+	default:
+		return nil, nil //nolint:nilnil // No fill message: the caller keeps the default.
+	}
 }
 
 // datasetMessages are the raw messages a dataset descriptor is built from.
 type datasetMessages struct {
 	datatype, dataspace, layout, pipeline *HeaderMessage
+	fillNew, fillOld                      *HeaderMessage
 }
 
 // findDatasetMessages picks the first message of each dataset type and
@@ -108,6 +163,10 @@ func findDatasetMessages(header *ObjectHeader) (*datasetMessages, error) {
 			m.layout = firstMessage(m.layout, msg)
 		case MsgFilterPipeline:
 			m.pipeline = firstMessage(m.pipeline, msg)
+		case MsgFillValue:
+			m.fillNew = firstMessage(m.fillNew, msg)
+		case MsgFillValueOld:
+			m.fillOld = firstMessage(m.fillOld, msg)
 		}
 	}
 
@@ -174,6 +233,7 @@ func newDatasetDescriptor(
 		dataspace:      dataspace,
 		layout:         layout,
 		filterPipeline: pipeline,
+		fill:           defaultFillValue(layout.Class),
 		nelmts:         nelmts,
 		elemSize:       elemSize,
 		dataBytes:      dataBytes,
@@ -189,7 +249,7 @@ func newDatasetDescriptor(
 			err = fmt.Errorf("chunked layout (index at 0x%X): %w", layout.DataAddress, err)
 		}
 	case LayoutVirtual:
-		err = fmt.Errorf("virtual dataset layout is not supported")
+		err = fmt.Errorf("virtual dataset layout: %w", utils.ErrNotSupported)
 	default:
 		err = fmt.Errorf("%w: unknown layout class %d", utils.ErrCorrupt, layout.Class)
 	}
@@ -330,6 +390,13 @@ func (d *DatasetDescriptor) Layout() *DataLayoutMessage { return d.layout }
 // FilterPipeline returns the dataset's filter pipeline, or nil when it has none.
 func (d *DatasetDescriptor) FilterPipeline() *FilterPipelineMessage { return d.filterPipeline }
 
+// ContiguousAllocated reports whether the dataset is contiguous with storage
+// in the file; false for unallocated contiguous storage, which reads as the
+// fill value (FillUnallocated). Other layouts report true.
+func (d *DatasetDescriptor) ContiguousAllocated() bool {
+	return d.layout.Class != LayoutContiguous || d.layout.DataAddress != undefinedAddress
+}
+
 // Dims returns the dataspace dimensions (empty for scalar and null dataspaces).
 func (d *DatasetDescriptor) Dims() []uint64 { return d.dataspace.Dimensions }
 
@@ -382,8 +449,8 @@ func (d *DatasetDescriptor) ChunkGrid() []uint64 {
 func (d *DatasetDescriptor) CollectChunks(r io.ReaderAt, sb *Superblock) ([]ChunkEntry, error) {
 	layout := d.layout
 	if layout.Class != LayoutChunked || layout.ChunkIndexType != ChunkIndexBTREE {
-		return nil, fmt.Errorf("unsupported chunk index type %d: only the v1 B-tree index is supported",
-			layout.ChunkIndexType)
+		return nil, fmt.Errorf("unsupported chunk index type %d: only the v1 B-tree index is supported: %w",
+			layout.ChunkIndexType, utils.ErrNotSupported)
 	}
 
 	ndims := len(layout.ChunkSize)
@@ -473,14 +540,6 @@ func (d *DatasetDescriptor) ResultSize(nelmts, resultElemSize, limit uint64) (in
 	// the descriptor was built.
 	size := nelmts * d.elemSize
 
-	// Unallocated contiguous storage was not checked against the file
-	// (H5Dcontig.c:399), so it bounds nothing. C reads the fill value there;
-	// this library does not support fill values yet, so the read is refused
-	// before anything is allocated.
-	if d.layout.Class == LayoutContiguous && d.layout.DataAddress == undefinedAddress && size > 0 {
-		return 0, fmt.Errorf("contiguous dataset storage is not allocated (undefined address)")
-	}
-
 	// A product that overflows is certainly over any limit.
 	converted, err := utils.SafeMultiply(nelmts, resultElemSize)
 	if err != nil {
@@ -488,7 +547,11 @@ func (d *DatasetDescriptor) ResultSize(nelmts, resultElemSize, limit uint64) (in
 	}
 	needed := max(size, converted)
 
-	limited := d.layout.Class == LayoutChunked || converted/maxFreeConversion > size
+	// Unallocated contiguous storage was not checked against the file
+	// (H5Dcontig.c:399): it reads as the fill value, so like chunked data its
+	// size is bounded by nothing in the file, only by the read limit.
+	limited := d.layout.Class == LayoutChunked || !d.ContiguousAllocated() ||
+		converted/maxFreeConversion > size
 	if limited && needed > limit {
 		return 0, fmt.Errorf("%w: reading %d elements needs %d bytes, more than the read limit of %d bytes; "+
 			"raise it with (*hdf5.File).SetReadLimit", utils.ErrLimit, nelmts, needed, limit)
@@ -529,6 +592,8 @@ const (
 	compoundPerEntry uint64 = 160 // Key, slot share and growth per member.
 	compoundBoxed    uint64 = 8   // A numeric value boxed in an interface.
 	compoundStrHead  uint64 = 16  // String header of a string member.
+	compoundSlice    uint64 = 24  // Slice header of an array member.
+	compoundIface    uint64 = 16  // Interface slot of an []interface{} element.
 )
 
 // CompoundResultSize returns the in-memory cost of one decoded element of
@@ -559,6 +624,19 @@ func memberResultSize(dt *DatatypeMessage) uint64 {
 		return compoundStrHead + uint64(dt.Size)
 	case dt.IsVariableString():
 		return compoundStrHead
+	case dt.Class == DatatypeArray && dt.Base != nil:
+		// A slice header plus one slot per element: a typed numeric slice costs
+		// at most 8 bytes per element, an []interface{} 16 plus the element's
+		// own value. Count is bounded by the 32-bit array size, so the product
+		// below cannot overflow uint64.
+		count := uint64(1)
+		for _, d := range dt.ArrayDims {
+			count *= uint64(d)
+		}
+		if dt.Base.Size > 0 && count > uint64(dt.Size)/uint64(dt.Base.Size) {
+			count = uint64(dt.Size) / uint64(dt.Base.Size) // Decoding rejects the mismatch.
+		}
+		return compoundSlice + count*(compoundIface+memberResultSize(dt.Base))
 	default:
 		return compoundBoxed
 	}

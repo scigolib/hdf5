@@ -201,7 +201,7 @@ func TestParseMemberValue_Float32_InsufficientData(t *testing.T) {
 
 // TestParseMemberValue_Int32 tests parsing an int32 member value.
 func TestParseMemberValue_Int32(t *testing.T) {
-	dt := &DatatypeMessage{Class: DatatypeFixed, Size: 4, ClassBitField: 0}
+	dt := &DatatypeMessage{Class: DatatypeFixed, Size: 4, ClassBitField: 0x08} // Signed (bit 3).
 	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, uint32(42))
 
@@ -212,7 +212,7 @@ func TestParseMemberValue_Int32(t *testing.T) {
 
 // TestParseMemberValue_Int32_Negative tests parsing a negative int32.
 func TestParseMemberValue_Int32_Negative(t *testing.T) {
-	dt := &DatatypeMessage{Class: DatatypeFixed, Size: 4, ClassBitField: 0}
+	dt := &DatatypeMessage{Class: DatatypeFixed, Size: 4, ClassBitField: 0x08} // Signed (bit 3).
 	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, uint32(0xFFFFFFFF)) // -1
 
@@ -223,7 +223,7 @@ func TestParseMemberValue_Int32_Negative(t *testing.T) {
 
 // TestParseMemberValue_Int64 tests parsing an int64 member value.
 func TestParseMemberValue_Int64(t *testing.T) {
-	dt := &DatatypeMessage{Class: DatatypeFixed, Size: 8, ClassBitField: 0}
+	dt := &DatatypeMessage{Class: DatatypeFixed, Size: 8, ClassBitField: 0x08} // Signed (bit 3).
 	data := make([]byte, 8)
 	binary.LittleEndian.PutUint64(data, uint64(1234567890123))
 
@@ -238,7 +238,7 @@ func TestParseMemberValue_Int64_InsufficientData(t *testing.T) {
 
 	_, err := parseMemberValue([]byte{0x00, 0x00, 0x00, 0x00}, dt, nil, nil)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "insufficient data for int64")
+	require.Contains(t, err.Error(), "insufficient data for 8-byte integer")
 }
 
 // TestParseMemberValue_FixedString tests parsing a fixed-length string member.
@@ -444,7 +444,9 @@ func TestParseCompoundData_SingleElement(t *testing.T) {
 	result, err := parseCompoundData(rawData, ct, 1, bytes.NewReader(rawData), &Superblock{OffsetSize: 8})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
-	require.Equal(t, int32(7), result[0]["id"])
+	// "id" has no sign bit (ClassBitField 0): an unsigned 4-byte member reads
+	// as uint32 (TASK-068 (d); it read as int32 before).
+	require.Equal(t, uint32(7), result[0]["id"])
 	require.InDelta(t, 9.81, result[0]["val"].(float64), 1e-10)
 }
 

@@ -124,19 +124,20 @@ func TestApplyShuffle(t *testing.T) {
 			want:       nil,
 			wantErr:    true,
 		},
+		// The next two left the buffer unchanged in C all along
+		// (H5Zshuffle.c:133-136: fewer than two whole elements); they expected
+		// an error, which the optional-filter skip used to hide.
 		{
-			name:       "invalid element size (too large)",
+			name:       "element size larger than the buffer",
 			data:       []byte{0x01, 0x02, 0x03, 0x04},
 			clientData: []uint32{100},
-			want:       nil,
-			wantErr:    true,
+			want:       []byte{0x01, 0x02, 0x03, 0x04},
 		},
 		{
-			name:       "data size not multiple of element size",
+			name:       "one element plus a leftover byte",
 			data:       []byte{0x01, 0x02, 0x03},
 			clientData: []uint32{2},
-			want:       nil,
-			wantErr:    true,
+			want:       []byte{0x01, 0x02, 0x03},
 		},
 	}
 

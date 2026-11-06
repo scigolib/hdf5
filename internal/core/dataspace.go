@@ -86,16 +86,33 @@ func ParseDataspaceMessage(data []byte) (*DataspaceMessage, error) {
 		Version: version,
 	}
 
-	// Determine dataspace type based on dimensionality.
-	if dimensionality == 0 {
-		// Scalar dataspace.
+	// The class, as H5O__sdspace_decode sets it (H5Osdspace.c:145-166):
+	// version 2 stores it and allows no rank for a scalar or null dataspace;
+	// version 1 implies simple for a rank and scalar without one. A scalar or
+	// null dataspace has rank 0 (no dimensions); TotalElements gives 1 and 0.
+	switch {
+	case version >= 2:
+		ds.Type = DataspaceType(data[3])
+		switch ds.Type {
+		case DataspaceSimple:
+		case DataspaceScalar, DataspaceNull:
+			if dimensionality > 0 {
+				return nil, fmt.Errorf("%w: %s dataspace with rank %d",
+					utils.ErrCorrupt, ds.String(), dimensionality)
+			}
+		default:
+			// C has no class above H5S_NULL (H5Spublic.h); no reader could use one.
+			return nil, fmt.Errorf("%w: unknown dataspace class %d", utils.ErrCorrupt, data[3])
+		}
+	case dimensionality > 0:
+		ds.Type = DataspaceSimple
+	default:
 		ds.Type = DataspaceScalar
-		ds.Dimensions = []uint64{1} // Treat scalar as 1-element array.
-		return ds, nil
 	}
 
-	// Simple dataspace.
-	ds.Type = DataspaceSimple
+	if dimensionality == 0 {
+		return ds, nil
+	}
 
 	// Determine offset based on version.
 	var offset int
@@ -158,6 +175,12 @@ func ParseDataspaceMessage(data []byte) (*DataspaceMessage, error) {
 				ds.MaxDims[i] = binary.LittleEndian.Uint64(data[offset : offset+8])
 			}
 			offset += dimSize
+
+			// H5Osdspace.c:197-201. Unlimited is the largest value, so it passes.
+			if ds.Dimensions[i] > ds.MaxDims[i] {
+				return nil, fmt.Errorf("%w: dataspace dimension %d size %d is greater than its maximum %d",
+					utils.ErrCorrupt, i, ds.Dimensions[i], ds.MaxDims[i])
+			}
 		}
 	}
 

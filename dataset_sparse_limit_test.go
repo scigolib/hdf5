@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/scigolib/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,20 +69,28 @@ func TestReadLimit_SparseConvertedResult(t *testing.T) {
 	require.Less(t, allocated, uint64(allocBudget))
 
 	// The one stored chunk is chunk 256 (elements 268435456 …);
-	// h5dump -d /big -s 268435456 -c 8: 31 × 8. Windows in unwritten chunks
-	// read as 0 here, not as the fill value -1 h5dump shows: fill values are not
-	// implemented yet (extractFromChunk), a separate limitation.
+	// h5dump -d /big -s 268435456 -c 8: 31 × 8.
 	window, err := ds.ReadSlice([]uint64{268435456}, []uint64{8})
 	require.NoError(t, err)
 	require.Equal(t, []float64{31, 31, 31, 31, 31, 31, 31, 31}, window)
+
+	// Windows in unwritten chunks read as the fill value, -1
+	// (h5dump -d /big -s 0 -c 4), as H5D__chunk_read does
+	// (H5Dchunk.c:2936-2949); they used to read as 0.
+	window, err = ds.ReadSlice([]uint64{0}, []uint64{4})
+	require.NoError(t, err)
+	require.Equal(t, []float64{-1, -1, -1, -1}, window)
 }
 
 // TestRead_UnallocatedContiguous: /g1/arrayd of h5diff_dset1.h5 is one element
 // of a 16,777,217-double array type (134,217,736 bytes) that was never written:
 // h5ls reports "0 allocated bytes", its address is undefined. C accepts it at
 // open (H5Dcontig.c:399 checks the region only for a defined address) and reads
-// the fill value; this library does not read fill values yet, so the read is
-// refused before anything is allocated, and it is not reported as corruption.
+// the fill value, which this library now does too (TestRead_FillUnallocated*).
+// What still refuses this one is the array datatype, which has no float64
+// conversion: the read is refused as not supported, before the 128 MiB element
+// is allocated, and it is not reported as corruption. (It used to be refused
+// as "not allocated".)
 func TestRead_UnallocatedContiguous(t *testing.T) {
 	f := openOfficial(t, "h5diff_dset1.h5")
 	ds := findDatasetPath(t, f, "/g1/arrayd")
@@ -89,7 +98,7 @@ func TestRead_UnallocatedContiguous(t *testing.T) {
 	var err error
 	allocated := allocatedBy(func() { _, err = ds.ReadSlice([]uint64{0}, []uint64{1}) })
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "not allocated")
+	require.ErrorIs(t, err, utils.ErrNotSupported) // hdf5.ErrNotSupported once main re-exports it.
 	require.False(t, errors.Is(err, ErrCorrupt))
 	require.Less(t, allocated, uint64(allocBudget))
 }

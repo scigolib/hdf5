@@ -83,14 +83,21 @@ func TestDatasetDescriptor_Contiguous(t *testing.T) {
 
 	t.Run("unallocated storage", func(t *testing.T) {
 		// H5Dcontig.c:399: the region is checked only for a defined address,
-		// so the descriptor is valid; reading it is refused before allocating.
+		// so the descriptor is valid. It reads as the fill value (H5Dio.c:239-279),
+		// which nothing in the file bounds: the read limit refuses 8 TiB before
+		// allocating. (It used to be refused as "not allocated".)
 		layout := &DataLayoutMessage{Version: 3, Class: LayoutContiguous, DataAddress: undefinedAddress}
 		desc, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(1<<40), layout, nil)
 		require.NoError(t, err)
+		require.False(t, desc.ContiguousAllocated())
 
 		_, err = desc.ResultSize(desc.NumElements(), ResultFloat64, utils.DefaultReadLimit)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "not allocated")
+		require.ErrorIs(t, err, utils.ErrLimit)
+
+		// Within the limit, the size is granted.
+		size, err := desc.ResultSize(16, ResultFloat64, utils.DefaultReadLimit)
+		require.NoError(t, err)
+		require.Equal(t, 128, size)
 	})
 }
 

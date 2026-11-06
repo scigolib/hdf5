@@ -30,6 +30,12 @@ func ReadFloat64(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, limit u
 		return []float64{}, nil
 	}
 
+	// Refuse an unconvertible datatype before the storage is read: a fill
+	// value can stand for storage of any size up to the read limit.
+	if err := CheckFloat64Convertible(desc.datatype); err != nil {
+		return nil, err
+	}
+
 	rawData, err := readRawData(r, sb, desc, ResultFloat64, limit)
 	if err != nil {
 		return nil, err
@@ -77,6 +83,8 @@ func ConvertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uin
 
 // convertToFloat64 converts raw bytes to float64 array based on datatype.
 func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uint64) ([]float64, error) {
+	datatype = enumAsBase(datatype)
+
 	// ADR-003 (issue #68): numElements comes from the dataspace, i.e. from file
 	// metadata, so the result buffer sized from it is validated before it is
 	// allocated — a failed Go allocation is a fatal runtime error, unlike the C
@@ -85,8 +93,8 @@ func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uin
 	// also guarantees that every path reaching the allocation is one where
 	// datatype.Size is the converter's element width and the guard below is
 	// therefore meaningful.
-	if !isFloat64Convertible(datatype) {
-		return nil, fmt.Errorf("unsupported datatype for conversion to float64: %s", datatype)
+	if err := CheckFloat64Convertible(datatype); err != nil {
+		return nil, err
 	}
 
 	required, err := utils.SafeMultiply(numElements, uint64(datatype.Size))
@@ -196,14 +204,24 @@ func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uin
 				}
 			}
 		default:
-			return nil, fmt.Errorf("unsupported fixed-point width %d bytes", datatype.Size)
+			return nil, fmt.Errorf("unsupported fixed-point width %d bytes: %w", datatype.Size, utils.ErrNotSupported)
 		}
 
 	default:
-		return nil, fmt.Errorf("unsupported datatype for conversion to float64: %s", datatype)
+		return nil, fmt.Errorf("unsupported datatype for conversion to float64: %s: %w", datatype, utils.ErrNotSupported)
 	}
 
 	return result, nil
+}
+
+// CheckFloat64Convertible returns an error wrapping utils.ErrNotSupported when
+// the datatype has no float64 conversion, so a reader can refuse it before it
+// reads or fills any storage.
+func CheckFloat64Convertible(datatype *DatatypeMessage) error {
+	if !isFloat64Convertible(datatype) {
+		return fmt.Errorf("unsupported datatype for conversion to float64: %s: %w", datatype, utils.ErrNotSupported)
+	}
+	return nil
 }
 
 // isFloat64Convertible reports whether convertToFloat64 can convert the
@@ -211,6 +229,7 @@ func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uin
 // runs only where Size is the converter's element width (1/2/4/8-byte
 // fixed-point, 4/8-byte float).
 func isFloat64Convertible(datatype *DatatypeMessage) bool {
+	datatype = enumAsBase(datatype)
 	if datatype.IsFloat64() || datatype.IsFloat32() {
 		return true
 	}
@@ -225,6 +244,23 @@ func isFloat64Convertible(datatype *DatatypeMessage) bool {
 	default:
 		return false
 	}
+}
+
+// enumAsBase returns the integer base type of an enumeration, so that a
+// numeric read returns each element's integer value, and dt itself otherwise.
+//
+// This is the C library's enum-to-numeric conversion: H5T__conv_enum_numeric
+// (H5Tconv_enum.c:507-561, registered for integer and float destinations at
+// H5T.c:1422-1423) converts the values through the enumeration's parent type,
+// so H5Dread into H5T_NATIVE_DOUBLE yields the base integer values; h5py reads
+// enums the same way. The codec keeps the member names and values for an
+// enum-aware API. The decoder guarantees the base has the enum's size (datatype_codec.go
+// decodeEnum), which the size check below re-asserts for hand-built types.
+func enumAsBase(dt *DatatypeMessage) *DatatypeMessage {
+	if dt.Class == DatatypeEnum && dt.Base != nil && dt.Base.IsFixedPoint() && dt.Base.Size == dt.Size {
+		return dt.Base
+	}
+	return dt
 }
 
 // validateElementStorage rejects an element count that cannot fit in the bytes
@@ -327,8 +363,8 @@ func readChunkedData(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, res
 	// a fixed/extensible array or a v2 B-tree; the address in that case points
 	// at a different structure, so reading it as a B-tree would return garbage.
 	if layout.ChunkIndexType != ChunkIndexBTREE {
-		return nil, fmt.Errorf("unsupported chunk index type %d: only the v1 B-tree index is supported",
-			layout.ChunkIndexType)
+		return nil, fmt.Errorf("unsupported chunk index type %d: only the v1 B-tree index is supported: %w",
+			layout.ChunkIndexType, utils.ErrNotSupported)
 	}
 
 	totalBytes, err := desc.ResultSize(desc.nelmts, resultElemSize, limit)
@@ -344,6 +380,14 @@ func readChunkedData(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, res
 	}
 
 	rawData := make([]byte, totalBytes)
+
+	// Chunks never written read as the fill value; filling first and copying
+	// the stored chunks over it leaves the fill only where storage is missing.
+	if desc.ChunksMissing(len(chunks)) {
+		if err := desc.FillUnallocated(rawData); err != nil {
+			return nil, err
+		}
+	}
 
 	dataDims := desc.dataspace.Dimensions
 	chunkDims := desc.ChunkDims()
@@ -361,7 +405,7 @@ func readChunkedData(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, res
 
 		// Apply filters (decompression, etc) if present.
 		if desc.filterPipeline != nil {
-			chunkData, err = desc.filterPipeline.ApplyFilters(chunkData, desc.chunkBytes)
+			chunkData, err = desc.filterPipeline.ApplyFiltersMasked(chunkData, chunk.Key.FilterMask, desc.chunkBytes)
 			if err != nil {
 				return nil, fmt.Errorf("failed to apply filters to chunk at 0x%x: %w", chunkAddr, err)
 			}

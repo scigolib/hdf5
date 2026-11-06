@@ -36,12 +36,12 @@ func openLegacy(t *testing.T, name string) *Dataset {
 func TestLegacyCompound_ReadBack(t *testing.T) {
 	cases := map[string][]core.CompoundValue{
 		"numeric.h5": {
-			{"id": int32(1), "value": 0.5},
-			{"id": int32(2), "value": 1.5},
+			{"id": uint32(1), "value": 0.5},
+			{"id": uint32(2), "value": 1.5},
 		},
 		"with_string.h5": {
-			{"id": int32(1), "value": 0.5, "tag": "row0"},
-			{"id": int32(2), "value": 1.5, "tag": "row1"},
+			{"id": uint32(1), "value": 0.5, "tag": "row0"},
+			{"id": uint32(2), "value": 1.5, "tag": "row1"},
 		},
 		"kv_strings.h5": {
 			{"key": "detector", "value": "H1"},

@@ -263,11 +263,20 @@ func hyperslabEnd(start, count, stride, block uint64) (uint64, error) {
 func (d *Dataset) readHyperslab(selection *HyperslabSelection, desc *core.DatasetDescriptor) (interface{}, error) {
 	limit := d.file.ReadLimit()
 
+	// Every layout converts to float64 at the end; refuse a datatype without
+	// that conversion before any storage is read or filled.
+	if err := core.CheckFloat64Convertible(desc.Datatype()); err != nil {
+		return nil, err
+	}
+
 	switch desc.Layout().Class {
 	case core.LayoutCompact:
 		src := &compactSource{data: desc.Layout().CompactData}
 		return readHyperslabRuns(selection, desc, src, limit)
 	case core.LayoutContiguous:
+		if !desc.ContiguousAllocated() {
+			return readHyperslabRuns(selection, desc, fillSource{desc: desc}, limit)
+		}
 		src := newContiguousSource(d.file.reader, desc)
 		return readHyperslabRuns(selection, desc, src, limit)
 	case core.LayoutChunked:
@@ -321,6 +330,16 @@ func (s *compactSource) readRun(dst []byte, off uint64) error {
 
 	copy(dst, s.data[off:off+n])
 	return nil
+}
+
+// fillSource serves runs of unallocated contiguous storage: every run reads as
+// the fill value (H5D__read, H5Dio.c:239-279). Runs hold whole elements.
+type fillSource struct {
+	desc *core.DatasetDescriptor
+}
+
+func (s fillSource) readRun(dst []byte, _ uint64) error {
+	return s.desc.FillUnallocated(dst)
 }
 
 // contiguousSource serves runs of a contiguous dataset through a sieve buffer,
@@ -563,6 +582,14 @@ func (d *Dataset) readHyperslabChunked(
 
 	outputData := make([]byte, outSize)
 
+	// Chunks never written read as the fill value (H5Dchunk.c:2936-2949,
+	// 3041-3046): fill the result first, the stored chunks overwrite it below.
+	if chunksMissingInRange(chunks, first, last, len(dims)) {
+		if err := desc.FillUnallocated(outputData); err != nil {
+			return nil, err
+		}
+	}
+
 	// Each element is placed at the output offset computed from its
 	// coordinates (see extractChunkPortionRecursive), NOT a running counter:
 	// the chunks are visited in B-tree order, which is not the selection's
@@ -621,6 +648,28 @@ func chunkRange(sel *HyperslabSelection, chunkDims, datasetDims []uint64) (first
 	return first, last, nil
 }
 
+// chunksMissingInRange reports whether the chunk grid cells in [first, last]
+// outnumber the stored chunks there, i.e. some chunk the selection may touch
+// was never written. The descriptor keeps every chunk key inside the grid.
+func chunksMissingInRange(chunks []core.ChunkEntry, first, last []uint64, rank int) bool {
+	cells := uint64(1)
+	for i := range first {
+		var err error
+		if cells, err = utils.SafeMultiply(cells, last[i]-first[i]+1); err != nil {
+			return true
+		}
+	}
+
+	var present uint64
+	for i := range chunks {
+		if chunkInRange(chunks[i].Key.Scaled[:rank], first, last) {
+			present++
+		}
+	}
+
+	return present < cells
+}
+
 // chunkInRange reports whether chunk coordinates lie within [first, last] in
 // every dimension.
 func chunkInRange(coord, first, last []uint64) bool {
@@ -655,7 +704,7 @@ func (d *Dataset) extractFromChunk(
 	// Decode through the filter pipeline; no filter may produce more than the
 	// chunk's byte size (review finding H4).
 	if filterPipeline := desc.FilterPipeline(); filterPipeline != nil {
-		chunkData, err = filterPipeline.ApplyFilters(chunkData, desc.ChunkBytes())
+		chunkData, err = filterPipeline.ApplyFiltersMasked(chunkData, chunk.Key.FilterMask, desc.ChunkBytes())
 		if err != nil {
 			return fmt.Errorf("failed to apply filters: %w", err)
 		}

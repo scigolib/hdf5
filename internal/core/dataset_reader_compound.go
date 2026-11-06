@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -9,7 +10,23 @@ import (
 	"github.com/scigolib/hdf5/internal/utils"
 )
 
-// CompoundValue represents a single compound structure instance as a map of field names to values.
+// CompoundValue represents a single compound structure instance as a map of
+// field names to values. Each member's datatype maps to one Go type:
+//
+//   - fixed-point of 1, 2, 4 or 8 bytes: int8, int16, int32, int64 when
+//     signed, uint8, uint16, uint32, uint64 when unsigned;
+//   - enumeration: its base integer value, typed as above (the conversion
+//     H5T__conv_enum_numeric makes, H5Tconv_enum.c:507-561);
+//   - IEEE float of 4 or 8 bytes: float32, float64;
+//   - fixed-length string: string, padding removed; variable-length string:
+//     string;
+//   - nested compound: CompoundValue;
+//   - array: its elements flattened in C (row-major) order, as []float64,
+//     []float32 or the integer slice of the base type when the base is
+//     numeric (or an enumeration), and as []interface{} of the values above
+//     otherwise.
+//
+// Any other member datatype is reported as unsupported.
 type CompoundValue map[string]interface{}
 
 // ReadDatasetCompound reads a dataset with compound datatype and returns array
@@ -116,6 +133,9 @@ func parseMemberValue(data []byte, datatype *DatatypeMessage, r io.ReaderAt, sb 
 // parseMemberValueWith parses a single member value, dereferencing a
 // variable-length string through heap.
 func parseMemberValueWith(data []byte, datatype *DatatypeMessage, heap *heapReader) (interface{}, error) {
+	// An enumeration member reads as its base integer value, the conversion
+	// H5T__conv_enum_numeric makes (H5Tconv_enum.c:507-561).
+	datatype = enumAsBase(datatype)
 	byteOrder := datatype.GetByteOrder()
 
 	switch {
@@ -133,19 +153,14 @@ func parseMemberValueWith(data []byte, datatype *DatatypeMessage, heap *heapRead
 		bits := byteOrder.Uint32(data[0:4])
 		return math.Float32frombits(bits), nil
 
-	case datatype.IsInt32():
-		if len(data) < 4 {
-			return nil, errors.New("insufficient data for int32")
+	case datatype.IsFixedPoint() && isGoIntegerWidth(datatype.Size):
+		if uint64(len(data)) < uint64(datatype.Size) {
+			return nil, fmt.Errorf("insufficient data for %d-byte integer", datatype.Size)
 		}
-		//nolint:gosec // G115: HDF5 binary format requires uint32 to int32 conversion
-		return int32(byteOrder.Uint32(data[0:4])), nil
+		return fixedArray(data, 1, datatype.Size, datatype.IsSignedFixedPoint(), byteOrder, true), nil
 
-	case datatype.IsInt64():
-		if len(data) < 8 {
-			return nil, errors.New("insufficient data for int64")
-		}
-		//nolint:gosec // G115: HDF5 binary format requires uint64 to int64 conversion
-		return int64(byteOrder.Uint64(data[0:8])), nil
+	case datatype.Class == DatatypeArray:
+		return parseArrayMember(data, datatype, heap)
 
 	case datatype.IsFixedString():
 		// CVE-2025-2926 fix: Validate string size before processing.
@@ -180,8 +195,105 @@ func parseMemberValueWith(data []byte, datatype *DatatypeMessage, heap *heapRead
 		return values[0], nil
 
 	default:
-		return nil, fmt.Errorf("unsupported member datatype: %s", datatype)
+		return nil, fmt.Errorf("unsupported member datatype: %s: %w", datatype, utils.ErrNotSupported)
 	}
+}
+
+// isGoIntegerWidth reports whether a fixed-point size has a Go integer type.
+func isGoIntegerWidth(size uint32) bool {
+	return size == 1 || size == 2 || size == 4 || size == 8
+}
+
+// parseArrayMember decodes an array member: its elements in C (row-major)
+// order, flattened. A numeric base gives a typed slice ([]float64, []int32,
+// ...); any other base gives []interface{} of the values a member of that
+// type would have. The element count comes from the datatype; the bytes it
+// covers are checked against the record before anything is allocated.
+func parseArrayMember(data []byte, dt *DatatypeMessage, heap *heapReader) (interface{}, error) {
+	if dt.Base == nil || dt.Base.Size == 0 {
+		return nil, fmt.Errorf("%w: array member without a base type", utils.ErrCorrupt)
+	}
+	count := uint64(1)
+	for _, d := range dt.ArrayDims {
+		var err error
+		if count, err = utils.SafeMultiply(count, uint64(d)); err != nil {
+			return nil, fmt.Errorf("%w: array member element count: %w", utils.ErrCorrupt, err)
+		}
+	}
+	stride := uint64(dt.Base.Size)
+	need, err := utils.SafeMultiply(count, stride)
+	if err != nil || need > uint64(dt.Size) || need > uint64(len(data)) {
+		return nil, fmt.Errorf("%w: array member of %d %d-byte elements does not fit its %d bytes (%d in the record)",
+			utils.ErrCorrupt, count, stride, dt.Size, len(data))
+	}
+
+	base := enumAsBase(dt.Base)
+	bo := base.GetByteOrder()
+	switch {
+	case base.IsFloat64():
+		out := make([]float64, count)
+		for i := range out {
+			out[i] = math.Float64frombits(bo.Uint64(data[uint64(i)*8:]))
+		}
+		return out, nil
+	case base.IsFloat32():
+		out := make([]float32, count)
+		for i := range out {
+			out[i] = math.Float32frombits(bo.Uint32(data[uint64(i)*4:]))
+		}
+		return out, nil
+	case base.IsFixedPoint() && isGoIntegerWidth(base.Size):
+		return fixedArray(data, count, base.Size, base.IsSignedFixedPoint(), bo, false), nil
+	}
+
+	out := make([]interface{}, count)
+	for i := range out {
+		elem := data[uint64(i)*stride : uint64(i+1)*stride]
+		v, err := parseMemberValueWith(elem, dt.Base, heap)
+		if err != nil {
+			return nil, fmt.Errorf("array element %d: %w", i, err)
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// fixedArray decodes n integers of the given width and sign into the Go
+// slice of that type, or into a single value when scalar is set. The caller
+// has checked that data holds n*size bytes and that size is 1, 2, 4 or 8.
+func fixedArray(data []byte, n uint64, size uint32, signed bool, bo binary.ByteOrder, scalar bool) interface{} {
+	w := uint64(size)
+	at := func(i int) []byte { return data[uint64(i)*w:] } //nolint:gosec // G115: i is an index in [0, n).
+	switch {
+	case size == 1 && signed:
+		return fill(n, scalar, func(i int) int8 { return int8(at(i)[0]) }) //nolint:gosec // G115: two's complement reinterpretation
+	case size == 1:
+		return fill(n, scalar, func(i int) uint8 { return at(i)[0] })
+	case size == 2 && signed:
+		return fill(n, scalar, func(i int) int16 { return int16(bo.Uint16(at(i))) }) //nolint:gosec // G115: two's complement reinterpretation
+	case size == 2:
+		return fill(n, scalar, func(i int) uint16 { return bo.Uint16(at(i)) })
+	case size == 4 && signed:
+		return fill(n, scalar, func(i int) int32 { return int32(bo.Uint32(at(i))) }) //nolint:gosec // G115: two's complement reinterpretation
+	case size == 4:
+		return fill(n, scalar, func(i int) uint32 { return bo.Uint32(at(i)) })
+	case signed:
+		return fill(n, scalar, func(i int) int64 { return int64(bo.Uint64(at(i))) }) //nolint:gosec // G115: two's complement reinterpretation
+	default:
+		return fill(n, scalar, func(i int) uint64 { return bo.Uint64(at(i)) })
+	}
+}
+
+// fill returns get(0) when scalar is set, otherwise the slice of n values.
+func fill[T any](n uint64, scalar bool, get func(int) T) interface{} {
+	if scalar {
+		return get(0)
+	}
+	out := make([]T, n)
+	for i := range out {
+		out[i] = get(i)
+	}
+	return out
 }
 
 // extractString extracts a string from fixed-length byte array based on padding type.

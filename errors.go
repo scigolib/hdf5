@@ -12,3 +12,9 @@ var ErrCorrupt = utils.ErrCorrupt
 // more than the file's read limit. The file itself may be valid; raise the
 // limit to read it. Match it with errors.Is.
 var ErrLimit = utils.ErrLimit
+
+// ErrNotSupported is wrapped by errors that refuse valid HDF5 this library
+// does not read or write yet: a filter it has no decoder for, a shared message
+// stored in the shared-message heap, a datatype it cannot represent. The file
+// is not corrupt; the C library may read it. Match it with errors.Is.
+var ErrNotSupported = utils.ErrNotSupported

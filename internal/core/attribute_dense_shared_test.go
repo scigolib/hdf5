@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // buildDenseAttributeStorage lays out a B-tree v2 name index (BTHD + BTLF)
@@ -60,16 +62,31 @@ func buildDenseAttributeStorage(msgs [][]byte) ([]byte, *AttributeInfoMessage) {
 // review-064 M2: one attribute with a committed (shared) datatype in dense
 // storage failed the whole listing; it is skipped as in compact storage
 // (H5Oattr.c:88, valid HDF5) and the other attributes are returned.
+//
+// Since TASK-068 committed datatypes resolve; the case still unsupported is a
+// datatype in the shared object header message heap (SOHM), which keeps the
+// skip. A shared reference that is not one (the bytes this test used before)
+// is corruption and fails the read.
 func TestReadDenseAttributes_SkipsSharedDatatype(t *testing.T) {
-	shared := buildV3AttrMessage(t, "committed", 1)
-	shared[1] |= attrFlagTypeShared
+	// A version 3 attribute "sohm" whose datatype is a SOHM reference
+	// (H5Oshared.c:331-337: version 3, type 1, 8-byte heap ID).
+	ref := cat([]byte{3, shareTypeSOHM}, make([]byte, sharedMsgHeapIDSize))
+	scalar := []byte{1, 0, 0, 0, 0, 0, 0, 0}
+	sohm := cat([]byte{3, attrFlagTypeShared, 5, 0, byte(len(ref)), 0, byte(len(scalar)), 0, 0},
+		[]byte("sohm\x00"), ref, scalar, []byte{1, 0, 0, 0})
 	good := buildV3AttrMessage(t, "good", 42)
 
-	buf, info := buildDenseAttributeStorage([][]byte{shared, good})
+	buf, info := buildDenseAttributeStorage([][]byte{sohm, good})
 	sb := &Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian}
 
 	attrs, err := readDenseAttributes(bytes.NewReader(buf), info, sb)
 	require.NoError(t, err)
 	require.Len(t, attrs, 1)
 	require.Equal(t, "good", attrs[0].Name)
+
+	bogus := buildV3AttrMessage(t, "bogus", 1)
+	bogus[1] |= attrFlagTypeShared // The int32 datatype bytes are no shared reference.
+	buf, info = buildDenseAttributeStorage([][]byte{bogus, good})
+	_, err = readDenseAttributes(bytes.NewReader(buf), info, sb)
+	require.ErrorIs(t, err, utils.ErrCorrupt)
 }

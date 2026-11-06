@@ -177,6 +177,14 @@ func ParseFilterPipelineMessage(data []byte) (*FilterPipelineMessage, error) {
 // likewise sized from the chunk (review finding H4). A larger output wraps
 // utils.ErrCorrupt.
 func (fp *FilterPipelineMessage) ApplyFilters(data []byte, maxOutput uint64) ([]byte, error) {
+	return fp.ApplyFiltersMasked(data, 0, maxOutput)
+}
+
+// ApplyFiltersMasked is ApplyFilters for a chunk whose filter mask is mask:
+// bit i set means filter i was not applied when the chunk was written (an
+// optional filter that failed), so it is skipped on read, as H5Z_pipeline
+// does (H5Z.c:1400-1403).
+func (fp *FilterPipelineMessage) ApplyFiltersMasked(data []byte, mask uint32, maxOutput uint64) ([]byte, error) {
 	if fp == nil || len(fp.Filters) == 0 {
 		return data, nil
 	}
@@ -188,17 +196,17 @@ func (fp *FilterPipelineMessage) ApplyFilters(data []byte, maxOutput uint64) ([]
 
 	for i := len(fp.Filters) - 1; i >= 0; i-- {
 		filter := fp.Filters[i]
+		if i < 32 && mask&(uint32(1)<<uint(i)) != 0 {
+			continue // Not applied when this chunk was written.
+		}
 
-		// Skip optional filters if they fail.
-		isOptional := (filter.Flags & 0x0001) != 0
-
+		// The optional flag (H5Z_FLAG_OPTIONAL) matters only when writing. On
+		// read H5Z_pipeline fails for a filter it does not have (H5Z.c:1408-1434)
+		// and for a filter that fails (H5Z.c:1475-1490), optional or not:
+		// skipping it would hand the still-encoded bytes on as data.
 		result, err = applyFilter(filter, result, maxOutput+4*fletcherBefore(fp.Filters, i))
 		if err != nil {
-			if isOptional {
-				// Optional filter - log and continue.
-				continue
-			}
-			return nil, fmt.Errorf("filter %d (%s) failed: %w", filter.ID, filterName(filter.ID), err)
+			return nil, filterError(filter, err)
 		}
 
 		// LZF filter: ensure output matches expected size from cd_values[2].
@@ -243,6 +251,26 @@ func (fp *FilterPipelineMessage) ApplyFilters(data []byte, maxOutput uint64) ([]
 	return result, nil
 }
 
+// ErrFilterNotSupported marks data stored through a filter this library cannot
+// decode (N-bit, scale-offset, SZIP, an unregistered third-party filter). The
+// file is valid HDF5; it wraps utils.ErrNotSupported, not utils.ErrCorrupt.
+var ErrFilterNotSupported = fmt.Errorf("hdf5: filter not supported: %w", utils.ErrNotSupported)
+
+// filterError classifies a filter failure on read: a filter we cannot decode
+// keeps ErrFilterNotSupported; a supported filter that fails on the stored
+// bytes is corruption, unless it already reports a limit or corruption.
+func filterError(filter Filter, err error) error {
+	name := filterName(filter.ID)
+	switch {
+	case errors.Is(err, ErrFilterNotSupported):
+		return fmt.Errorf("required filter %d (%s) is not supported: %w", filter.ID, name, err)
+	case errors.Is(err, utils.ErrCorrupt), errors.Is(err, utils.ErrLimit):
+		return fmt.Errorf("filter %d (%s) failed: %w", filter.ID, name, err)
+	default:
+		return fmt.Errorf("%w: filter %d (%s) failed: %w", utils.ErrCorrupt, filter.ID, name, err)
+	}
+}
+
 // applyFilter applies a single filter.
 func applyFilter(filter Filter, data []byte, maxOutput uint64) ([]byte, error) {
 	switch filter.ID {
@@ -282,7 +310,9 @@ func applyFilter(filter Filter, data []byte, maxOutput uint64) ([]byte, error) {
 		return applySZIP(data)
 
 	default:
-		return nil, fmt.Errorf("unsupported filter ID: %d", filter.ID)
+		// N-bit (H5Znbit.c), scale-offset (H5Zscaleoffset.c) and any
+		// third-party filter: no decoder here.
+		return nil, fmt.Errorf("unsupported filter ID: %d: %w", filter.ID, ErrFilterNotSupported)
 	}
 }
 
@@ -320,22 +350,28 @@ func applyDeflate(data []byte, maxOutput uint64) ([]byte, error) {
 
 // applyShuffle reverses shuffle filter.
 // Shuffle reorders bytes to improve compression.
+//
+// As H5Z__filter_shuffle (H5Zshuffle.c:108-290): exactly one parameter, a
+// non-zero element size (:125-126); fewer than two whole elements or a 1-byte
+// type leave the buffer as it is (:133-136); bytes past the last whole element
+// stay in place at the end (:279-284).
 func applyShuffle(data []byte, clientData []uint32) ([]byte, error) {
-	if len(clientData) == 0 {
-		return nil, errors.New("shuffle filter missing element size")
+	if len(clientData) != 1 || clientData[0] == 0 {
+		return nil, fmt.Errorf("%w: invalid shuffle parameters %v (H5Zshuffle.c:125-126)", utils.ErrCorrupt, clientData)
 	}
 
+	if uint64(clientData[0]) > uint64(len(data)) {
+		return data, nil // Fewer than one whole element.
+	}
 	elementSize := int(clientData[0])
-	if elementSize <= 0 || elementSize > len(data) {
-		return nil, fmt.Errorf("invalid shuffle element size: %d", elementSize)
-	}
-
 	numElements := len(data) / elementSize
-	if len(data)%elementSize != 0 {
-		return nil, errors.New("data size not multiple of element size")
+	if elementSize <= 1 || numElements <= 1 {
+		return data, nil
 	}
 
 	result := make([]byte, len(data))
+	whole := numElements * elementSize
+	copy(result[whole:], data[whole:]) // Leftover bytes.
 
 	// Reverse shuffle: data is organized as [all byte0][all byte1]...[all byteN].
 	// We need to interleave them back.
@@ -405,10 +441,10 @@ func applyLZF(data []byte, maxOutput uint64) ([]byte, error) {
 //
 // Reference: https://github.com/MathisRosenhauer/libaec
 func applySZIP(_ []byte) ([]byte, error) {
-	return nil, errors.New("SZIP decompression requires libaec library (not available in pure Go); " +
-		"SZIP uses extended Golomb-Rice coding (CCSDS 121.0-B-3 standard); " +
-		"to read SZIP-compressed datasets, use the HDF5 C library or h5py; " +
-		"alternatively, re-save the file with GZIP compression (filter ID 1)")
+	return nil, fmt.Errorf("SZIP decompression requires libaec library (not available in pure Go); "+
+		"SZIP uses extended Golomb-Rice coding (CCSDS 121.0-B-3 standard); "+
+		"to read SZIP-compressed datasets, use the HDF5 C library or h5py; "+
+		"alternatively, re-save the file with GZIP compression (filter ID 1): %w", ErrFilterNotSupported)
 }
 
 // lzfDecompress decompresses LZF-compressed data.

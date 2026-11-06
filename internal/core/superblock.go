@@ -140,8 +140,15 @@ func readSuperblockAt(r io.ReaderAt, addr, size uint64, sizeKnown bool) (*Superb
 	}
 
 	version := buf[8]
+	// Version 1 (non-default B-tree K values) is valid HDF5 (H5Fprivate.h:301)
+	// that this reader does not decode; above 3 C refuses the superblock
+	// (H5Fsuper_cache.c:164-165).
 	if version != Version0 && version != Version2 && version != Version3 {
-		return nil, fmt.Errorf("unsupported superblock version: %d (only 0, 2, 3 supported)", version)
+		sentinel := utils.ErrCorrupt
+		if version == 1 {
+			sentinel = utils.ErrNotSupported
+		}
+		return nil, fmt.Errorf("unsupported superblock version: %d (only 0, 2, 3 supported): %w", version, sentinel)
 	}
 
 	endianness, offsetSize, lengthSize, err := parseSuperblockSizes(version, buf)
