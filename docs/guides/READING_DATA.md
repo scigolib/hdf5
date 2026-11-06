@@ -256,30 +256,47 @@ Compound dataset: /measurements
 
 ### Dataset Metadata
 
-Get information about a dataset without reading data:
+Get information about a dataset without reading data (inside a `Walk` callback, where
+`path` is the object's path):
 
 ```go
 if ds, ok := obj.(*hdf5.Dataset); ok {
-    info, err := ds.Info()
+    shape, err := ds.Shape()
     if err != nil {
-        log.Printf("Error getting info: %v", err)
+        log.Printf("Error getting shape: %v", err)
+        return
+    }
+    dt, err := ds.Datatype()
+    if err != nil {
+        log.Printf("Error getting datatype: %v", err)
+        return
+    }
+    layout, err := ds.Layout()
+    if err != nil {
+        log.Printf("Error getting layout: %v", err)
         return
     }
 
-    fmt.Println(info)
+    fmt.Printf("%s: %v, %s (%d bytes per element, %s)\n", path, shape, dt.Class, dt.Size, dt.Order)
+    fmt.Printf("  layout: %s, chunks %v\n", layout.Class, layout.ChunkDims)
+    for _, f := range layout.Filters {
+        fmt.Printf("  filter: %s %v\n", f.ID, f.ClientData)
+    }
 }
 ```
 
-**Example output**:
+**Example output** for a chunked, deflate-compressed `float64` dataset:
 ```
-Dataset: temperature
-  Datatype: float64
-  Layout: Chunked
-  Dimensions: [100, 50]
-  Chunks: [10, 10]
-  Compression: gzip (level 6)
-  Total size: 40000 bytes
+/temperature: [100 50], float (8 bytes per element, little-endian)
+  layout: chunked, chunks [10 10]
+  filter: deflate [6]
 ```
+
+`MaxShape()` reports the maximum dimensions (`hdf5.Unlimited` for an extendible
+one). A compound datatype lists its members in `dt.Members` (name, offset, type),
+an enumeration its names and values in `dt.EnumMembers`. `Info()` returns the same
+facts as one line of text for people to read; programs should use the accessors
+above instead of parsing it.
 
 ---
 
@@ -636,11 +653,15 @@ file.Walk(func(path string, obj hdf5.Object) {
 
 ```go
 // Check size before reading large datasets
-info, err := ds.Info()
+shape, err := ds.Shape()
 if err == nil {
-    // Parse info to check dataset size
-    if strings.Contains(info, "Total size: ") {
-        // Decide whether to read based on size
+    elements := uint64(1)
+    for _, n := range shape {
+        elements *= n
+    }
+    // Read() returns []float64: 8 bytes per element in memory.
+    if elements*8 > maxBytes {
+        // Read it in parts with ReadSlice, or skip it.
     }
 }
 ```
