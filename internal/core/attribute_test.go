@@ -41,17 +41,16 @@ func TestParseAttributeInfoMessage(t *testing.T) {
 		{
 			name: "with creation order tracking",
 			data: func() []byte {
-				d := make([]byte, 22) // 2 + 2 (max compact) + 2 (min dense) + 8 + 8
+				// C layout (H5Oainfo.c:132-138): max_crt_idx(2), then the
+				// addresses; there is no "min dense" field.
+				d := make([]byte, 20) // 2 + 2 (max creation index) + 8 + 8
 				d[0] = 0              // version
 				d[1] = 0x01           // flags: track creation order
-				// Max compact (2 bytes)
 				binary.LittleEndian.PutUint16(d[2:4], 42)
-				// Min dense (2 bytes)
-				binary.LittleEndian.PutUint16(d[4:6], 8)
 				// Fractal heap address
-				binary.LittleEndian.PutUint64(d[6:14], 0x3000)
+				binary.LittleEndian.PutUint64(d[4:12], 0x3000)
 				// B-tree name index address
-				binary.LittleEndian.PutUint64(d[14:22], 0x4000)
+				binary.LittleEndian.PutUint64(d[12:20], 0x4000)
 				return d
 			}(),
 			offsetSize:  8,
@@ -599,7 +598,7 @@ func TestEncodeAttributeInfoMessage(t *testing.T) {
 				BTreeNameIndexAddr: 0x4000,
 			},
 			offsetSize: 8,
-			wantSize:   22, // 2 + 4 (max/min) + 8 + 8
+			wantSize:   20, // 2 + 2 (max creation index, H5Oainfo.c:206-208) + 8 + 8
 			wantErr:    false,
 		},
 		{
@@ -626,7 +625,7 @@ func TestEncodeAttributeInfoMessage(t *testing.T) {
 				BTreeOrderIndexAddr: 0xA000,
 			},
 			offsetSize: 8,
-			wantSize:   30, // 2 + 4 + 8 + 8 + 8
+			wantSize:   28, // 2 + 2 + 8 + 8 + 8
 			wantErr:    false,
 		},
 		{
@@ -669,6 +668,16 @@ func TestEncodeAttributeInfoMessage(t *testing.T) {
 			if tt.msg != nil {
 				require.Equal(t, tt.msg.Version, encoded[0], "version mismatch")
 				require.Equal(t, tt.msg.Flags, encoded[1], "flags mismatch")
+				// C layout (H5Oainfo.c:206-212): max_crt_idx right after the
+				// flags when tracked, then the heap address.
+				off := 2
+				if tt.msg.Flags&0x01 != 0 {
+					require.EqualValues(t, tt.msg.MaxCreationIndex, binary.LittleEndian.Uint16(encoded[2:]))
+					off = 4
+				}
+				if tt.offsetSize == 8 {
+					require.Equal(t, tt.msg.FractalHeapAddr, binary.LittleEndian.Uint64(encoded[off:]))
+				}
 			}
 		})
 	}

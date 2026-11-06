@@ -10,52 +10,93 @@ import (
 	"github.com/scigolib/hdf5/internal/utils"
 )
 
-// buildDenseAttributeStorage lays out a B-tree v2 name index (BTHD + BTLF)
-// and a fractal heap (FRHP + one direct block FHDB) holding the given
-// attribute messages, as in TestReadDenseAttributes_EndToEnd.
-func buildDenseAttributeStorage(msgs [][]byte) ([]byte, *AttributeInfoMessage) {
-	const bthdAddr, btlfAddr, frhpAddr, fhdbAddr = 0x0100, 0x0200, 0x0300, 0x0500
-	buf := make([]byte, 0x0800)
+// Where buildDenseStorage lays out its structures.
+const (
+	denseTestBTHD     = 0x0100
+	denseTestBTLF     = 0x0200
+	denseTestFRHP     = 0x0400
+	denseTestFHDB     = 0x0600
+	denseTestNodeSize = 512
+	// denseTestFHDBHeader is the direct block header: signature, version,
+	// heap address (8) and block offset (2: a 16-bit heap), no checksum.
+	denseTestFHDBHeader = 15
+)
 
-	bthd := buf[bthdAddr:]
+// buildDenseStorage lays out a dense storage index as the C library writes
+// one: a v2 B-tree of record type typ (header and a root leaf, checksummed as
+// H5B2cache.c checks them) and a fractal heap (FRHP + one direct block FHDB)
+// holding msgs. Each record names its message by a managed heap ID (type 0,
+// 2-byte offset, 2-byte length) where its record type keeps the ID
+// (denseRecordLayout); the other record bytes are a marker, so a decoder that
+// looks for the ID elsewhere fails. No messages: an empty tree, root address
+// undefined (H5B2hdr.c:245).
+func buildDenseStorage(typ uint8, msgs [][]byte) []byte {
+	layout := denseRecordLayout[typ]
+	buf := make([]byte, 0x0900)
+	le := binary.LittleEndian
+
+	bthd := buf[denseTestBTHD:]
 	copy(bthd, "BTHD")
-	bthd[5] = 8                                        // attribute name index
-	binary.LittleEndian.PutUint32(bthd[6:], 4096)      // node size
-	binary.LittleEndian.PutUint16(bthd[10:], 11)       // record: 4 hash + 7 heap ID
-	bthd[14], bthd[15] = 75, 40                        // split, merge %
-	binary.LittleEndian.PutUint64(bthd[16:], btlfAddr) // root
-	binary.LittleEndian.PutUint16(bthd[24:], uint16(len(msgs)))
-	binary.LittleEndian.PutUint64(bthd[26:], uint64(len(msgs)))
+	bthd[5] = typ
+	le.PutUint32(bthd[6:], denseTestNodeSize)
+	le.PutUint16(bthd[10:], uint16(layout.size))
+	bthd[14], bthd[15] = 75, 40 // split, merge %
+	root := uint64(denseTestBTLF)
+	if len(msgs) == 0 {
+		root = undefinedAddress
+	}
+	le.PutUint64(bthd[16:], root)
+	le.PutUint16(bthd[24:], uint16(len(msgs)))
+	le.PutUint64(bthd[26:], uint64(len(msgs)))
+	le.PutUint32(bthd[34:], JenkinsChecksum(bthd[:34]))
 
-	btlf := buf[btlfAddr:]
+	btlf := buf[denseTestBTLF:]
 	copy(btlf, "BTLF")
-	btlf[5] = 8
-	off, heapOff := 6, 0
+	btlf[5] = typ
+	// C's heap offsets count from the start of the direct block, whose
+	// header is 15 bytes here (H5HFman.c:388-393).
+	off, heapOff := 6, denseTestFHDBHeader
 	for i, m := range msgs {
-		binary.LittleEndian.PutUint32(btlf[off:], uint32(0x1000+i)) // name hash
-		// Managed heap ID: type 0, 2-byte offset, 2-byte length.
-		binary.LittleEndian.PutUint16(btlf[off+5:], uint16(heapOff))
-		binary.LittleEndian.PutUint16(btlf[off+7:], uint16(len(m)))
-		off += 11
+		rec := btlf[off : off+int(layout.size)]
+		for j := range rec {
+			rec[j] = byte(0xA0 + i)
+		}
+		id := rec[layout.idAt : layout.idAt+layout.idLen]
+		clear(id)
+		le.PutUint16(id[1:], uint16(heapOff))
+		le.PutUint16(id[3:], uint16(len(m)))
+		off += int(layout.size)
 		heapOff += len(m)
 	}
+	le.PutUint32(btlf[off:], JenkinsChecksum(btlf[:off]))
 
-	frhp := buf[frhpAddr:]
+	frhp := buf[denseTestFRHP:]
 	copy(frhp, "FRHP")
-	binary.LittleEndian.PutUint16(frhp[5:], 7)    // heap ID length
-	binary.LittleEndian.PutUint32(frhp[10:], 512) // max managed object size
-	binary.LittleEndian.PutUint16(frhp[110:], 4)  // table width
-	binary.LittleEndian.PutUint64(frhp[112:], 4096)
-	binary.LittleEndian.PutUint64(frhp[120:], 4096)
-	binary.LittleEndian.PutUint16(frhp[128:], 16) // log2 max heap size
-	binary.LittleEndian.PutUint64(frhp[132:], fhdbAddr)
+	le.PutUint16(frhp[5:], uint16(layout.idLen)) // heap ID length
+	le.PutUint32(frhp[10:], 512)                 // max managed object size
+	le.PutUint64(frhp[22:], undefinedAddress)    // huge object B-tree
+	le.PutUint64(frhp[38:], undefinedAddress)    // free space manager
+	le.PutUint64(frhp[46:], 512)                 // managed space
+	le.PutUint16(frhp[110:], 4)                  // table width
+	le.PutUint64(frhp[112:], 512)                // starting block size, inside buf
+	le.PutUint64(frhp[120:], 512)                // maximum direct block size
+	le.PutUint16(frhp[128:], 16)                 // log2 max heap size
+	le.PutUint64(frhp[132:], denseTestFHDB)
+	le.PutUint32(frhp[142:], JenkinsChecksum(frhp[:142]))
 
-	fhdb := buf[fhdbAddr:]
+	fhdb := buf[denseTestFHDB:]
 	copy(fhdb, "FHDB")
-	binary.LittleEndian.PutUint64(fhdb[5:], frhpAddr)
-	copy(fhdb[15:], bytes.Join(msgs, nil))
+	le.PutUint64(fhdb[5:], denseTestFRHP)
+	copy(fhdb[denseTestFHDBHeader:], bytes.Join(msgs, nil))
 
-	return buf, &AttributeInfoMessage{FractalHeapAddr: frhpAddr, BTreeNameIndexAddr: bthdAddr}
+	return buf
+}
+
+// buildDenseAttributeStorage is buildDenseStorage for an attribute name index
+// (type 8, H5Abtree2.c) and the attribute info message that points at it.
+func buildDenseAttributeStorage(msgs [][]byte) ([]byte, *AttributeInfoMessage) {
+	return buildDenseStorage(bt2TypeAttrName, msgs),
+		&AttributeInfoMessage{FractalHeapAddr: denseTestFRHP, BTreeNameIndexAddr: denseTestBTHD}
 }
 
 // TestReadDenseAttributes_SkipsSharedDatatype is the regression for

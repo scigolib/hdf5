@@ -85,16 +85,9 @@ func LoadLocalHeap(r io.ReaderAt, address uint64, sb *core.Superblock) (*LocalHe
 	}
 	pos += int(sb.LengthSize)
 
-	// Data segment address (offsetSize bytes)
-	var dataSegmentAddr uint64
-	switch sb.OffsetSize {
-	case 2:
-		dataSegmentAddr = uint64(sb.Endianness.Uint16(headerBuf[pos : pos+2]))
-	case 4:
-		dataSegmentAddr = uint64(sb.Endianness.Uint32(headerBuf[pos : pos+4]))
-	case 8:
-		dataSegmentAddr = sb.Endianness.Uint64(headerBuf[pos : pos+8])
-	}
+	// Data segment address (offsetSize bytes); all ones is the undefined
+	// address at any width (H5Fint.c:3046-3050).
+	dataSegmentAddr := core.DecodeAddress(headerBuf[pos:], int(sb.OffsetSize), sb.Endianness)
 
 	if err := validateLocalHeapHeader(freeListHead, dataSegmentSize, dataSegmentAddr); err != nil {
 		return nil, err

@@ -8,48 +8,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// boundsFractalHeap returns a heap that reads from a small buffer at address
-// 100, so any header-claimed block size beyond a few hundred bytes is
-// necessarily outside the reader.
-func boundsFractalHeap(buf []byte, header *FractalHeapHeader) *FractalHeap {
-	return &FractalHeap{
-		Header:     header,
-		reader:     bytes.NewReader(buf),
-		headerAddr: 0x1000,
-		sizeofAddr: 8,
-		endianness: binary.LittleEndian,
-	}
-}
-
-// TestReadDirectBlockRejectsBlockBeyondReader is the ADR-003 regression test
-// for fractalheap.go readDirectBlock: the block size comes from the heap
-// header, and before the fix it was allocated and read without any bound.
+// TestRootDirectBlockImageRejectsBlockBeyondReader is the ADR-003 regression
+// test for the root direct block image LoadFromFile reads for a rewrite (it
+// replaces the tests of the deleted FractalHeap.readDirectBlock, the old
+// reader of this package): the block size comes from the heap header, and
+// the read must be checked against the reader before the allocation.
 //
-// The claimed size is a few megabytes rather than gigabytes: on the unfixed
-// code the allocation still succeeds and the test fails on the error text. A
-// claim above utils.MaxChunkSize would attempt a gigabyte allocation first, and
-// a Go allocation failure is a fatal runtime throw rather than a test failure.
-func TestReadDirectBlockRejectsBlockBeyondReader(t *testing.T) {
-	heap := boundsFractalHeap(make([]byte, 256), &FractalHeapHeader{HeapOffsetSize: 4})
+// The claimed size is a few megabytes rather than gigabytes, so an unchecked
+// allocation would still succeed and the test fail on the error text.
+func TestRootDirectBlockImageRejectsBlockBeyondReader(t *testing.T) {
+	hdr := &FractalHeapHeader{HeapOffsetSize: 4, RootBlockAddr: 100,
+		StartingBlockSize: 8 << 20, MaxDirectBlockSize: 8 << 20}
 
-	_, err := heap.readDirectBlock(100, 8<<20)
+	_, err := readRootDirectBlockImage(bytes.NewReader(make([]byte, 256)), hdr, 0x1000, 8)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "read beyond end of file",
 		"direct block size must be checked against the reader before allocation, got: %v", err)
 }
 
-// TestReadDirectBlockRejectsBlockBeyondMaxDirectBlockSize covers the header
-// bound: a direct block cannot be larger than MaxDirectBlockSize.
-func TestReadDirectBlockRejectsBlockBeyondMaxDirectBlockSize(t *testing.T) {
-	header := &FractalHeapHeader{
-		HeapOffsetSize:     4,
-		MaxDirectBlockSize: 1024,
-	}
-	heap := boundsFractalHeap(make([]byte, 256), header)
+// TestRootDirectBlockImageRejectsBlockBeyondMaxDirectBlockSize covers the
+// header bound: a direct block cannot be larger than MaxDirectBlockSize.
+func TestRootDirectBlockImageRejectsBlockBeyondMaxDirectBlockSize(t *testing.T) {
+	hdr := &FractalHeapHeader{HeapOffsetSize: 4, RootBlockAddr: 100,
+		StartingBlockSize: 8 << 20, MaxDirectBlockSize: 1024}
 
-	_, err := heap.readDirectBlock(100, 8<<20)
+	_, err := readRootDirectBlockImage(bytes.NewReader(make([]byte, 256)), hdr, 0x1000, 8)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "exceeds MaxDirectBlockSize",
+	require.Contains(t, err.Error(), "exceeds maximum 1024",
 		"direct block size must be bounded by MaxDirectBlockSize, got: %v", err)
 }
 

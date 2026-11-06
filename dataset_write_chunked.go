@@ -128,8 +128,6 @@ func chunkedDatasetByteSize(dims, chunkDims []uint64, elemSize uint32) (uint64, 
 // is already encoded: datatypeData is the message, elemSize the size of one
 // element, and writerDtype the datatype DatasetWriter encodes values with.
 // The chunk dimensions must have been checked with validateChunkDims.
-//
-//nolint:gocyclo,cyclop // Complex by nature: chunked dataset creation involves many steps
 func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, config *datasetConfig,
 	datatypeData []byte, elemSize uint32, writerDtype *core.DatatypeMessage) (*DatasetWriter, error) {
 	// Sizes first, before anything is allocated or written.
@@ -144,9 +142,11 @@ func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, co
 		return nil, fmt.Errorf("failed to create chunk coordinator: %w", err)
 	}
 
-	// B-tree address will be 0 initially (written during Write())
-	// This is standard HDF5 practice for empty chunked datasets
-	btreeAddress := uint64(0)
+	// No chunk is written yet, so there is no chunk index: its address is
+	// undefined until Write builds the B-tree, as C leaves it HADDR_UNDEF
+	// until the first chunk is allocated: no index space while the address is
+	// undefined (H5D__btree_idx_is_space_alloc, H5Dbtree.c:950-958).
+	btreeAddress := undefinedAddress
 
 	// 6. Create dataspace message
 	dataspaceData, err := fw.encodeDatasetDataspace(dims, config.maxDims)
@@ -220,15 +220,6 @@ func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, co
 		return nil, fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
 	}
 
-	// File offset of the B-tree address in the layout message, patched when
-	// the chunks are written. A version 3 chunked layout holds version,
-	// class and dimensionality, then the address (H5Olayout.c:637-645).
-	layoutDataOffset, err := v2MessageDataOffset(ohw, headerSize, core.MsgDataLayout)
-	if err != nil {
-		return nil, err
-	}
-	layoutBTreeOffset := headerAddress + layoutDataOffset + 3
-
 	// 9. Link to parent group
 	parent, datasetName := parsePath(name)
 	if err := fw.linkToParent(parent, datasetName, headerAddress); err != nil {
@@ -237,45 +228,20 @@ func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, co
 
 	// 10. Create DatasetWriter
 	return &DatasetWriter{
-		fileWriter:        fw,
-		name:              name,
-		address:           headerAddress,
-		dataAddress:       btreeAddress, // Will be updated on Write()
-		dataSize:          dataSize,
-		elementSize:       elemSize,
-		dtype:             writerDtype,
-		dims:              dims,
-		maxDims:           config.maxDims, // Maximum dimensions for resize support
-		isChunked:         true,
-		chunkCoordinator:  chunkCoordinator,
-		chunkDims:         config.chunkDims,
-		pipeline:          config.pipeline, // Filter pipeline
-		layoutBTreeOffset: layoutBTreeOffset,
-		headerSize:        headerSize,
+		fileWriter:       fw,
+		name:             name,
+		address:          headerAddress,
+		dataAddress:      btreeAddress, // Will be updated on Write()
+		dataSize:         dataSize,
+		elementSize:      elemSize,
+		dtype:            writerDtype,
+		dims:             dims,
+		maxDims:          config.maxDims, // Maximum dimensions for resize support
+		isChunked:        true,
+		chunkCoordinator: chunkCoordinator,
+		chunkDims:        config.chunkDims,
+		pipeline:         config.pipeline, // Filter pipeline
 	}, nil
-}
-
-// v2MessageDataOffset returns the offset, from the start of the version 2
-// object header ohw written in headerSize bytes, of the data of its message
-// of type typ. The messages fill the single chunk right before the 4-byte
-// checksum, each behind a 4-byte header (type, size, flags; H5Ocache.c:1258-
-// 1305), so the offset is counted back from the end; the prefix, whose
-// chunk-size field is 1 to 8 bytes wide, does not enter the count.
-func v2MessageDataOffset(ohw *core.ObjectHeaderWriter, headerSize uint64, typ core.MessageType) (uint64, error) {
-	const checksumSize, msgHeaderSize = 4, 4
-	end := headerSize - checksumSize
-	for i := len(ohw.Messages) - 1; i >= 0; i-- {
-		m := ohw.Messages[i]
-		size := msgHeaderSize + uint64(len(m.Data))
-		if size > end {
-			return 0, fmt.Errorf("object header of %d bytes cannot hold its messages", headerSize)
-		}
-		end -= size
-		if m.Type == typ {
-			return end + msgHeaderSize, nil
-		}
-	}
-	return 0, fmt.Errorf("object header has no message of type %d", typ)
 }
 
 // writeChunkedData writes data to chunked dataset.
@@ -291,8 +257,6 @@ func v2MessageDataOffset(ohw *core.ObjectHeaderWriter, headerSize uint64, typ co
 // - All chunks written at once (no partial writes)
 // - No compression
 // - Simple B-tree v1.
-//
-//nolint:gocognit,cyclop,gocyclo // Complex by nature: writing chunks + B-tree + updating layout + checksum recompute
 func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 	if !dw.isChunked {
 		return fmt.Errorf("writeChunkedData called on non-chunked dataset")
@@ -363,42 +327,44 @@ func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 	// 4. Store B-tree address
 	dw.dataAddress = btreeAddr
 
-	// 5. Update the B-tree address in the layout message (in the object header).
-	// This ensures the file can be read correctly after closing.
-	if dw.layoutBTreeOffset > 0 {
-		// Write B-tree address at the calculated offset.
-		// The address is stored as offsetSize bytes (typically 8).
-		offsetSize := dw.fileWriter.file.sb.OffsetSize
-		addrBuf := make([]byte, offsetSize)
-		switch offsetSize {
-		case 8:
-			binary.LittleEndian.PutUint64(addrBuf, btreeAddr)
-		case 4:
-			binary.LittleEndian.PutUint32(addrBuf, uint32(btreeAddr)) //nolint:gosec // G115: Safe - address validated
-		default:
-			return fmt.Errorf("unsupported offset size: %d", offsetSize)
-		}
-		if err := dw.fileWriter.writer.WriteAtAddress(addrBuf, dw.layoutBTreeOffset); err != nil {
-			return fmt.Errorf("failed to update B-tree address in layout message: %w", err)
-		}
+	// 5. Record the B-tree address in the layout message, so that the file
+	// can be read after closing.
+	return dw.setChunkIndexAddress(btreeAddr)
+}
 
-		// Recompute V2 object header Jenkins checksum after patching the B-tree address.
-		// The checksum covers all bytes from OHDR signature through messages (excluding
-		// the 4-byte checksum itself). Without this, h5dump rejects the header with
-		// "incorrect metadata checksum after all read attempts".
-		checksumSize := uint64(4)
-		dataLen := dw.headerSize - checksumSize
-		ohdrBuf := make([]byte, dataLen)
-		if _, readErr := dw.fileWriter.writer.Reader().ReadAt(ohdrBuf, int64(dw.address)); readErr != nil { //nolint:gosec // G115: address within file bounds
-			return fmt.Errorf("failed to read object header for checksum: %w", readErr)
-		}
-		newChecksum := core.JenkinsChecksum(ohdrBuf)
-		var csumBuf [4]byte
-		binary.LittleEndian.PutUint32(csumBuf[:], newChecksum)
-		if err := dw.fileWriter.writer.WriteAtAddress(csumBuf[:], dw.address+dataLen); err != nil {
-			return fmt.Errorf("failed to write object header checksum: %w", err)
-		}
+// setChunkIndexAddress stores addr as the chunk index address of the
+// dataset's layout message. The header is read, changed in its message and
+// written back whole, so the checksum covers the header as it is now, after
+// attribute calls may have changed its size and message offsets.
+func (dw *DatasetWriter) setChunkIndexAddress(addr uint64) error {
+	fw := dw.fileWriter
+	sb := fw.file.sb
+	oh, err := core.ReadObjectHeader(fw.writer.Reader(), dw.address, sb)
+	if err != nil {
+		return fmt.Errorf("read object header: %w", err)
 	}
 
-	return nil
+	for _, msg := range oh.Messages {
+		if msg.Type != core.MsgDataLayout {
+			continue
+		}
+		// A version 3 chunked layout holds version, class and dimensionality,
+		// then the address (H5Olayout.c:637-645).
+		const addrOffset = 3
+		end := addrOffset + int(sb.OffsetSize)
+		if len(msg.Data) < end || msg.Data[0] != 3 || msg.Data[1] != byte(core.LayoutChunked) {
+			return fmt.Errorf("dataset %q: layout message is not a version 3 chunked layout", dw.name)
+		}
+		switch sb.OffsetSize {
+		case 8:
+			binary.LittleEndian.PutUint64(msg.Data[addrOffset:end], addr)
+		case 4:
+			binary.LittleEndian.PutUint32(msg.Data[addrOffset:end], uint32(addr)) //nolint:gosec // G115: the allocator stays below 4 GiB for 4-byte offsets
+		default:
+			return fmt.Errorf("unsupported offset size: %d", sb.OffsetSize)
+		}
+		return fw.rewriteObjectHeader(dw.address, oh)
+	}
+
+	return fmt.Errorf("dataset %q: object header has no layout message", dw.name)
 }

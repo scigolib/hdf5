@@ -248,30 +248,10 @@ func compareCoords(a, b []uint64) int {
 	return 0
 }
 
-// readAddress reads a variable-sized address from byte slice.
+// readAddress reads a little-endian file address of size bytes; an all-ones
+// address is HADDR_UNDEF at any width (DecodeAddress).
 func readAddress(data []byte, size int) uint64 {
-	if size > len(data) {
-		size = len(data)
-	}
-
-	// Use data[:size] for all slicing so gosec can verify bounds statically.
-	d := data[:size]
-
-	switch size {
-	case 1:
-		return uint64(d[0])
-	case 2:
-		return uint64(binary.LittleEndian.Uint16(d))
-	case 4:
-		return uint64(binary.LittleEndian.Uint32(d))
-	case 8:
-		return binary.LittleEndian.Uint64(d)
-	default:
-		// Pad to 8 bytes.
-		var buf [8]byte
-		copy(buf[:], d)
-		return binary.LittleEndian.Uint64(buf[:])
-	}
+	return DecodeAddress(data, size, binary.LittleEndian)
 }
 
 // String returns human-readable B-tree node description.
@@ -290,15 +270,25 @@ type ChunkEntry struct {
 const btreeTypeChunk = 1
 
 // CollectAllChunks collects all chunk entries of the B-tree rooted at node,
-// with the structural checks of collectChunks and no limit on the entry count
+// with the structural checks of walkChunks and no limit on the entry count
 // beyond what the file holds. Dataset readers use
-// DatasetDescriptor.CollectChunks, which also bounds the count by the chunk
+// DatasetDescriptor.VisitChunks, which also bounds the count by the chunk
 // grid and checks every key against it.
 func (node *BTreeV1Node) CollectAllChunks(r io.ReaderAt, offsetSize uint8, chunkDims []uint64) ([]ChunkEntry, error) {
-	return node.collectChunks(r, offsetSize, chunkDims, math.MaxUint64)
+	var chunks []ChunkEntry
+	err := node.walkChunks(r, offsetSize, chunkDims, math.MaxUint64, func(e ChunkEntry) error {
+		chunks = append(chunks, e)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return chunks, nil
 }
 
-// collectChunks walks the B-tree rooted at node and returns its leaf entries.
+// walkChunks walks the B-tree rooted at node and passes its leaf entries to
+// emit in key order, stopping at the first error.
 //
 // The node graph comes from the file, so the walk mirrors the checks the C
 // library makes while loading nodes (review finding H1):
@@ -313,20 +303,19 @@ func (node *BTreeV1Node) CollectAllChunks(r io.ReaderAt, offsetSize uint8, chunk
 //     derives from the chunk grid (each chunk has one entry).
 //
 // Every violation wraps utils.ErrCorrupt.
-func (node *BTreeV1Node) collectChunks(r io.ReaderAt, offsetSize uint8, chunkDims []uint64, maxEntries uint64) ([]ChunkEntry, error) {
+func (node *BTreeV1Node) walkChunks(r io.ReaderAt, offsetSize uint8, chunkDims []uint64, maxEntries uint64,
+	emit func(ChunkEntry) error,
+) error {
 	w := &chunkWalk{
 		r:          r,
 		offsetSize: offsetSize,
 		chunkDims:  chunkDims,
 		maxEntries: maxEntries,
 		visited:    map[uint64]bool{node.Address: true},
+		emit:       emit,
 	}
 
-	if err := w.walk(node); err != nil {
-		return nil, err
-	}
-
-	return w.chunks, nil
+	return w.walk(node)
 }
 
 // chunkWalk is the state of one B-tree walk.
@@ -336,17 +325,21 @@ type chunkWalk struct {
 	chunkDims  []uint64
 	maxEntries uint64
 	visited    map[uint64]bool
-	chunks     []ChunkEntry
+	entries    uint64
+	emit       func(ChunkEntry) error
 }
 
 func (w *chunkWalk) walk(node *BTreeV1Node) error {
 	if node.NodeLevel == 0 {
-		if uint64(len(w.chunks))+uint64(node.EntriesUsed) > w.maxEntries {
+		if w.entries+uint64(node.EntriesUsed) > w.maxEntries {
 			return fmt.Errorf("%w: chunk B-tree has more than %d entries, the most its chunk grid allows",
 				utils.ErrCorrupt, w.maxEntries)
 		}
+		w.entries += uint64(node.EntriesUsed)
 		for i := 0; i < int(node.EntriesUsed); i++ {
-			w.chunks = append(w.chunks, ChunkEntry{Key: node.Keys[i], Address: node.Children[i]})
+			if err := w.emit(ChunkEntry{Key: node.Keys[i], Address: node.Children[i]}); err != nil {
+				return err
+			}
 		}
 		return nil
 	}

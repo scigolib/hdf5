@@ -4,8 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-
-	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // ObjectHeaderWriter provides functionality for writing HDF5 object headers.
@@ -35,6 +33,11 @@ type MessageWriter struct {
 	// H5O_MSG_FLAG_SHARED turns a shared-message reference into a bogus
 	// inline message.
 	Flags uint8
+
+	// CreationIndex is written after the flags when the version 2 header
+	// tracks attribute creation order (H5Omessage.c:1969-1974): the creation
+	// index of an attribute, 0 for any other message.
+	CreationIndex uint16
 }
 
 // NewMinimalRootGroupHeader creates a minimal object header v2 for an empty root group.
@@ -97,14 +100,16 @@ func (ohw *ObjectHeaderWriter) PadToSize(minSize uint64) {
 		return
 	}
 
-	// We need to add padding. A null message has overhead: Type(1)+Size(2)+Flags(1) = 4 bytes (v2).
-	// For v1: Type(2)+Size(2)+Flags(1)+Reserved(3) = 8 bytes, then 8-byte aligned.
+	// We need to add padding. A null message has the overhead of a message
+	// header: 4 bytes in v2, 6 when the header tracks attribute creation order
+	// (V2MessageHeaderSize). For v1: Type(2)+Size(2)+Flags(1)+Reserved(3) = 8
+	// bytes, then 8-byte aligned.
 	needed := minSize - currentSize
 	var msgOverhead uint64
 	if ohw.Version == 1 {
 		msgOverhead = 8 // v1 message header
 	} else {
-		msgOverhead = 4 // v2 message header
+		msgOverhead = V2MessageHeaderSize(ohw.Flags)
 	}
 
 	if needed <= msgOverhead {
@@ -132,7 +137,8 @@ func (ohw *ObjectHeaderWriter) PadToSize(minSize uint64) {
 //
 // For object header v2:
 //   - Header: 4 (signature) + 1 (version) + 1 (flags) + 1 (chunk size) = 7 bytes
-//   - Messages: sum of (1 + 2 + 1 + len(data)) for each message
+//   - Messages: sum of (message header + len(data)) for each message, the
+//     message header being 4 bytes or 6 with a creation index
 func (ohw *ObjectHeaderWriter) Size() uint64 {
 	switch ohw.Version {
 	case 1:
@@ -183,12 +189,7 @@ func (ohw *ObjectHeaderWriter) sizeV1() uint64 {
 
 // sizeV2 calculates size for object header v2 (current implementation).
 func (ohw *ObjectHeaderWriter) sizeV2() uint64 {
-	// Calculate message data size
-	var messageDataSize uint64
-	for _, msg := range ohw.Messages {
-		// Each message: Type (1) + Size (2) + Flags (1) + Data (variable)
-		messageDataSize += 1 + 2 + 1 + uint64(len(msg.Data))
-	}
+	messageDataSize := v2MessagesSize(ohw.Messages, ohw.Flags)
 
 	// Per HDF5 C reference (H5Ocache.c:1207, H5Opkg.h:85-107):
 	// chunk_size in file = message data ONLY (excludes checksum and header prefix).
@@ -198,6 +199,41 @@ func (ohw *ObjectHeaderWriter) sizeV2() uint64 {
 
 	// Total on-disk size: Signature (4) + Version (1) + Flags (1) + ChunkSizeField + Messages + Checksum (4)
 	return 4 + 1 + 1 + ohw.v2PrefixFieldsSize() + chunkSizeFieldWidth + messageDataSize + checksumSize
+}
+
+// v2MessagesSize is the size of messages in a version 2 header chunk whose
+// object header has flags ohFlags: each message header (V2MessageHeaderSize)
+// and its data.
+func v2MessagesSize(messages []MessageWriter, ohFlags uint8) uint64 {
+	hdr := V2MessageHeaderSize(ohFlags)
+	var n uint64
+	for _, msg := range messages {
+		n += hdr + uint64(len(msg.Data))
+	}
+	return n
+}
+
+// putV2Messages encodes messages into buf as C encodes a version 2 header
+// chunk of an object header with flags ohFlags (H5Omessage.c:1955-1980):
+// type, size, flags, the creation index when the header tracks attribute
+// creation order, then the data. It returns the number of bytes written.
+func putV2Messages(buf []byte, messages []MessageWriter, ohFlags uint8) int {
+	tracked := ohFlags&ohdrFlagAttrCrtTracked != 0
+	offset := 0
+	for _, msg := range messages {
+		buf[offset] = uint8(msg.Type) //nolint:gosec // Safe: message type is limited enum
+		offset++
+		binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(msg.Data))) //nolint:gosec // Safe: message size validated
+		offset += 2
+		buf[offset] = msg.Flags
+		offset++
+		if tracked {
+			binary.LittleEndian.PutUint16(buf[offset:offset+2], msg.CreationIndex)
+			offset += 2
+		}
+		offset += copy(buf[offset:], msg.Data)
+	}
+	return offset
 }
 
 // chunkSizeFieldWidth returns the number of bytes needed for the chunk size field
@@ -360,16 +396,9 @@ func (ohw *ObjectHeaderWriter) writeToV1(w io.WriterAt, address uint64) (uint64,
 // writeToV2 writes an object header v2 to the writer.
 // V2 format (current MVP implementation).
 func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64, error) {
-	// Calculate message data size
-	var messageDataSize uint64
-	for _, msg := range ohw.Messages {
-		// Each message has:
-		// - Type (1 byte for v2)
-		// - Size (2 bytes for v2)
-		// - Flags (1 byte for v2)
-		// - Data (variable)
-		messageDataSize += 1 + 2 + 1 + uint64(len(msg.Data))
-	}
+	// Each message: type (1), size (2), flags (1), the creation index (2)
+	// when the header tracks attribute creation order, data.
+	messageDataSize := v2MessagesSize(ohw.Messages, ohw.Flags)
 
 	// Per HDF5 C reference (H5Ocache.c:1207): chunk_size in file = messages ONLY.
 	// The C library adds H5O_SIZEOF_HDR (which includes checksum) to get full chunk size.
@@ -390,12 +419,6 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 		flagsBits = 2
 	case 8:
 		flagsBits = 3
-	}
-	if ohw.Flags&ohdrFlagAttrCrtOrder != 0 {
-		// Tracked attribute creation order adds a 2-byte creation index to
-		// every message header (H5Ocache.c:1283-1289); rewriting such a
-		// header is not supported, refuse instead of corrupting it.
-		return 0, fmt.Errorf("object header at %d tracks attribute creation order (flags 0x%02x): rewriting it: %w", address, ohw.Flags, utils.ErrNotSupported)
 	}
 	flags := ohw.v2PrefixFlags() | flagsBits // keep the optional-field flags whose fields are present
 
@@ -430,24 +453,7 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 	writeChunkSize(buf[offset:], chunkSize, csWidth)
 	offset += int(csWidth) //nolint:gosec // G115: csWidth is 1, 2, 4, or 8
 
-	// Write messages
-	for _, msg := range ohw.Messages {
-		// Message type (1 byte for v2)
-		buf[offset] = uint8(msg.Type) //nolint:gosec // Safe: message type is limited enum
-		offset++
-
-		// Message data size (2 bytes, little-endian)
-		binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(msg.Data))) //nolint:gosec // Safe: message size validated
-		offset += 2
-
-		// Message flags (1 byte)
-		buf[offset] = msg.Flags
-		offset++
-
-		// Message data
-		copy(buf[offset:offset+len(msg.Data)], msg.Data)
-		offset += len(msg.Data)
-	}
+	offset += putV2Messages(buf[offset:], ohw.Messages, ohw.Flags)
 
 	// Jenkins lookup3 checksum over all preceding bytes (signature through messages).
 	checksum := JenkinsChecksum(buf[:offset])
@@ -543,9 +549,10 @@ func WriteObjectHeader(w io.WriterAt, addr uint64, oh *ObjectHeader, sb *Superbl
 	// Convert messages
 	for i, msg := range oh.Messages {
 		ohw.Messages[i] = MessageWriter{
-			Type:  msg.Type,
-			Flags: msg.Flags,
-			Data:  msg.Data,
+			Type:          msg.Type,
+			Flags:         msg.Flags,
+			Data:          msg.Data,
+			CreationIndex: msg.CreationIndex,
 		}
 	}
 
@@ -578,9 +585,10 @@ func ObjectHeaderSizeFromParsed(oh *ObjectHeader) uint64 {
 	}
 	for i, msg := range oh.Messages {
 		ohw.Messages[i] = MessageWriter{
-			Type:  msg.Type,
-			Flags: msg.Flags,
-			Data:  msg.Data,
+			Type:          msg.Type,
+			Flags:         msg.Flags,
+			Data:          msg.Data,
+			CreationIndex: msg.CreationIndex,
 		}
 	}
 	return ohw.Size()
@@ -636,26 +644,22 @@ func EncodeContinuationMessage(ochkAddr, ochkSize uint64, sb *Superblock) []byte
 //
 // OCHK block format (per H5Opkg.h and H5Ocache.c):
 //   - "OCHK" signature (4 bytes)
-//   - Messages (same format as main OHDR: type(1) + size(2) + flags(1) + data)
+//   - Messages (same format as main OHDR: type(1) + size(2) + flags(1) +
+//     creation index(2) when the header tracks creation order + data)
 //   - Jenkins lookup3 checksum (4 bytes) over "OCHK" + messages
 //
 // Parameters:
 //   - w: Writer to write the OCHK block
 //   - address: File address where the OCHK block will be written
 //   - messages: Messages to include in the continuation chunk
+//   - ohFlags: Flags of the object header the chunk belongs to
 //
 // Returns:
 //   - uint64: Total size of the OCHK block written
 //   - error: Non-nil if write fails
-func WriteContinuationChunkV2(w io.WriterAt, address uint64, messages []MessageWriter) (uint64, error) {
-	// Calculate messages data size.
-	var messageDataSize uint64
-	for _, msg := range messages {
-		messageDataSize += 1 + 2 + 1 + uint64(len(msg.Data)) // Type(1) + Size(2) + Flags(1) + Data
-	}
-
+func WriteContinuationChunkV2(w io.WriterAt, address uint64, messages []MessageWriter, ohFlags uint8) (uint64, error) {
 	// OCHK total size: "OCHK"(4) + messages + checksum(4).
-	totalSize := 4 + messageDataSize + 4
+	totalSize := ContinuationChunkSizeV2(messages, ohFlags)
 	buf := make([]byte, totalSize)
 	offset := 0
 
@@ -663,17 +667,7 @@ func WriteContinuationChunkV2(w io.WriterAt, address uint64, messages []MessageW
 	copy(buf[offset:offset+4], "OCHK")
 	offset += 4
 
-	// Write messages.
-	for _, msg := range messages {
-		buf[offset] = uint8(msg.Type) //nolint:gosec // Safe: message type is limited enum
-		offset++
-		binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(msg.Data))) //nolint:gosec // Safe: message size validated
-		offset += 2
-		buf[offset] = msg.Flags // Message flags
-		offset++
-		copy(buf[offset:offset+len(msg.Data)], msg.Data)
-		offset += len(msg.Data)
-	}
+	offset += putV2Messages(buf[offset:], messages, ohFlags)
 
 	// Jenkins lookup3 checksum over "OCHK" + messages.
 	checksum := JenkinsChecksum(buf[:offset])
@@ -692,15 +686,12 @@ func WriteContinuationChunkV2(w io.WriterAt, address uint64, messages []MessageW
 }
 
 // ContinuationChunkSizeV2 calculates the on-disk size of an OCHK continuation block
-// for the given messages, without writing anything.
+// for the given messages of an object header with flags ohFlags, without
+// writing anything.
 //
-// Returns: "OCHK"(4) + sum(Type(1)+Size(2)+Flags(1)+Data) + Checksum(4).
-func ContinuationChunkSizeV2(messages []MessageWriter) uint64 {
-	var messageDataSize uint64
-	for _, msg := range messages {
-		messageDataSize += 1 + 2 + 1 + uint64(len(msg.Data))
-	}
-	return 4 + messageDataSize + 4
+// Returns: "OCHK"(4) + sum(message header + Data) + Checksum(4).
+func ContinuationChunkSizeV2(messages []MessageWriter, ohFlags uint8) uint64 {
+	return 4 + v2MessagesSize(messages, ohFlags) + 4
 }
 
 // RewriteObjectHeaderV2 rewrites an object header v2 with updated messages.

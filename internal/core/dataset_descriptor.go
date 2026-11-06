@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"slices"
 
 	"github.com/scigolib/hdf5/internal/utils"
 )
@@ -505,94 +504,52 @@ func (d *DatasetDescriptor) ChunkGrid() []uint64 {
 	return grid
 }
 
-// CollectChunks returns the entries of the dataset's version 1 chunk B-tree,
-// validated against the chunk grid:
+// iterateBTreeV1 walks the dataset's version 1 chunk B-tree into the sink:
 //   - the walk checks node levels and refuses to visit a node twice
-//     (BTreeV1Node.collectChunks);
+//     (BTreeV1Node.walkChunks);
 //   - the entry count is at most the number of chunks in the grid, and at most
 //     what the file can hold (each entry occupies its own key and child
 //     pointer on disk);
-//   - every key lies inside the grid, and the element-size coordinate is 0:
-//     the key holds the chunk's first element (H5Dbtree.c:646 checks the
-//     alignment while decoding).
+//   - every key lies inside the grid (the sink), and the element-size
+//     coordinate is 0: the key holds the chunk's first element
+//     (H5Dbtree.c:646 checks the alignment while decoding);
+//   - a chunk is listed once (the sink). The keys of a chunk B-tree are
+//     strictly increasing: C finds a chunk by comparing its offset with the
+//     keys around it (H5D__btree_cmp3, H5Dbtree.c:324-360), so a coordinate
+//     has one entry at most. A duplicate would let the readers count a chunk
+//     twice and read a never-written chunk as zeros instead of the fill value
+//     (review-068 finding 3). Deviation, stricter: C does not check this on
+//     read, a lookup returns whichever duplicate it reaches.
 //
-// Violations wrap utils.ErrCorrupt.
-func (d *DatasetDescriptor) CollectChunks(r io.ReaderAt, sb *Superblock) ([]ChunkEntry, error) {
+// An undefined address is a dataset with no chunk written
+// (H5D__btree_idx_is_space_alloc, H5Dbtree.c:950). Violations wrap
+// utils.ErrCorrupt.
+func (d *DatasetDescriptor) iterateBTreeV1(r io.ReaderAt, sb *Superblock, s *chunkSink) error {
 	layout := d.layout
-	if layout.Class != LayoutChunked || layout.ChunkIndexType != ChunkIndexBTREE {
-		return nil, fmt.Errorf("unsupported chunk index type %d: only the v1 B-tree index is supported: %w",
-			layout.ChunkIndexType, utils.ErrNotSupported)
+	if layout.DataAddress == undefinedAddress {
+		return nil
 	}
 
 	ndims := len(layout.ChunkSize)
 	root, err := ParseBTreeV1Node(r, layout.DataAddress, sb.OffsetSize, ndims, layout.ChunkSize)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse chunk B-tree: %w", err)
+		return fmt.Errorf("failed to parse chunk B-tree: %w", err)
 	}
 
-	grid := d.ChunkGrid()
-	maxEntries := uint64(1)
-	for _, g := range grid {
-		maxEntries, err = utils.SafeMultiply(maxEntries, g)
-		if err != nil {
-			maxEntries = math.MaxUint64
-			break
-		}
-	}
-
+	maxEntries := s.maxEntries
 	if limit := dataLimit(r, sb); limit > 0 {
-		entryBytes := 8 + 8*uint64(len(layout.ChunkSize)) + uint64(sb.OffsetSize) // Key (nbytes, mask, coordinates) and child.
+		entryBytes := 8 + 8*uint64(ndims) + uint64(sb.OffsetSize) // Key (nbytes, mask, coordinates) and child.
 		maxEntries = min(maxEntries, limit/entryBytes)
 	}
 
-	chunks, err := root.collectChunks(r, sb.OffsetSize, layout.ChunkSize, maxEntries)
-	if err != nil {
-		return nil, err
-	}
-
-	rank := len(grid)
-	for _, c := range chunks {
-		for i, g := range grid {
-			if c.Key.Scaled[i] >= g {
-				return nil, fmt.Errorf("%w: chunk at 0x%X has coordinate %d in dimension %d, the grid has %d chunks",
-					utils.ErrCorrupt, c.Address, c.Key.Scaled[i], i, g)
-			}
+	rank := ndims - 1
+	return root.walkChunks(r, sb.OffsetSize, layout.ChunkSize, maxEntries, func(e ChunkEntry) error {
+		if e.Key.Scaled[rank] != 0 {
+			return fmt.Errorf("%w: chunk at 0x%X has a nonzero element-size coordinate", utils.ErrCorrupt, e.Address)
 		}
-		if c.Key.Scaled[rank] != 0 {
-			return nil, fmt.Errorf("%w: chunk at 0x%X has a nonzero element-size coordinate", utils.ErrCorrupt, c.Address)
-		}
-	}
 
-	if err := checkDistinctChunks(chunks); err != nil {
-		return nil, err
-	}
-
-	return chunks, nil
-}
-
-// checkDistinctChunks refuses an index that lists one chunk twice. The keys of
-// a chunk B-tree are strictly increasing: C finds a chunk by comparing its
-// offset with the keys around it (H5D__btree_cmp3, H5Dbtree.c:324-360), so a
-// coordinate has one entry at most. A duplicate would let the readers count a
-// chunk twice and decide that no chunk is missing, reading a never-written
-// chunk as zeros instead of the fill value (review-068 finding 3).
-//
-// Deviation, stricter: C does not check this on read; a lookup returns
-// whichever duplicate it reaches. Here it is utils.ErrCorrupt.
-func checkDistinctChunks(chunks []ChunkEntry) error {
-	keys := make([][]uint64, len(chunks))
-	for i := range chunks {
-		keys[i] = chunks[i].Key.Scaled
-	}
-	slices.SortFunc(keys, slices.Compare[[]uint64])
-
-	for i := 1; i < len(keys); i++ {
-		if slices.Equal(keys[i-1], keys[i]) {
-			return fmt.Errorf("%w: chunk B-tree lists the chunk at %v more than once", utils.ErrCorrupt, keys[i])
-		}
-	}
-
-	return nil
+		return s.add(e.Key.Scaled[:rank], e.Address, uint64(e.Key.Nbytes), e.Key.FilterMask)
+	})
 }
 
 // ChunkBytes returns the byte size of one chunk (the product of the chunk

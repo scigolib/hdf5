@@ -36,11 +36,12 @@ func TestReadChunkedData_RejectsRankMismatch(t *testing.T) {
 	require.Contains(t, err.Error(), "chunked layout has 1 dimensions, the dataspace rank 2 needs 3")
 }
 
-// TestReadChunkedData_RejectsUnsupportedChunkIndex covers the index types a
-// version 4 layout can name. Only the v1 B-tree is traversed here; any other
-// structure sits at the same address and must not be parsed as a B-tree, which
-// would return garbage chunks instead of an error.
-func TestReadChunkedData_RejectsUnsupportedChunkIndex(t *testing.T) {
+// TestReadChunkedData_IndexTypesReadTheirOwnStructure covers the index types a
+// version 4 layout can name. Each structure sits at the layout's address and
+// is read as itself, never as a v1 B-tree (which would return garbage chunks):
+// here nothing valid is there, so every type is utils.ErrCorrupt, as is a type
+// past the format's last.
+func TestReadChunkedData_IndexTypesReadTheirOwnStructure(t *testing.T) {
 	dataspace := &DataspaceMessage{Type: DataspaceSimple, Dimensions: []uint64{8}}
 	sb := &Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian}
 
@@ -50,6 +51,7 @@ func TestReadChunkedData_RejectsUnsupportedChunkIndex(t *testing.T) {
 		ChunkIndexFArray,
 		ChunkIndexEArray,
 		ChunkIndexBT2,
+		ChunkIndexBT2 + 1,
 	} {
 		layout := &DataLayoutMessage{
 			Version:        4,
@@ -63,7 +65,6 @@ func TestReadChunkedData_RejectsUnsupportedChunkIndex(t *testing.T) {
 		require.NoError(t, err, "index type %d", idx)
 
 		_, err = readChunkedData(r, sb, desc, ResultFloat64, utils.DefaultReadLimit)
-		require.Error(t, err, "index type %d", idx)
-		require.Contains(t, err.Error(), "unsupported chunk index type")
+		require.ErrorIs(t, err, utils.ErrCorrupt, "index type %d", idx)
 	}
 }

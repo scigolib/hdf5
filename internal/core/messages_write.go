@@ -206,10 +206,48 @@ const maxDataspaceRank = 32
 // file's format, version 1 for the earliest format (superblock 0 and 1) and
 // version 2 from the 1.8 format on (H5O_sdspace_ver_bounds, H5S.c:61-69).
 func DataspaceVersionFor(superblockVersion uint8) uint8 {
-	if superblockVersion >= Version2 {
+	if formatIs18(superblockVersion) {
 		return DataspaceVersion2
 	}
 	return DataspaceVersion1
+}
+
+// The writer picks every message version here, from one notion of the
+// file's format: the 1.8 format from superblock version 2 on, the earliest
+// format before. C takes the low bound from the file access property list
+// instead (H5F_LOW_BOUND): the C library reopening a superblock 2 file with
+// the default property list writes the earliest versions. Both are valid; the
+// superblock is what this library has (review of TASK-072, design note 2).
+func formatIs18(superblockVersion uint8) bool {
+	return superblockVersion >= Version2
+}
+
+// Filter pipeline message versions (H5Opline.c:85-93), shared by the
+// reader and the writer's encoder.
+const (
+	PipelineVersion1 = pipelineVersion1
+	PipelineVersion2 = pipelineVersion2
+)
+
+// PipelineVersionFor returns the filter pipeline message version C writes
+// for a new dataset: MAX(1, H5O_pline_ver_bounds[low bound]) (H5Opline.c:
+// 711), version 1 for the earliest format, version 2 from 1.8 on.
+func PipelineVersionFor(superblockVersion uint8) uint8 {
+	if formatIs18(superblockVersion) {
+		return PipelineVersion2
+	}
+	return PipelineVersion1
+}
+
+// FillValueVersionFor returns the fill value message version C writes for a
+// new dataset: MAX(2, H5O_fill_ver_bounds[low bound]) (H5Ofill.c:150-158,
+// 1036), the DCPL default being version 2 (H5Pdcpl.c:163); version 3 from
+// the 1.8 format on.
+func FillValueVersionFor(superblockVersion uint8) uint8 {
+	if formatIs18(superblockVersion) {
+		return fillVersion3
+	}
+	return fillVersion2
 }
 
 // EncodeDataspaceMessageVersion encodes a simple dataspace as
@@ -411,7 +449,12 @@ func encodeDataspaceOf(ds *DataspaceMessage) ([]byte, error) {
 	case len(ds.Dimensions) == 0:
 		return []byte{1, 0, 0, 0, 0, 0, 0, 0}, nil
 	default:
-		return EncodeDataspaceMessage(ds.Dimensions, ds.MaxDims)
+		// A simple dataspace keeps its version; 0 (unset) is version 1.
+		version := ds.Version
+		if version == 0 {
+			version = DataspaceVersion1
+		}
+		return EncodeDataspaceMessageVersion(ds.Dimensions, ds.MaxDims, version)
 	}
 }
 

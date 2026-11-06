@@ -96,8 +96,9 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 		linkOffset := readAddressFromBytes(data[offset:], int(sb.OffsetSize), sb.Endianness)
 		offset += int(sb.OffsetSize)
 
-		// Read object header address.
-		objAddr := readAddressFromBytes(data[offset:], int(sb.OffsetSize), sb.Endianness)
+		// Read object header address: HADDR_UNDEF for a soft link, all ones
+		// at any width (H5Gent.c:130, H5Fint.c:3046-3050).
+		objAddr := core.DecodeAddress(data[offset:], int(sb.OffsetSize), sb.Endianness)
 		offset += int(sb.OffsetSize)
 
 		// Read cache type.
@@ -116,8 +117,8 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 		var cachedSoftLink uint32
 		switch cacheType {
 		case 1:
-			cachedBTree = readAddressFromBytes(data[offset:], int(sb.OffsetSize), sb.Endianness)
-			cachedHeap = readAddressFromBytes(data[offset+int(sb.OffsetSize):], int(sb.OffsetSize), sb.Endianness)
+			cachedBTree = core.DecodeAddress(data[offset:], int(sb.OffsetSize), sb.Endianness)
+			cachedHeap = core.DecodeAddress(data[offset+int(sb.OffsetSize):], int(sb.OffsetSize), sb.Endianness)
 		case CacheTypeSoftLink:
 			cachedSoftLink = sb.Endianness.Uint32(data[offset : offset+4])
 		}

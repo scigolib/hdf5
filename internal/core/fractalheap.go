@@ -9,7 +9,7 @@ import (
 // heap header and returns the width in bytes of a heap offset.
 //
 // Both fractal heap header parsers need this value: the structures package
-// (heap reads) and the attribute reader below (dense attribute storage).
+// (heap reads) and OpenFractalHeap (dense attribute and link storage).
 //
 // Reference: H5HF__hdr_finish_init_phase1 (H5HFhdr.c:194) computes
 // H5HF_SIZEOF_OFFSET_BITS(max_index) = (max_index + 7) / 8 from the header's

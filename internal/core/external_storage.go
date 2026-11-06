@@ -125,7 +125,7 @@ func ParseExternalFileList(r io.ReaderAt, sb *Superblock, data []byte) (*Externa
 		return nil, c.overflow(int(nused * slotBytes)) //nolint:gosec // G115: at most 65535 × 24.
 	}
 
-	heap, err := readLocalHeapBlock(r, sb, heapAddr)
+	heap, err := cachedLocalHeapBlock(r, sb, heapAddr)
 	if err != nil {
 		return nil, fmt.Errorf("external file list heap at 0x%X: %w", heapAddr, err)
 	}
@@ -305,6 +305,43 @@ func (e *externalReader) readSlot(name string, dst []byte, pos int64) (err error
 	clear(dst[n:]) // H5Defl.c:376-381: end of file on disk reads as zeros.
 
 	return nil
+}
+
+// cachedLocalHeapBlock returns the data block of the External File List heap
+// at addr, read once per file (review-r finding 6): every descriptor of every
+// dataset naming the heap parses the message again, and the block can be as
+// large as utils.MaxChunkSize. The block and a failure to read it are kept in
+// the superblock's shared cache, under the budget of SetSharedLimit, as C
+// keeps the heap in its metadata cache (H5HL_protect). The returned block is
+// shared; callers must not modify it.
+func cachedLocalHeapBlock(r io.ReaderAt, sb *Superblock, addr uint64) ([]byte, error) {
+	c := &sb.shared
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if block, ok := c.heaps[addr]; ok {
+		return block, nil
+	}
+	if err := cachedFailureLocked(c, c.badHeaps, addr); err != nil {
+		return nil, err
+	}
+
+	block, err := readLocalHeapBlock(r, sb, addr)
+	if err == nil {
+		err = c.chargeLocked(uint64(len(block)), fmt.Sprintf("the local heap at 0x%X", addr))
+	}
+	if err != nil {
+		c.badHeaps = recordFailureLocked(c, c.badHeaps, addr, err)
+
+		return nil, err
+	}
+
+	if c.heaps == nil {
+		c.heaps = make(map[uint64][]byte)
+	}
+	c.heaps[addr] = block
+
+	return block, nil
 }
 
 // readLocalHeapBlock reads the data block of the local heap at addr with the

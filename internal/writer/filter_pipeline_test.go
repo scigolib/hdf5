@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/scigolib/hdf5/internal/core"
 	"github.com/stretchr/testify/require"
 )
 
@@ -223,7 +224,7 @@ func TestFilterPipeline_EmptyData(t *testing.T) {
 func TestFilterPipeline_EncodePipelineMessage_Empty(t *testing.T) {
 	pipeline := NewFilterPipeline()
 
-	_, err := pipeline.EncodePipelineMessage(PipelineVersion1)
+	_, err := pipeline.EncodePipelineMessage(core.PipelineVersion1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "empty filter pipeline")
 }
@@ -238,7 +239,7 @@ func TestFilterPipeline_EncodePipelineMessage_SingleFilter(t *testing.T) {
 	}
 	pipeline.AddFilter(filter)
 
-	msg, err := pipeline.EncodePipelineMessage(PipelineVersion1)
+	msg, err := pipeline.EncodePipelineMessage(core.PipelineVersion1)
 	require.NoError(t, err)
 
 	// Check header
@@ -289,7 +290,7 @@ func TestFilterPipeline_EncodePipelineMessage_MultipleFilters(t *testing.T) {
 	pipeline.AddFilter(filter1)
 	pipeline.AddFilter(filter2)
 
-	msg, err := pipeline.EncodePipelineMessage(PipelineVersion1)
+	msg, err := pipeline.EncodePipelineMessage(core.PipelineVersion1)
 	require.NoError(t, err)
 
 	// Check header
@@ -326,7 +327,7 @@ func TestFilterPipeline_EncodePipelineMessage_NoName(t *testing.T) {
 	}
 	pipeline.AddFilter(filter)
 
-	msg, err := pipeline.EncodePipelineMessage(PipelineVersion1)
+	msg, err := pipeline.EncodePipelineMessage(core.PipelineVersion1)
 	require.NoError(t, err)
 
 	// Check header
@@ -358,7 +359,7 @@ func TestFilterPipeline_EncodePipelineMessage_LongName(t *testing.T) {
 	}
 	pipeline.AddFilter(filter)
 
-	msg, err := pipeline.EncodePipelineMessage(PipelineVersion1)
+	msg, err := pipeline.EncodePipelineMessage(core.PipelineVersion1)
 	require.NoError(t, err)
 
 	offset := 8
@@ -392,7 +393,7 @@ func TestFilterPipeline_EncodePipelineMessage_V2(t *testing.T) {
 	pipeline.AddFilter(&mockFilter{id: FilterLZF, name: "lzf", flags: FilterFlagOptional, cdValues: []uint32{0, 0, 0}})
 	pipeline.AddFilter(&mockFilter{id: FilterFletcher32, name: "fletcher32", flags: FilterFlagMandatory})
 
-	msg, err := pipeline.EncodePipelineMessage(PipelineVersion2)
+	msg, err := pipeline.EncodePipelineMessage(core.PipelineVersion2)
 	require.NoError(t, err)
 	want := []byte{
 		2, 3, // version, filters
@@ -417,6 +418,6 @@ func TestFilterPipeline_EncodePipelineMessage_TooManyFilters(t *testing.T) {
 	for i := 0; i < maxFilters+1; i++ {
 		pipeline.AddFilter(&mockFilter{id: FilterShuffle, name: "shuffle", cdValues: []uint32{4}})
 	}
-	_, err := pipeline.EncodePipelineMessage(PipelineVersion2)
+	_, err := pipeline.EncodePipelineMessage(core.PipelineVersion2)
 	require.Error(t, err)
 }

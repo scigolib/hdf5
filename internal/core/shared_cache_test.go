@@ -99,19 +99,22 @@ func TestSharedDatatypeDecodedOncePerFile(t *testing.T) {
 	runtime.KeepAlive(attrs)
 }
 
-// TestSharedResolveBudget checks the per-file budget of header bytes read to
-// resolve shared messages (sharedResolveBudget): distinct targets cost their
-// header bytes once each, and a file whose references reach more than the
-// budget fails with utils.ErrLimit instead of parsing every target. The
-// targets here are small datatypes padded with a 60,000-byte NIL message, the
-// shape of many tiny headers sharing one large continuation chunk.
-//
-// Red on 40c6d35: 300 distinct targets (18 MB of headers) resolve without
-// error.
+// TestSharedResolveBudget checks the per-file budget of what resolving shared
+// messages keeps (review-068 finding 2), and is the regression test for review-r
+// findings 4 and 5: the budget charged every message of a target header,
+// NIL padding included, and a fixed 16 MiB, but not the decoded datatype the
+// cache keeps. Now only the target message (body and 8-byte message header)
+// and an estimate of its decoded datatype are charged, against the file's read
+// limit.
 func TestSharedResolveBudget(t *testing.T) {
 	i8 := int8Message(t)
+	dt, err := ParseDatatypeMessage(i8)
+	require.NoError(t, err)
+	perTarget := uint64(len(i8)) + sharedMsgHeaderCost + datatypeFootprint(dt)
 
-	build := func(targets int) (io.ReaderAt, []*HeaderMessage) {
+	// Tiny datatypes padded with 60,000 bytes of NIL message each: the padding
+	// is parsed and dropped, not charged.
+	build := func(targets int) (*Superblock, *bytes.Reader, []*HeaderMessage) {
 		hdr := v1HeaderWith(
 			HeaderMessage{Type: MsgDatatype, Flags: 0x01, Data: i8},
 			HeaderMessage{Type: MsgNil, Data: make([]byte, 60000)},
@@ -122,20 +125,33 @@ func TestSharedResolveBudget(t *testing.T) {
 			msgs[i] = &HeaderMessage{Type: MsgAttribute, Data: sharedTypeAttr(uint64(len(file)))}
 			file = append(file, hdr...)
 		}
-		return bytes.NewReader(file), msgs
+		sb := sharedTestSB()
+		sb.SetSharedLimit(func() uint64 { return 275 * perTarget })
+		return sb, bytes.NewReader(file), msgs
 	}
 
-	// 250 targets: 15 MB of headers, under the 16 MiB budget.
-	r, msgs := build(250)
-	attrs, err := ParseAttributesFromMessages(r, msgs, sharedTestSB())
+	// 250 targets fit although their headers hold 15 MB.
+	sb, r, msgs := build(250)
+	attrs, err := ParseAttributesFromMessages(r, msgs, sb)
 	require.NoError(t, err)
 	require.Len(t, attrs, 250)
 
-	// 300 targets: 18 MB, over it.
-	r, msgs = build(300)
-	_, err = ParseAttributesFromMessages(r, msgs, sharedTestSB())
+	// 300 do not.
+	sb, r, msgs = build(300)
+	_, err = ParseAttributesFromMessages(r, msgs, sb)
 	require.ErrorIs(t, err, utils.ErrLimit)
 	require.NotErrorIs(t, err, utils.ErrCorrupt)
+
+	// A large compound is charged for what it decodes to, not for its 49 KB
+	// body: about 1.3 MB for 2,500 members.
+	big := bigCompound(t, 2500)
+	hdr := v1HeaderWith(HeaderMessage{Type: MsgDatatype, Flags: 0x01, Data: big})
+	file := make([]byte, 0x100+len(hdr))
+	copy(file[0x100:], hdr)
+	sb = sharedTestSB()
+	sb.SetSharedLimit(func() uint64 { return 4 * uint64(len(big)) })
+	_, err = resolveSharedDatatype(bytes.NewReader(file), sb, cat([]byte{sharedMsgVersion3, shareTypeCommitted}, le64(0x100)))
+	require.ErrorIs(t, err, utils.ErrLimit)
 }
 
 // errorFromReaderAt fails every read at or past from with err.

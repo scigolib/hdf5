@@ -114,7 +114,7 @@ func TestWriteContinuationChunkV2(t *testing.T) {
 	}
 
 	address := uint64(100)
-	size, err := WriteContinuationChunkV2(w, address, messages)
+	size, err := WriteContinuationChunkV2(w, address, messages, 0)
 	require.NoError(t, err)
 
 	// Expected size: "OCHK"(4) + type(1)+size(2)+flags(1)+data(5) + checksum(4) = 17
@@ -149,7 +149,7 @@ func TestContinuationChunkSizeV2(t *testing.T) {
 	}
 
 	// "OCHK"(4) + type(1)+size(2)+flags(1)+data(20) + checksum(4) = 32
-	assert.Equal(t, uint64(32), ContinuationChunkSizeV2(messages))
+	assert.Equal(t, uint64(32), ContinuationChunkSizeV2(messages, 0))
 }
 
 // TestContinuationChunkSizeV2_MultipleMessages tests size with multiple messages.
@@ -161,7 +161,7 @@ func TestContinuationChunkSizeV2_MultipleMessages(t *testing.T) {
 
 	// "OCHK"(4) + 2*(type(1)+size(2)+flags(1)) + data(10+20) + checksum(4) = 42
 	expected := uint64(4 + (1+2+1)*2 + 10 + 20 + 4)
-	assert.Equal(t, expected, ContinuationChunkSizeV2(messages))
+	assert.Equal(t, expected, ContinuationChunkSizeV2(messages, 0))
 }
 
 // TestParseV2ContinuationBlock verifies that V2 OCHK blocks can be read back.
@@ -176,7 +176,7 @@ func TestParseV2ContinuationBlock(t *testing.T) {
 	}
 
 	addr := uint64(0)
-	size, err := WriteContinuationChunkV2(w, addr, messages)
+	size, err := WriteContinuationChunkV2(w, addr, messages, 0)
 	require.NoError(t, err)
 
 	// Now parse it back using the reader.

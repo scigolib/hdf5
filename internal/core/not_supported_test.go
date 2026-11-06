@@ -39,11 +39,9 @@ func TestNotSupportedSentinel(t *testing.T) {
 
 	t.Run("layout version", func(t *testing.T) {
 		sb := &Superblock{Version: 2, OffsetSize: 8, LengthSize: 8}
-		// Version 5 is valid in HDF5 2.0 (H5Oprivate.h:448-455); 6 is refused by
-		// C (H5Olayout.c:103-104).
-		_, err := ParseDataLayoutMessage(append([]byte{5}, make([]byte, 32)...), sb)
-		isNotSupported(t, err)
-		_, err = ParseDataLayoutMessage(append([]byte{6}, make([]byte, 32)...), sb)
+		// Version 5 (HDF5 2.0, H5Oprivate.h:448-455) is decoded since TASK-058;
+		// 6 is refused by C (H5Olayout.c:103-104).
+		_, err := ParseDataLayoutMessage(append([]byte{6}, make([]byte, 32)...), sb)
 		isCorrupt(t, err)
 	})
 
@@ -63,19 +61,32 @@ func TestNotSupportedSentinel(t *testing.T) {
 	})
 
 	t.Run("fractal heap ID type", func(t *testing.T) {
-		// Huge and tiny objects are valid (H5HFpkg.h:141-144); type 3 is reserved.
-		_, _, err := parseHeapID([7]byte{0x10}, &fractalHeapHeaderRaw{})
+		// Huge and tiny objects are valid (H5HFpkg.h:141-144); type 3 is
+		// reserved. Tiny objects are read (TASK-058), and huge objects whose
+		// ID holds their address; a 7-byte ID cannot, so the object is
+		// tracked by a v2 B-tree, which is not read.
+		s := defaultFheapSpec()
+		s.idLen = 7
+		h, err := OpenFractalHeap(bytes.NewReader(s.bytes()), fheapTestSB, 0)
+		require.NoError(t, err)
+		_, err = h.Object([]byte{0x10, 1, 0, 0, 0, 0, 0})
 		isNotSupported(t, err)
-		_, _, err = parseHeapID([7]byte{0x20}, &fractalHeapHeaderRaw{})
-		isNotSupported(t, err)
-		_, _, err = parseHeapID([7]byte{0x30}, &fractalHeapHeaderRaw{})
+		got, err := h.Object([]byte{0x20, 't', 0, 0, 0, 0, 0})
+		require.NoError(t, err)
+		require.Equal(t, []byte("t"), got)
+		_, err = h.Object([]byte{0x30, 0, 0, 0, 0, 0, 0})
 		isCorrupt(t, err)
 	})
 
 	t.Run("chunk index", func(t *testing.T) {
-		d := &DatasetDescriptor{layout: &DataLayoutMessage{Class: LayoutChunked, ChunkIndexType: ChunkIndexFArray}}
-		_, err := d.CollectChunks(bytes.NewReader(nil), &Superblock{})
-		isNotSupported(t, err)
+		// Every index type of the format is read (TASK-058); a type past
+		// H5D_CHUNK_IDX_BT2 is not a format feature but corruption.
+		d := &DatasetDescriptor{
+			dataspace: &DataspaceMessage{Type: DataspaceSimple, Dimensions: []uint64{4}},
+			layout:    &DataLayoutMessage{Class: LayoutChunked, ChunkIndexType: 6, ChunkSize: []uint64{4, 1}},
+		}
+		_, err := d.CollectChunks(bytes.NewReader(nil), &Superblock{}, utils.DefaultReadLimit)
+		isCorrupt(t, err)
 	})
 
 	t.Run("conversion", func(t *testing.T) {

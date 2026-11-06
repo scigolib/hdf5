@@ -1283,11 +1283,7 @@ func (fw *FileWriter) datasetHeaderMessages(datatypeData, dataspaceData, layoutD
 		{Type: core.MsgFillValue, Data: fillData, Flags: core.MsgFlagConstant},
 	}
 	if pipeline != nil && !pipeline.IsEmpty() {
-		version := writer.PipelineVersion2
-		if fw.file.sb.Version < core.Version2 {
-			version = writer.PipelineVersion1
-		}
-		pipelineData, err := pipeline.EncodePipelineMessage(version)
+		pipelineData, err := pipeline.EncodePipelineMessage(core.PipelineVersionFor(fw.file.sb.Version))
 		if err != nil {
 			return nil, fmt.Errorf("failed to encode filter pipeline: %w", err)
 		}
@@ -1311,13 +1307,6 @@ type DatasetWriter struct {
 	chunkCoordinator *writer.ChunkCoordinator // For chunked datasets
 	chunkDims        []uint64                 // Chunk dimensions
 	pipeline         *writer.FilterPipeline   // Filter pipeline for chunked datasets
-
-	// layoutBTreeOffset is the file offset where the B-tree address is stored
-	// in the layout message. Used to update the address after writing chunks.
-	layoutBTreeOffset uint64
-	// headerSize is the on-disk size of the V2 object header (used to recompute
-	// Jenkins checksum after patching the B-tree address in chunked datasets).
-	headerSize uint64
 
 	// For RMW scenarios (files opened with OpenForWrite)
 	objectHeader  *core.ObjectHeader         // Full object header (for attribute operations)
@@ -1687,21 +1676,19 @@ func (dw *DatasetWriter) Resize(newDims []uint64) error {
 		return err
 	}
 
-	// 3. Read object header from file if not already loaded.
-	if dw.objectHeader == nil {
-		oh, err := core.ReadObjectHeader(dw.fileWriter.writer, dw.address,
-			dw.fileWriter.file.sb)
-		if err != nil {
-			return fmt.Errorf("read object header: %w", err)
-		}
-		dw.objectHeader = oh
+	// 3. Read the object header from the file: attribute calls of this
+	// session may have changed it since the dataset was created or opened.
+	oh, err := core.ReadObjectHeader(dw.fileWriter.writer.Reader(), dw.address,
+		dw.fileWriter.file.sb)
+	if err != nil {
+		return fmt.Errorf("read object header: %w", err)
 	}
 
 	// 4. Find and update dataspace message.
 	var dataspaceMsg *core.DataspaceMessage
 	var dataspaceIdx int
 	found := false
-	for i, msg := range dw.objectHeader.Messages {
+	for i, msg := range oh.Messages {
 		if msg.Type != core.MsgDataspace { // Skip non-dataspace messages
 			continue
 		}
@@ -1731,13 +1718,16 @@ func (dw *DatasetWriter) Resize(newDims []uint64) error {
 	}
 
 	// 7. Update message in object header.
-	dw.objectHeader.Messages[dataspaceIdx].Data = newDataspaceData
+	oh.Messages[dataspaceIdx].Data = newDataspaceData
 
 	// 8. Write updated object header back to file.
-	err = core.WriteObjectHeader(dw.fileWriter.writer, dw.address,
-		dw.objectHeader, dw.fileWriter.file.sb)
-	if err != nil {
+	if err := dw.fileWriter.rewriteObjectHeader(dw.address, oh); err != nil {
 		return fmt.Errorf("write object header: %w", err)
+	}
+	if dw.objectHeader != nil {
+		if err := dw.refreshHeaderCache(); err != nil {
+			return err
+		}
 	}
 
 	// 9. Update internal state.
@@ -2311,7 +2301,6 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 	rootBTreeAddr := f.sb.RootBTreeAddr // v0: cached in superblock
 	rootHeapAddr := f.sb.RootHeapAddr   // v0: cached in superblock
 	rootStNodeAddr := uint64(0)
-	rootHeaderAllocSz := uint64(0)
 
 	// For v2/v3 superblocks the B-tree and local-heap addresses are NOT
 	// stored in the superblock — they live inside the root group's object
@@ -2324,13 +2313,14 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 		_ = f.Close()
 		return nil, fmt.Errorf("failed to read root group object header: %w", ohErr)
 	}
-	rootHeaderAllocSz = core.ObjectHeaderSizeFromParsed(rootOH)
 
 	if rootBTreeAddr == 0 || rootHeapAddr == 0 {
 		for _, msg := range rootOH.Messages {
-			if msg.Type == core.MsgSymbolTable && len(msg.Data) >= 2*int(f.sb.OffsetSize) {
-				rootBTreeAddr = f.sb.Endianness.Uint64(msg.Data[0:8])
-				rootHeapAddr = f.sb.Endianness.Uint64(msg.Data[8:16])
+			// The symbol table message holds two addresses of the file's
+			// offset size (H5Ostab.c:H5O__stab_decode).
+			if off := int(f.sb.OffsetSize); msg.Type == core.MsgSymbolTable && len(msg.Data) >= 2*off {
+				rootBTreeAddr = readAddressLE(msg.Data[:off])
+				rootHeapAddr = readAddressLE(msg.Data[off : 2*off])
 				break
 			}
 		}
@@ -2338,20 +2328,29 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 
 	// Step 4: Create FileWriter with loaded structures
 	fileWriter := &FileWriter{
-		file:              f,
-		writer:            fw,
-		filename:          filename,
-		config:            cfg,
-		rootGroupAddr:     rootGroupAddr,
-		rootBTreeAddr:     rootBTreeAddr,
-		rootHeapAddr:      rootHeapAddr,
-		rootStNodeAddr:    rootStNodeAddr,
-		rootHeaderAllocSz: rootHeaderAllocSz,
-		groups:            make(map[string]*GroupMetadata),
-		headerAllocs:      make(map[uint64]uint64),
+		file:           f,
+		writer:         fw,
+		filename:       filename,
+		config:         cfg,
+		rootGroupAddr:  rootGroupAddr,
+		rootBTreeAddr:  rootBTreeAddr,
+		rootHeapAddr:   rootHeapAddr,
+		rootStNodeAddr: rootStNodeAddr,
+		groups:         make(map[string]*GroupMetadata),
+		headerAllocs:   make(map[uint64]uint64),
 	}
 
 	fileWriter.globalHeapWriter = newGlobalHeapWriter(fileWriter)
+
+	// The root header may only be rewritten within the space of its chunk 0
+	// on disk (H5Ocache.c:1012-1140 decode its size from the prefix).
+	rootSpace, err := readChunk0Size(fileWriter, rootGroupAddr)
+	if err != nil {
+		_ = fw.Close()
+		_ = f.Close()
+		return nil, fmt.Errorf("failed to read root group object header size: %w", err)
+	}
+	fileWriter.rootHeaderAllocSz = rootSpace
 
 	return fileWriter, nil
 }
@@ -2400,11 +2399,10 @@ func (fw *FileWriter) OpenDataset(path string) (*DatasetWriter, error) {
 		return nil, fmt.Errorf("failed to read object header: %w", err)
 	}
 
-	// Step 3: Extract datatype, dataspace, layout, and attribute info messages
+	// Step 3: Extract datatype, dataspace and layout messages
 	var datatypeMsg *core.DatatypeMessage
 	var dataspaceMsg *core.DataspaceMessage
 	var layoutMsg *core.DataLayoutMessage
-	var attrInfoMsg *core.AttributeInfoMessage
 	var sharedType bool
 
 	for _, msg := range oh.Messages {
@@ -2430,16 +2428,21 @@ func (fw *FileWriter) OpenDataset(path string) (*DatasetWriter, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse layout: %w", err)
 			}
-		case core.MsgAttributeInfo:
-			attrInfoMsg, err = core.ParseAttributeInfoMessage(msg.Data, fw.file.sb)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse attribute info: %w", err)
-			}
 		}
 	}
 
 	if (datatypeMsg == nil && !sharedType) || dataspaceMsg == nil || layoutMsg == nil {
 		return nil, fmt.Errorf("dataset metadata incomplete (missing datatype, dataspace, or layout)")
+	}
+
+	// The attribute info is cached only for dense storage: a C header keeps
+	// one with an undefined heap while its attributes are compact.
+	attrInfoMsg, dense, err := denseAttributeInfo(oh, fw.file.sb)
+	if err != nil {
+		return nil, fmt.Errorf("dataset %q: %w", path, err)
+	}
+	if !dense {
+		attrInfoMsg = nil
 	}
 
 	// Step 4: Calculate data size (unknown for a committed datatype)
@@ -2464,7 +2467,7 @@ func (fw *FileWriter) OpenDataset(path string) (*DatasetWriter, error) {
 		dtype:         datatypeMsg,
 		dims:          dataspaceMsg.Dimensions,
 		objectHeader:  oh,          // Store object header for attribute operations
-		denseAttrInfo: attrInfoMsg, // May be nil if no dense storage yet
+		denseAttrInfo: attrInfoMsg, // nil unless the attributes are in dense storage
 	}
 
 	return dsw, nil

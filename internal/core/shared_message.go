@@ -163,15 +163,15 @@ func resolveSharedDatatype(r io.ReaderAt, sb *Superblock, data []byte) (*Datatyp
 	if dt, ok := c.datatypes[addr]; ok {
 		return dt, nil
 	}
-
-	body, err := c.bodyLocked(r, sb, addr, MsgDatatype)
-	if err != nil {
+	if err := cachedFailureLocked(c, c.badTypes, addr); err != nil {
 		return nil, err
 	}
 
-	dt, err := ParseDatatypeMessage(body)
+	dt, err := c.decodeDatatypeLocked(r, sb, addr)
 	if err != nil {
-		return nil, fmt.Errorf("committed datatype in object header 0x%X: %w", addr, err)
+		c.badTypes = recordFailureLocked(c, c.badTypes, addr, err)
+
+		return nil, err
 	}
 
 	if c.datatypes == nil {
@@ -180,6 +180,32 @@ func resolveSharedDatatype(r io.ReaderAt, sb *Superblock, data []byte) (*Datatyp
 	c.datatypes[addr] = dt
 
 	return dt, nil
+}
+
+// datatypeNodeCost is the charge for one decoded DatatypeMessage or
+// CompoundMember beyond the data its slices and strings hold: an upper bound
+// of the struct sizes on 64-bit platforms (checked by
+// TestDatatypeNodeCostCoversStruct).
+const datatypeNodeCost = 256
+
+// datatypeFootprint estimates the bytes a decoded datatype keeps alive: one
+// node per type and member, plus its properties, tag, enumeration names and
+// values, array dimensions, member names, member types and base type.
+func datatypeFootprint(dt *DatatypeMessage) uint64 {
+	if dt == nil {
+		return 0
+	}
+
+	n := uint64(datatypeNodeCost) + uint64(len(dt.Properties)) + uint64(len(dt.OpaqueTag)) +
+		uint64(len(dt.EnumValues)) + 4*uint64(len(dt.ArrayDims))
+	for _, name := range dt.EnumNames {
+		n += 16 + uint64(len(name)) // String header and bytes.
+	}
+	for i := range dt.Members {
+		n += datatypeNodeCost + uint64(len(dt.Members[i].Name)) + datatypeFootprint(dt.Members[i].Type)
+	}
+
+	return n + datatypeFootprint(dt.Base)
 }
 
 // committedTarget decodes a shared-message reference and returns the address
@@ -201,21 +227,28 @@ func committedTarget(r io.ReaderAt, sb *Superblock, data []byte, msgType Message
 	return sm.address, nil
 }
 
-// sharedResolveBudget is the most object header bytes one file may read to
-// resolve shared messages. Every distinct target header is read once and
-// counted once, so a valid file stays far below it: a committed datatype's
-// header holds one message of at most H5O_MESG_MAX_SIZE (64 KiB,
-// H5Oprivate.h:67) and a few small ones, and 16 MiB covers hundreds of
-// thousands of committed datatypes. A crafted file can point thousands of
-// 30-byte headers at one large continuation chunk, or thousands of attributes
-// at distinct large types; without a budget each costs a full header parse and
-// a decoded type kept for the life of the File (review-068 finding 2). The
-// budget bounds the bytes parsed, the bodies cached and, through them, the
-// decoded datatypes. Exceeding it fails the read with utils.ErrLimit.
+// SetSharedLimit ties the budget of the shared message cache to fn, which
+// returns the file's read limit (hdf5.File.ReadLimit); it is called on each
+// resolution, so a changed limit applies to the next one. Without it, or when
+// fn returns 0, the budget is utils.DefaultReadLimit.
+//
+// The budget bounds what one file keeps for the life of the File to resolve
+// shared messages: the bodies of the committed messages (each with its 8-byte
+// message header), an estimate of the datatypes decoded from them
+// (datatypeFootprint) and the External File List heap blocks
+// (cachedLocalHeapBlock). Every distinct target is charged once. A crafted file
+// can point thousands of attributes at distinct large committed types; without
+// a budget each one decoded stays cached (review-068 finding 2). Exceeding the
+// budget fails the read with utils.ErrLimit; raising the limit lets it proceed.
 //
 // Deviation: C has no such bound; its metadata cache evicts headers instead
 // (H5AC). A Go program cannot recover from a failed allocation (ADR-003).
-const sharedResolveBudget uint64 = 16 << 20
+func (sb *Superblock) SetSharedLimit(fn func() uint64) {
+	sb.shared.mu.Lock()
+	defer sb.shared.mu.Unlock()
+
+	sb.shared.limit = fn
+}
 
 // sharedKey names one committed message: its object header and message type.
 type sharedKey struct {
@@ -224,37 +257,132 @@ type sharedKey struct {
 }
 
 // sharedCache holds the committed messages resolved in one file, keyed by
-// target header and message type, and the datatypes decoded from them. Entries
-// are immutable once stored and shared by every reader of the file. Its zero
-// value is ready to use; it is safe for concurrent use.
+// target header and message type, the datatypes decoded from them, and the
+// External File List heap blocks. Entries are immutable once stored and shared
+// by every reader of the file. Its zero value is ready to use; it is safe for
+// concurrent use.
 //
-// The library never writes shared messages, so a write session cannot change
-// a cached target in place. A deleted committed datatype whose space the
+// The library never writes shared messages or External File Lists, so a write
+// session cannot change a cached target in place. A deleted committed datatype whose space the
 // allocator reuses would leave a stale entry, read only through a reference
 // that already dangles.
+//
+// Failures decided by the file's bytes are cached too (review-r finding 2): a
+// corrupt or unsupported target fails the same way for every reference to it,
+// so a file with thousands of references to one bad target parses it once. A
+// failure caused by the budget is kept only while the budget is unchanged, so
+// a raised read limit retries it. A failed read is not kept
+// (recordFailureLocked). Deviation: C caches no failure; it re-reads the header
+// through its metadata cache on every reference.
 type sharedCache struct {
 	mu        sync.Mutex
 	bodies    map[sharedKey][]byte
 	datatypes map[uint64]*DatatypeMessage
-	spent     uint64 // Target header bytes read so far, against budget.
-	budget    uint64 // 0 means sharedResolveBudget; tests lower it.
+	failed    map[sharedKey]sharedFailure // Targets whose body could not be read.
+	badTypes  map[uint64]sharedFailure    // Committed datatypes that could not be decoded.
+	heaps     map[uint64][]byte           // External File List heap blocks (cachedLocalHeapBlock).
+	badHeaps  map[uint64]sharedFailure    // Heaps that could not be read.
+	spent     uint64                      // Bytes charged so far, against the budget.
+	limit     func() uint64               // The file's read limit (SetSharedLimit); nil: the default.
+}
+
+// sharedFailure is a cached resolution failure. budget is the budget in effect
+// when a failure wrapping utils.ErrLimit happened, 0 for any other failure.
+type sharedFailure struct {
+	err    error
+	budget uint64
+}
+
+// budgetLocked returns the budget in effect. c.mu must be held.
+func (c *sharedCache) budgetLocked() uint64 {
+	if c.limit != nil {
+		if limit := c.limit(); limit != 0 {
+			return limit
+		}
+	}
+
+	return utils.DefaultReadLimit
+}
+
+// recordFailureLocked caches err as the failure of key when the file's bytes
+// decide it: an error wrapping utils.ErrCorrupt or utils.ErrNotSupported that
+// is not a failed read (readError), or a budget refusal (utils.ErrLimit),
+// kept with the budget in effect. A failed read and any other error are not
+// cached, so a transient I/O error is retried on the next access. c.mu must be
+// held. It returns failures, allocated on first use.
+func recordFailureLocked[K comparable](c *sharedCache, failures map[K]sharedFailure, key K, err error) map[K]sharedFailure {
+	f := sharedFailure{err: err}
+	var rf *readError
+	switch {
+	case errors.Is(err, utils.ErrLimit):
+		f.budget = c.budgetLocked()
+	case errors.As(err, &rf):
+		return failures
+	case errors.Is(err, utils.ErrCorrupt), errors.Is(err, utils.ErrNotSupported):
+	default:
+		return failures
+	}
+
+	if failures == nil {
+		failures = make(map[K]sharedFailure)
+	}
+	failures[key] = f
+
+	return failures
+}
+
+// readError marks an error of the reader, not of the file's bytes, that
+// sharedTargetError reports as corruption of the reference: it is not cached.
+type readError struct{ err error }
+
+func (e *readError) Error() string { return e.err.Error() }
+func (e *readError) Unwrap() error { return e.err }
+
+// cachedFailureLocked returns the cached failure of key, unless it was caused
+// by a budget that has changed since; nil when there is none. c.mu must be
+// held.
+func cachedFailureLocked[K comparable](c *sharedCache, failures map[K]sharedFailure, key K) error {
+	f, ok := failures[key]
+	if !ok || (f.budget != 0 && f.budget != c.budgetLocked()) {
+		return nil
+	}
+
+	return f.err
 }
 
 // bodyLocked returns the body of the first message of type msgType in the
-// object header at addr, reading the header on first use. c.mu must be held.
+// object header at addr, reading the header on first use. A failure is cached
+// like a body. c.mu must be held.
 func (c *sharedCache) bodyLocked(r io.ReaderAt, sb *Superblock, addr uint64, msgType MessageType) ([]byte, error) {
 	key := sharedKey{address: addr, msgType: msgType}
 	if body, ok := c.bodies[key]; ok {
 		return body, nil
 	}
+	if err := cachedFailureLocked(c, c.failed, key); err != nil {
+		return nil, err
+	}
 
+	body, err := c.readBodyLocked(r, sb, addr, msgType)
+	if err != nil {
+		c.failed = recordFailureLocked(c, c.failed, key, err)
+
+		return nil, err
+	}
+
+	if c.bodies == nil {
+		c.bodies = make(map[sharedKey][]byte)
+	}
+	c.bodies[key] = body
+
+	return body, nil
+}
+
+// readBodyLocked reads the object header at addr and returns a copy of its
+// first message of type msgType, charged to the budget. c.mu must be held.
+func (c *sharedCache) readBodyLocked(r io.ReaderAt, sb *Superblock, addr uint64, msgType MessageType) ([]byte, error) {
 	header, err := readObjectHeader(r, addr, sb, false)
 	if err != nil {
 		return nil, sharedTargetError(msgType, addr, err)
-	}
-
-	if err := c.charge(header, addr); err != nil {
-		return nil, err
 	}
 
 	for _, msg := range header.Messages {
@@ -267,42 +395,38 @@ func (c *sharedCache) bodyLocked(r io.ReaderAt, sb *Superblock, addr uint64, msg
 				utils.ErrCorrupt, msgType, addr)
 		}
 
+		// Only the message kept is charged: the rest of the header is parsed
+		// and dropped.
+		if err := c.chargeLocked(uint64(len(msg.Data))+sharedMsgHeaderCost, committedWhat(addr)); err != nil {
+			return nil, err
+		}
+
 		// A copy: msg.Data may share the buffer of the whole header chunk,
 		// which the cache must not keep alive.
-		body := bytes.Clone(msg.Data)
-		if c.bodies == nil {
-			c.bodies = make(map[sharedKey][]byte)
-		}
-		c.bodies[key] = body
-
-		return body, nil
+		return bytes.Clone(msg.Data), nil
 	}
 
 	return nil, fmt.Errorf("%w: object header 0x%X has no message of type %d for the shared message referring to it",
 		utils.ErrCorrupt, addr, msgType)
 }
 
-// charge counts the bytes of a target header just read against the file's
-// resolution budget: each message's body and its 8-byte message header.
-func (c *sharedCache) charge(header *ObjectHeader, addr uint64) error {
-	budget := c.budget
-	if budget == 0 {
-		budget = sharedResolveBudget
-	}
-
-	cost := uint64(0)
-	for _, msg := range header.Messages {
-		cost += uint64(len(msg.Data)) + sharedMsgHeaderCost
-	}
-
+// chargeLocked counts cost bytes kept for what (as an error message names it)
+// against the file's budget (SetSharedLimit). c.mu must be held.
+func (c *sharedCache) chargeLocked(cost uint64, what string) error {
+	budget := c.budgetLocked()
 	if cost > budget || c.spent > budget-cost {
-		return fmt.Errorf("%w: resolving the shared message in object header 0x%X would read %d bytes "+
-			"after %d already read for shared messages, more than the %d bytes allowed per file",
-			utils.ErrLimit, addr, cost, c.spent, budget)
+		return fmt.Errorf("%w: caching %s would keep %d more bytes after %d already kept "+
+			"for shared metadata, more than the file's read limit of %d bytes",
+			utils.ErrLimit, what, cost, c.spent, budget)
 	}
 	c.spent += cost
 
 	return nil
+}
+
+// committedWhat names a committed message for chargeLocked.
+func committedWhat(addr uint64) string {
+	return fmt.Sprintf("the shared message in object header 0x%X", addr)
 }
 
 // sharedMsgHeaderCost is the cost charged per message beyond its body: the
@@ -311,14 +435,16 @@ const sharedMsgHeaderCost = 8
 
 // sharedTargetError classifies a failure to read the target header of a shared
 // message, as filterError does for filters: a limit or an unsupported feature
-// keeps its own sentinel, anything else is corruption of the reference.
+// keeps its own sentinel, anything else is corruption of the reference. That
+// includes a failed read, which is marked (readError) so the cache does not
+// keep it.
 func sharedTargetError(msgType MessageType, addr uint64, err error) error {
 	if errors.Is(err, utils.ErrCorrupt) || errors.Is(err, utils.ErrLimit) || errors.Is(err, utils.ErrNotSupported) {
 		return fmt.Errorf("shared message of type %d refers to object header 0x%X: %w", msgType, addr, err)
 	}
 
 	return fmt.Errorf("%w: shared message of type %d refers to object header 0x%X: %w",
-		utils.ErrCorrupt, msgType, addr, err)
+		utils.ErrCorrupt, msgType, addr, &readError{err: err})
 }
 
 // messageBody returns the body of a header message, following a shared-message
@@ -335,4 +461,24 @@ func messageBody(r io.ReaderAt, sb *Superblock, msg *HeaderMessage) ([]byte, err
 	}
 
 	return body, nil
+}
+
+// decodeDatatypeLocked reads and decodes the committed datatype in the object
+// header at addr and charges its decoded size to the budget. c.mu must be held.
+func (c *sharedCache) decodeDatatypeLocked(r io.ReaderAt, sb *Superblock, addr uint64) (*DatatypeMessage, error) {
+	body, err := c.bodyLocked(r, sb, addr, MsgDatatype)
+	if err != nil {
+		return nil, err
+	}
+
+	dt, err := ParseDatatypeMessage(body)
+	if err != nil {
+		return nil, fmt.Errorf("committed datatype in object header 0x%X: %w", addr, err)
+	}
+
+	if err := c.chargeLocked(datatypeFootprint(dt), committedWhat(addr)); err != nil {
+		return nil, err
+	}
+
+	return dt, nil
 }

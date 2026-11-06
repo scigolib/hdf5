@@ -745,14 +745,14 @@ func TestParseAttributeInfoMessage_CreationOrder(t *testing.T) {
 			name:  "with creation order tracking",
 			flags: 0x01,
 			build: func() []byte {
-				// version(1) + flags(1) + maxCompact(2) + minDense(2) + heapAddr(8) + btreeNameAddr(8) = 22
-				data := make([]byte, 22)
+				// version(1) + flags(1) + maxCrtIdx(2) + heapAddr(8) + btreeNameAddr(8) = 20
+				// (H5Oainfo.c:132-138).
+				data := make([]byte, 20)
 				data[0] = 0                                        // version
 				data[1] = 0x01                                     // flags: track creation order
-				binary.LittleEndian.PutUint16(data[2:4], 8)        // max compact
-				binary.LittleEndian.PutUint16(data[4:6], 6)        // min dense
-				binary.LittleEndian.PutUint64(data[6:14], 0x3000)  // heap addr
-				binary.LittleEndian.PutUint64(data[14:22], 0x4000) // btree addr
+				binary.LittleEndian.PutUint16(data[2:4], 8)        // max creation index
+				binary.LittleEndian.PutUint64(data[4:12], 0x3000)  // heap addr
+				binary.LittleEndian.PutUint64(data[12:20], 0x4000) // btree addr
 				return data
 			},
 		},
@@ -760,15 +760,14 @@ func TestParseAttributeInfoMessage_CreationOrder(t *testing.T) {
 			name:  "with creation order tracking and indexing",
 			flags: 0x03,
 			build: func() []byte {
-				// version(1) + flags(1) + maxCompact(2) + minDense(2) + heapAddr(8) + btreeNameAddr(8) + btreeOrderAddr(8) = 30
-				data := make([]byte, 30)
+				// version(1) + flags(1) + maxCrtIdx(2) + heapAddr(8) + btreeNameAddr(8) + btreeOrderAddr(8) = 28
+				data := make([]byte, 28)
 				data[0] = 0    // version
 				data[1] = 0x03 // flags: track + index creation order
 				binary.LittleEndian.PutUint16(data[2:4], 8)
-				binary.LittleEndian.PutUint16(data[4:6], 6)
-				binary.LittleEndian.PutUint64(data[6:14], 0x5000)  // heap addr
-				binary.LittleEndian.PutUint64(data[14:22], 0x6000) // btree name addr
-				binary.LittleEndian.PutUint64(data[22:30], 0x7000) // btree order addr
+				binary.LittleEndian.PutUint64(data[4:12], 0x5000)  // heap addr
+				binary.LittleEndian.PutUint64(data[12:20], 0x6000) // btree name addr
+				binary.LittleEndian.PutUint64(data[20:28], 0x7000) // btree order addr
 				return data
 			},
 		},
@@ -781,11 +780,17 @@ func TestParseAttributeInfoMessage_CreationOrder(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, msg)
 			require.Equal(t, tt.flags, msg.Flags)
-			require.NotZero(t, msg.FractalHeapAddr)
-			require.NotZero(t, msg.BTreeNameIndexAddr)
+			// Exact addresses: a decoder that is off by a field reads
+			// non-zero garbage, which NotZero would accept.
+			heap := uint64(0x1000) + uint64(tt.flags&0x01)*0x2000 + uint64(tt.flags&0x02)*0x1000
+			require.Equal(t, heap, msg.FractalHeapAddr)
+			require.Equal(t, heap+0x1000, msg.BTreeNameIndexAddr)
 
+			if tt.flags&0x01 != 0 {
+				require.EqualValues(t, 8, msg.MaxCreationIndex)
+			}
 			if tt.flags&0x02 != 0 {
-				require.NotZero(t, msg.BTreeOrderIndexAddr)
+				require.Equal(t, heap+0x2000, msg.BTreeOrderIndexAddr)
 			}
 		})
 	}
@@ -797,77 +802,6 @@ func TestParseAttributeInfoMessage_TooShort(t *testing.T) {
 	_, err := ParseAttributeInfoMessage([]byte{0}, sb)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "too short")
-}
-
-// ---------------------------------------------------------------------------
-// computeOffsetSize coverage
-// ---------------------------------------------------------------------------
-
-// TestComputeOffsetSize_Coverage tests the offset size computation with more values.
-func TestComputeOffsetSize_Coverage(t *testing.T) {
-	tests := []struct {
-		value    uint64
-		expected uint8
-	}{
-		{0, 1},
-		{1, 1},
-		{255, 1},
-		{256, 2},
-		{65535, 2},
-		{65536, 3},
-		{0xFFFFFF, 3},
-		{0x1000000, 4},
-		{0xFFFFFFFF, 4},
-		{0x100000000, 5},
-	}
-
-	for _, tt := range tests {
-		result := computeOffsetSize(tt.value)
-		require.Equal(t, tt.expected, result, "computeOffsetSize(%d)", tt.value)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// parseHeapID coverage
-// ---------------------------------------------------------------------------
-
-// TestParseHeapID_UnsupportedType tests error on non-managed heap ID type.
-func TestParseHeapID_UnsupportedType(t *testing.T) {
-	heapHeader := &fractalHeapHeaderRaw{
-		HeapOffsetSize: 4,
-		HeapLengthSize: 2,
-	}
-
-	// Heap ID with type=1 (huge) instead of type=0 (managed).
-	heapID := [7]byte{0x10, 0, 0, 0, 0, 0, 0} // Type 1 in bits 4-5
-	_, _, err := parseHeapID(heapID, heapHeader)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported heap ID type")
-}
-
-// TestParseHeapID_Managed tests parsing managed heap ID.
-func TestParseHeapID_Managed(t *testing.T) {
-	heapHeader := &fractalHeapHeaderRaw{
-		HeapOffsetSize: 4,
-		HeapLengthSize: 2,
-	}
-
-	// Build managed heap ID: type=0, offset=0x100, length=0x50.
-	var heapID [7]byte
-	heapID[0] = 0x00 // Type 0 (managed)
-	// Offset: 4 bytes, little-endian.
-	heapID[1] = 0x00
-	heapID[2] = 0x01
-	heapID[3] = 0x00
-	heapID[4] = 0x00
-	// Length: 2 bytes, little-endian.
-	heapID[5] = 0x50
-	heapID[6] = 0x00
-
-	offset, length, err := parseHeapID(heapID, heapHeader)
-	require.NoError(t, err)
-	require.Equal(t, uint64(0x100), offset)
-	require.Equal(t, uint64(0x50), length)
 }
 
 // ---------------------------------------------------------------------------

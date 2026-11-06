@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/scigolib/hdf5/internal/core"
 	"github.com/scigolib/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
@@ -97,7 +98,8 @@ func TestFletcher32Filter_Remove_TooShort(t *testing.T) {
 	data := []byte{1, 2, 3}
 	_, err := filter.Remove(data)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "too short")
+	require.ErrorIs(t, err, utils.ErrCorrupt)
+	require.Contains(t, err.Error(), "Fletcher32 checksum")
 }
 
 func TestFletcher32Filter_Remove_InvalidChecksum(t *testing.T) {
@@ -116,7 +118,8 @@ func TestFletcher32Filter_Remove_InvalidChecksum(t *testing.T) {
 	// Remove should detect corruption
 	_, err = filter.Remove(corrupted)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "mismatch")
+	require.ErrorIs(t, err, utils.ErrCorrupt)
+	require.Contains(t, err.Error(), "Fletcher32 checksum")
 }
 
 func TestFletcher32Filter_Remove_CorruptedData(t *testing.T) {
@@ -135,7 +138,8 @@ func TestFletcher32Filter_Remove_CorruptedData(t *testing.T) {
 	// Remove should detect corruption
 	_, err = filter.Remove(corrupted)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "mismatch")
+	require.ErrorIs(t, err, utils.ErrCorrupt)
+	require.Contains(t, err.Error(), "Fletcher32 checksum")
 }
 
 func TestFletcher32Filter_RoundTrip_SmallData(t *testing.T) {
@@ -400,8 +404,8 @@ func TestCalculateFletcher32_KnownValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			checksum1 := calculateFletcher32(tt.data)
-			checksum2 := calculateFletcher32(tt.data)
+			checksum1 := core.Fletcher32(tt.data)
+			checksum2 := core.Fletcher32(tt.data)
 
 			// Same data should produce same checksum
 			require.Equal(t, checksum1, checksum2)
@@ -505,7 +509,7 @@ func TestFletcher32_FoldsLikeC(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, calculateFletcher32(tc.data))
+			require.Equal(t, tc.want, core.Fletcher32(tc.data))
 
 			out, err := NewFletcher32Filter().Apply(tc.data)
 			require.NoError(t, err)
@@ -520,7 +524,7 @@ func TestFletcher32_FoldsLikeC(t *testing.T) {
 // utils.ErrCorrupt otherwise.
 func TestFletcher32Filter_Remove_AcceptsReversed(t *testing.T) {
 	data := []byte{1, 2, 3, 4, 5, 6, 7}
-	sum := calculateFletcher32(data)
+	sum := core.Fletcher32(data)
 	reversed := (sum&0x00FF00FF)<<8 | (sum&0xFF00FF00)>>8
 	require.NotEqual(t, sum, reversed)
 

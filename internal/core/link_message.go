@@ -440,7 +440,7 @@ func (lm *LinkMessage) GetHardLinkAddress(sb *Superblock) (uint64, error) {
 		return 0, fmt.Errorf("invalid hard link value size: got %d, expected %d", len(lm.LinkValue), sb.OffsetSize)
 	}
 
-	return readUint64(lm.LinkValue, int(sb.OffsetSize), sb.Endianness), nil
+	return DecodeAddress(lm.LinkValue, int(sb.OffsetSize), sb.Endianness), nil
 }
 
 // GetSoftLinkPath extracts the target path from a soft link's LinkValue.

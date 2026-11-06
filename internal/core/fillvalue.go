@@ -73,16 +73,26 @@ type FillValueMessage struct {
 // zero default, so unallocated contiguous storage cannot be read and missing
 // chunks are skipped.
 func defaultFillValue(layoutClass DataLayoutClass) *FillValueMessage {
-	f := &FillValueMessage{Version: 2, FillTime: FillTimeIfSet, Size: fillSizeUndefined}
+	return &FillValueMessage{
+		Version:   2,
+		AllocTime: defaultAllocTime(layoutClass),
+		FillTime:  FillTimeIfSet,
+		Size:      fillSizeUndefined,
+	}
+}
+
+// defaultAllocTime is the storage allocation time C sets by layout when the
+// DCPL leaves it at the default (H5P__set_layout, H5Pdcpl.c:1864-1877):
+// compact storage early, chunked and virtual incrementally, contiguous late.
+func defaultAllocTime(layoutClass DataLayoutClass) uint8 {
 	switch layoutClass {
 	case LayoutCompact:
-		f.AllocTime = AllocTimeEarly
+		return AllocTimeEarly
 	case LayoutChunked, LayoutVirtual:
-		f.AllocTime = AllocTimeIncr
+		return AllocTimeIncr
 	default:
-		f.AllocTime = AllocTimeLate
+		return AllocTimeLate
 	}
-	return f
 }
 
 // Status reports how the fill value is defined (H5P_is_fill_value_defined).

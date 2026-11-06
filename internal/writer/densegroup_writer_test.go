@@ -4,6 +4,7 @@
 package writer
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"os"
@@ -372,47 +373,24 @@ func TestDenseGroupWriter_LinkMessage(t *testing.T) {
 		targetAddr: 0x123456,
 	}
 
-	msg := dgw.createLinkMessage(link, sb)
-
-	// Verify message is not empty
-	if len(msg) == 0 {
-		t.Error("Link message is empty")
+	msg, err := dgw.createLinkMessage(link, sb)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	// Verify version (first byte should be 1)
-	if msg[0] != 1 {
-		t.Errorf("Link message version mismatch: got %d, want 1", msg[0])
+	// H5O__link_encode for a hard link with an ASCII name of fewer than 256
+	// bytes and no creation order (H5Olink.c:296-380): version 1, flags 0
+	// (one-byte name length, no link type, creation order or character set
+	// field), the name length, the name, the address little-endian.
+	var addr [8]byte
+	binary.LittleEndian.PutUint64(addr[:], link.targetAddr)
+	want := make([]byte, 0, 3+len(link.name)+int(sb.OffsetSize))
+	want = append(want, 1, 0, byte(len(link.name)))
+	want = append(want, link.name...)
+	want = append(want, addr[:sb.OffsetSize]...)
+	if !bytes.Equal(msg, want) {
+		t.Errorf("link message\n got % x\nwant % x", msg, want)
 	}
-
-	// Verify type (second byte should be 0 for hard link)
-	if msg[1] != 0 {
-		t.Errorf("Link type mismatch: got %d, want 0 (hard link)", msg[1])
-	}
-
-	// Verify flags (third byte should have character set bit set)
-	if msg[2]&0x04 == 0 {
-		t.Error("Character set flag not set")
-	}
-
-	// Verify encoding (fourth byte should be 0 for UTF-8)
-	if msg[3] != 0 {
-		t.Errorf("Character encoding mismatch: got %d, want 0 (UTF-8)", msg[3])
-	}
-
-	// Verify message contains link name
-	linkNameBytes := []byte("testlink")
-	found := false
-	for i := 0; i < len(msg)-len(linkNameBytes); i++ {
-		if string(msg[i:i+len(linkNameBytes)]) == "testlink" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("Link name not found in message")
-	}
-
-	t.Logf("Link message size: %d bytes", len(msg))
 }
 
 // TestDenseGroupWriter_ObjectHeader tests object header creation.

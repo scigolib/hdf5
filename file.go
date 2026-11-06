@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -26,10 +27,8 @@ type File struct {
 	readLimit      atomic.Uint64   // Bytes a chunked read may allocate; 0 = utils.DefaultReadLimit (read_limit.go).
 
 	// externalDir is the directory external raw data files are opened in
-	// (SetExternalFilePrefix); nil or empty refuses them.
+	// (SetExternalFilePrefix); nil refuses them, the default.
 	externalDir atomic.Pointer[string]
-	// externalDefault is the HDF5 file's own directory, the default.
-	externalDefault string
 }
 
 // Open opens an HDF5 file for reading and returns a File handle.
@@ -81,13 +80,12 @@ func Open(filename string) (*File, error) {
 		visitedBTrees: make(map[uint64]bool),
 	}
 
-	// External raw data files are looked up next to the HDF5 file by default.
-	// The directory is made absolute now, so a later change of the working
-	// directory does not move it. Without it, external files are refused.
-	if abs, absErr := filepath.Abs(filename); absErr == nil {
-		file.externalDefault = filepath.Dir(abs)
-	}
+	// External raw data files are refused until SetExternalFilePrefix names
+	// their directory.
 	sb.ExternalFiles = file.openExternal
+	// What the file keeps to resolve shared messages is bounded by its read
+	// limit (SetReadLimit).
+	sb.SetSharedLimit(file.ReadLimit)
 
 	// Validate the root group address. It is relative to the base address, so
 	// the check compares the absolute position with the file size.
@@ -135,21 +133,25 @@ func (f *File) Close() error {
 	return err
 }
 
-// SetExternalFilePrefix sets the directory in which the raw data files of
-// datasets with external storage (an External File List, written by C's
-// H5Pset_external) are opened. By default it is the directory of the HDF5
-// file, as with C's H5Pset_efile_prefix("${ORIGIN}"). An empty dir restores
-// that default. A relative dir is made absolute now, against the current
-// working directory.
+// SetExternalFilePrefix allows reading the raw data files of datasets with
+// external storage (an External File List, written by C's H5Pset_external)
+// and sets the directory they are opened in. To read them next to the HDF5
+// file, pass its directory, as with C's H5Pset_efile_prefix("${ORIGIN}"). A
+// relative dir is made absolute now, against the current working directory.
+// An empty dir refuses external files again.
 //
-// The names come from the file, so they are untrusted. Only a name that stays
-// inside the directory is opened: an absolute name, a name with a volume or
-// UNC prefix, a name that climbs out with "..", and a symbolic link that
-// leads outside are all refused with an error that wraps ErrNotSupported and
-// quotes the name. The C library would open such names as given (relative
-// ones against the process's working directory unless a prefix is set);
-// reading arbitrary files named by a file from an untrusted source is the
-// risk this policy removes. Files are opened read-only and closed after each
+// External files are refused by default: the names come from the file, so a
+// file from an untrusted source could otherwise make the program read other
+// files it can reach. A read of such a dataset fails with an error that wraps
+// ErrNotSupported and fs.ErrPermission and names this method.
+//
+// Even with a directory set, only a name that stays inside it is opened: an
+// absolute name, a name with a volume or UNC prefix and a name that climbs
+// out with ".." are refused with an error that wraps ErrNotSupported and
+// fs.ErrPermission and quotes the name; a symbolic link that leads outside is
+// refused by os.Root with its own error. The C library would open such
+// names as given (relative ones against the process's working directory
+// unless a prefix is set). Files are opened read-only and closed after each
 // read; bytes past the end of an external file read as zeros, as in C.
 //
 // It is safe to call concurrently with reads; a read uses the directory in
@@ -170,14 +172,13 @@ func (f *File) SetExternalFilePrefix(dir string) error {
 }
 
 // ExternalFilePrefix returns the directory external raw data files are opened
-// in (see SetExternalFilePrefix); empty when there is none, as for a file not
-// opened by name.
+// in (see SetExternalFilePrefix); empty while they are refused, the default.
 func (f *File) ExternalFilePrefix() string {
 	if dir := f.externalDir.Load(); dir != nil {
 		return *dir
 	}
 
-	return f.externalDefault
+	return ""
 }
 
 // openExternal opens an external raw data file named by an External File
@@ -186,12 +187,13 @@ func (f *File) ExternalFilePrefix() string {
 func (f *File) openExternal(name string) (core.ExternalFile, error) {
 	dir := f.ExternalFilePrefix()
 	if dir == "" {
-		return nil, fmt.Errorf("no directory for external files; set one with (*hdf5.File).SetExternalFilePrefix: %w",
-			ErrNotSupported)
+		return nil, fmt.Errorf("external raw data file %q is not opened: external files are refused "+
+			"until a directory is set with (*hdf5.File).SetExternalFilePrefix: %w: %w",
+			name, ErrNotSupported, fs.ErrPermission)
 	}
 	if !filepath.IsLocal(name) {
-		return nil, fmt.Errorf("external file name %q is absolute or leaves the directory %q; it is not opened: %w",
-			name, dir, ErrNotSupported)
+		return nil, fmt.Errorf("external file name %q is absolute or leaves the directory %q; it is not opened: %w: %w",
+			name, dir, ErrNotSupported, fs.ErrPermission)
 	}
 
 	root, err := os.OpenRoot(dir)

@@ -854,7 +854,7 @@ func TestBorrowFromLeft_EmptySibling(t *testing.T) {
 	bt := NewWritableBTreeV2(DefaultBTreeV2NodeSize)
 
 	left := &BTreeV2LeafNode{Records: nil}
-	current := &BTreeV2LeafNode{Records: []LinkNameRecord{{NameHash: 100}}}
+	current := &BTreeV2LeafNode{Records: []IndexRecord{{NameHash: 100}}}
 
 	err := bt.borrowFromLeft(current, left)
 	if err == nil {
@@ -868,7 +868,7 @@ func TestBorrowFromRight_EmptySibling(t *testing.T) {
 
 	bt := NewWritableBTreeV2(DefaultBTreeV2NodeSize)
 
-	current := &BTreeV2LeafNode{Records: []LinkNameRecord{{NameHash: 100}}}
+	current := &BTreeV2LeafNode{Records: []IndexRecord{{NameHash: 100}}}
 	right := &BTreeV2LeafNode{Records: nil}
 
 	err := bt.borrowFromRight(current, right)
@@ -886,11 +886,11 @@ func TestMergeNodes_Overflow(t *testing.T) {
 	maxRecords := bt.calculateMaxRecords()
 
 	// Create nodes that together exceed maxRecords.
-	leftRecords := make([]LinkNameRecord, maxRecords)
+	leftRecords := make([]IndexRecord, maxRecords)
 	for i := range leftRecords {
-		leftRecords[i] = LinkNameRecord{NameHash: uint32(i)}
+		leftRecords[i] = IndexRecord{NameHash: uint32(i)}
 	}
-	rightRecords := []LinkNameRecord{{NameHash: uint32(maxRecords + 1)}}
+	rightRecords := []IndexRecord{{NameHash: uint32(maxRecords + 1)}}
 
 	left := &BTreeV2LeafNode{Records: leftRecords}
 	right := &BTreeV2LeafNode{Records: rightRecords}

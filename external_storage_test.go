@@ -3,6 +3,7 @@ package hdf5
 import (
 	"bytes"
 	"encoding/binary"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -198,11 +199,20 @@ func externRaw() []byte {
 	return b
 }
 
-func readDS1(t *testing.T, path string) ([]float64, error) {
+// openEFL opens the fixture at path with external files allowed in its own
+// directory.
+func openEFL(t *testing.T, path string) *File {
 	t.Helper()
 	f, err := Open(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, f.Close()) })
+	require.NoError(t, f.SetExternalFilePrefix(filepath.Dir(path)))
+	return f
+}
+
+func readDS1(t *testing.T, path string) ([]float64, error) {
+	t.Helper()
+	f := openEFL(t, path)
 	ds := findDataset(f, "/DS1")
 	require.NotNil(t, ds)
 	return ds.Read()
@@ -247,9 +257,7 @@ func TestExternalStorage_Read(t *testing.T) {
 		require.Equal(t, externValues(), got)
 
 		// A hyperslab crossing the file boundaries: rows 2..5, columns 1..2.
-		f, err := Open(path)
-		require.NoError(t, err)
-		defer func() { require.NoError(t, f.Close()) }()
+		f := openEFL(t, path)
 		sel, err := findDataset(f, "/DS1").ReadSlice([]uint64{2, 1}, []uint64{4, 2})
 		require.NoError(t, err)
 		want := []float64{}
@@ -313,7 +321,8 @@ func h5dumpMatches(t *testing.T, dir, path string) {
 
 // TestExternalStorage_PathPolicy: names come from the file, so only names
 // that stay inside the external file directory are opened (TASK-074 security
-// design). Each refused name fails with ErrNotSupported and is never read.
+// design). Each refused name fails with ErrNotSupported and fs.ErrPermission
+// and is never read.
 func TestExternalStorage_PathPolicy(t *testing.T) {
 	outside := t.TempDir()
 	secret := filepath.Join(outside, "secret.bin")
@@ -341,6 +350,7 @@ func TestExternalStorage_PathPolicy(t *testing.T) {
 			path := buildEFLFile(t, dir, eflSlot{extName, 0, core.ExternalUnlimited})
 			_, err := readDS1(t, path)
 			require.ErrorIs(t, err, ErrNotSupported)
+			require.ErrorIs(t, err, fs.ErrPermission)
 			require.ErrorContains(t, err, strconv.Quote(extName))
 		})
 	}
@@ -356,8 +366,31 @@ func TestExternalStorage_PathPolicy(t *testing.T) {
 	})
 }
 
-// TestExternalStorage_Prefix: SetExternalFilePrefix moves the directory;
-// names are still confined to it.
+// TestExternalStorage_RefusedByDefault is the regression test for review-r
+// finding 3: external raw data files were opened next to the HDF5 file by
+// default, so opening an untrusted file read whatever files it named in its
+// directory. They are refused until the caller names a directory with
+// SetExternalFilePrefix, and the error says so.
+//
+// Red on 22cfabf: the read succeeds with the default directory.
+func TestExternalStorage_RefusedByDefault(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "d.bin"), externRaw(), 0o600))
+	path := buildEFLFile(t, dir, eflSlot{"d.bin", 0, core.ExternalUnlimited})
+
+	f, err := Open(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, f.Close()) }()
+	require.Empty(t, f.ExternalFilePrefix())
+
+	_, err = findDataset(f, "/DS1").Read()
+	require.ErrorIs(t, err, ErrNotSupported)
+	require.ErrorIs(t, err, fs.ErrPermission)
+	require.ErrorContains(t, err, "SetExternalFilePrefix")
+}
+
+// TestExternalStorage_Prefix: SetExternalFilePrefix names the directory;
+// names are still confined to it, and an empty prefix refuses them again.
 func TestExternalStorage_Prefix(t *testing.T) {
 	dir := t.TempDir()
 	dataDir := t.TempDir()
@@ -367,11 +400,12 @@ func TestExternalStorage_Prefix(t *testing.T) {
 	f, err := Open(path)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, f.Close()) }()
-	require.Equal(t, dir, f.ExternalFilePrefix())
 
 	ds := findDataset(f, "/DS1")
+	require.NoError(t, f.SetExternalFilePrefix(dir))
 	_, err = ds.Read()
 	require.Error(t, err, "data.bin is not next to the HDF5 file")
+	require.NotErrorIs(t, err, ErrNotSupported, "a missing file is not a policy refusal")
 
 	require.NoError(t, f.SetExternalFilePrefix(dataDir))
 	require.Equal(t, dataDir, f.ExternalFilePrefix())
@@ -380,7 +414,9 @@ func TestExternalStorage_Prefix(t *testing.T) {
 	require.Equal(t, externValues(), got)
 
 	require.NoError(t, f.SetExternalFilePrefix(""))
-	require.Equal(t, dir, f.ExternalFilePrefix())
+	require.Empty(t, f.ExternalFilePrefix())
+	_, err = ds.Read()
+	require.ErrorIs(t, err, fs.ErrPermission)
 }
 
 // TestExternalStorage_ReadLimit: external storage is not in the HDF5 file and
@@ -391,12 +427,10 @@ func TestExternalStorage_ReadLimit(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "d.bin"), externRaw(), 0o600))
 	path := buildEFLFile(t, dir, eflSlot{"d.bin", 0, core.ExternalUnlimited})
 
-	f, err := Open(path)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, f.Close()) }()
+	f := openEFL(t, path)
 	f.SetReadLimit(64) // 28 elements need 224 bytes as float64.
 
-	_, err = findDataset(f, "/DS1").Read()
+	_, err := findDataset(f, "/DS1").Read()
 	require.ErrorIs(t, err, utils.ErrLimit)
 	require.True(t, strings.Contains(err.Error(), "read limit"), err.Error())
 }
