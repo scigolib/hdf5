@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
 
 	"github.com/scigolib/hdf5/internal/core"
 	"github.com/scigolib/hdf5/internal/utils"
@@ -21,6 +22,7 @@ type File struct {
 	root           *Group
 	visitedBTrees  map[uint64]bool // Track visited B-tree addresses to prevent cycles
 	loadingObjects map[uint64]bool // Objects currently on the load path, to break cycles
+	readLimit      atomic.Uint64   // Bytes a chunked read may allocate; 0 = utils.DefaultReadLimit (read_limit.go).
 }
 
 // Open opens an HDF5 file for reading and returns a File handle.

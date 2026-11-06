@@ -224,6 +224,8 @@ func TestLoadObject_DatasetAddress(t *testing.T) {
 
 // TestNamedDatatype_BadCompound opens the reference file bad_compound.h5
 // which contains a committed (named) datatype and verifies the accessors.
+// The type is a compound with zero members, which the decoder rejects as C
+// does (H5Odtype.c:358-360), so Datatype() is nil (TestBadCompound_MirrorsC).
 func TestNamedDatatype_BadCompound(t *testing.T) {
 	f, err := Open("testdata/reference/bad_compound.h5")
 	require.NoError(t, err)
@@ -241,9 +243,9 @@ func TestNamedDatatype_BadCompound(t *testing.T) {
 	assert.NotEmpty(t, namedDT.Name(), "NamedDatatype.Name() should not be empty")
 	assert.Equal(t, "cmpnd", namedDT.Name(), "named datatype should be called 'cmpnd'")
 
-	// Verify Datatype() accessor
+	// Verify Datatype() accessor: the zero-member compound does not decode.
 	dt := namedDT.Datatype()
-	assert.NotNil(t, dt, "NamedDatatype.Datatype() should not be nil")
+	assert.Nil(t, dt, "NamedDatatype.Datatype() of an undecodable type should be nil")
 }
 
 // TestNamedDatatype_ScanAllReferenceFiles walks every reference file looking
@@ -259,6 +261,10 @@ func TestNamedDatatype_ScanAllReferenceFiles(t *testing.T) {
 	foundAny := false
 	for _, path := range files {
 		f, err := Open(path)
+		if path == "testdata/reference/bad_compound.h5" {
+			// An undecodable committed datatype must not fail Open (C opens it).
+			require.NoError(t, err, "bad_compound.h5 must open")
+		}
 		if err != nil {
 			continue
 		}

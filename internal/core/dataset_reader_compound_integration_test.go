@@ -344,18 +344,15 @@ func TestParseCompoundData_DataTruncation(t *testing.T) {
 
 // Helper functions
 
-// buildSimpleCompoundDatatypeMessage creates a basic compound datatype message.
-// This is a simplified version - real compound types have member definitions.
+// buildSimpleCompoundDatatypeMessage creates a basic 12-byte compound
+// datatype message {int32 a; float64 b}, encoded by the datatype codec. (A
+// compound without members, as it was, is rejected by the C decoder,
+// H5Odtype.c:358-360.)
 func buildSimpleCompoundDatatypeMessage() []byte {
-	// Compound datatype (version 1):
-	// Byte 0-3: class (6 = compound) | version << 4
-	// Byte 4-7: size (e.g., 12 bytes)
-	// Note: Real compound type includes member definitions, but we skip for error testing
-	data := make([]byte, 8)
-	classAndVersion := uint32(DatatypeCompound) | (1 << 4)
-	binary.LittleEndian.PutUint32(data[0:4], classAndVersion)
-	binary.LittleEndian.PutUint32(data[4:8], 12) // Compound size
-	return data
+	return fixtureCompoundBytes(12, []testCompoundMember{
+		{name: "a", offset: 0, dtClass: DatatypeFixed, dtSize: 4},
+		{name: "b", offset: 4, dtClass: DatatypeFloat, dtSize: 8},
+	})
 }
 
 // TestCompoundValue_MapStructure tests CompoundValue as map.

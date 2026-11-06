@@ -61,7 +61,13 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 	version := data[offset]
 	offset++
 
-	// Flags (reserved).
+	// Flags: bit 0 marks a shared (committed) datatype, H5O_ATTR_FLAG_TYPE_SHARED
+	// (H5Oattr.c:88, decoded at H5Oattr.c:219). Its datatype field is then a
+	// shared-message reference: valid HDF5 the library does not resolve yet,
+	// so it is reported as such, not as corruption.
+	if data[offset]&attrFlagTypeShared != 0 {
+		return nil, fmt.Errorf("attribute datatype: %w", errSharedDatatype)
+	}
 	offset++
 
 	// Name size (2 bytes).
@@ -538,6 +544,11 @@ func readDenseAttributes(r io.ReaderAt, attrInfo *AttributeInfoMessage, sb *Supe
 
 		// Parse as attribute message (version 3 for dense attributes)
 		attr, err := ParseAttributeMessage(objectData, sb.Endianness)
+		if IsSharedDatatype(err) {
+			// A committed-type attribute is valid HDF5 the library cannot
+			// read yet: skip it as the compact path does, keep the others.
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse attribute %d: %w", i, err)
 		}

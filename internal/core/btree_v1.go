@@ -5,12 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // BTreeV1Node represents a B-tree version 1 node.
 // Used for indexing chunked dataset storage.
 // Reference: H5Bpkg.h, H5Dbtree.c.
 type BTreeV1Node struct {
+	Address      uint64  // File address of this node.
 	Signature    [4]byte // Should be "TREE".
 	NodeType     uint8   // Type of B-tree node.
 	NodeLevel    uint8   // Level of node (0 = leaf).
@@ -47,7 +51,7 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 		return nil, fmt.Errorf("failed to read B-tree node header: %w", err)
 	}
 
-	node := &BTreeV1Node{}
+	node := &BTreeV1Node{Address: address}
 	offset := 0
 
 	// Signature (4 bytes) - should be "TREE".
@@ -59,6 +63,12 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 
 	// Node type (1 byte) - for chunk B-tree, type = 1.
 	node.NodeType = header[offset]
+	// Only raw-data chunk B-trees (type 1) are parsed here; the cache rejects
+	// any other type for this index (H5Bcache.c:169-170).
+	if node.NodeType != btreeTypeChunk {
+		return nil, fmt.Errorf("%w: B-tree node at 0x%X has type %d, want %d (chunk index)",
+			utils.ErrCorrupt, address, node.NodeType, btreeTypeChunk)
+	}
 	offset++
 
 	// Node level (1 byte) - 0 = leaf node.
@@ -134,18 +144,10 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 		dataOffset += 4
 
 		// Read coordinates (ndims * 8 bytes each) as byte offsets.
-		// Then convert to scaled indices by dividing by chunk dimension.
-		for j := 0; j < ndims; j++ {
-			byteOffset := binary.LittleEndian.Uint64(data[dataOffset : dataOffset+8])
-			dataOffset += 8
-
-			// Convert byte offset to scaled index.
-			// From H5D__btree_decode_key: scaled[u] = tmp_offset / layout->dim[u].
-			if chunkDims[j] == 0 {
-				return nil, fmt.Errorf("chunk dimension %d is zero", j)
-			}
-			key.Scaled[j] = byteOffset / chunkDims[j]
+		if err := decodeChunkKeyCoords(data[dataOffset:dataOffset+ndims*8], address, chunkDims, key.Scaled); err != nil {
+			return nil, err
 		}
+		dataOffset += ndims * 8
 
 		node.Keys[i] = key
 
@@ -160,6 +162,27 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 	}
 
 	return node, nil
+}
+
+// decodeChunkKeyCoords converts the byte-offset coordinates of one chunk key
+// (8 bytes each in raw) to scaled chunk indices, as H5D__btree_decode_key does
+// (scaled[u] = offset / dim[u]), refusing an offset that is not on a chunk
+// boundary (H5Dbtree.c:646).
+func decodeChunkKeyCoords(raw []byte, address uint64, chunkDims, scaled []uint64) error {
+	for j := range scaled {
+		byteOffset := binary.LittleEndian.Uint64(raw[j*8:])
+
+		if chunkDims[j] == 0 {
+			return fmt.Errorf("chunk dimension %d is zero", j)
+		}
+		if byteOffset%chunkDims[j] != 0 {
+			return fmt.Errorf("%w: B-tree node at 0x%X: bad coordinate offset %d for chunk dimension %d of %d",
+				utils.ErrCorrupt, address, byteOffset, j, chunkDims[j])
+		}
+		scaled[j] = byteOffset / chunkDims[j]
+	}
+
+	return nil
 }
 
 // FindChunk searches B-tree for chunk at given scaled coordinates.
@@ -177,8 +200,14 @@ func (node *BTreeV1Node) FindChunk(r io.ReaderAt, coords []uint64, offsetSize ui
 		childIndex = i + 1
 	}
 
-	if childIndex > int(node.EntriesUsed) {
-		childIndex = int(node.EntriesUsed)
+	// childIndex reaches EntriesUsed for coordinates past the last key, one
+	// beyond the last child: clamp it so such a coordinate cannot index past
+	// Children (it used to panic).
+	if node.EntriesUsed == 0 {
+		return 0, fmt.Errorf("%w: chunk B-tree node at 0x%X has no entries", utils.ErrCorrupt, node.Address)
+	}
+	if childIndex >= int(node.EntriesUsed) {
+		childIndex = int(node.EntriesUsed) - 1
 	}
 
 	childAddr := node.Children[childIndex]
@@ -192,6 +221,14 @@ func (node *BTreeV1Node) FindChunk(r io.ReaderAt, coords []uint64, offsetSize ui
 	childNode, err := ParseBTreeV1Node(r, childAddr, offsetSize, ndims, chunkDims)
 	if err != nil {
 		return 0, err
+	}
+
+	// The child must be one level below (H5Bcache.c:173-176, exp_level from
+	// H5B.c:1146): levels then strictly decrease and a node pointing back up
+	// cannot recurse forever.
+	if childNode.NodeLevel != node.NodeLevel-1 {
+		return 0, fmt.Errorf("%w: chunk B-tree node at 0x%X has level %d, its parent 0x%X has level %d",
+			utils.ErrCorrupt, childAddr, childNode.NodeLevel, node.Address, node.NodeLevel)
 	}
 
 	return childNode.FindChunk(r, coords, offsetSize, chunkDims)
@@ -249,42 +286,93 @@ type ChunkEntry struct {
 	Address uint64   // Address of chunk data.
 }
 
-// CollectAllChunks recursively collects all chunks from B-tree.
-// This handles both leaf and non-leaf nodes.
-func (node *BTreeV1Node) CollectAllChunks(r io.ReaderAt, offsetSize uint8, chunkDims []uint64) ([]ChunkEntry, error) {
-	ndims := len(chunkDims)
-	var chunks []ChunkEntry
+// btreeTypeChunk is the node type of a raw-data chunk B-tree (H5B_CHUNK_ID).
+const btreeTypeChunk = 1
 
-	// If this is a leaf node (level 0), children point to actual chunks.
-	if node.NodeLevel == 0 {
-		for i := 0; i < int(node.EntriesUsed); i++ {
-			chunks = append(chunks, ChunkEntry{
-				Key:     node.Keys[i],
-				Address: node.Children[i],
-			})
-		}
-		return chunks, nil
+// CollectAllChunks collects all chunk entries of the B-tree rooted at node,
+// with the structural checks of collectChunks and no limit on the entry count
+// beyond what the file holds. Dataset readers use
+// DatasetDescriptor.CollectChunks, which also bounds the count by the chunk
+// grid and checks every key against it.
+func (node *BTreeV1Node) CollectAllChunks(r io.ReaderAt, offsetSize uint8, chunkDims []uint64) ([]ChunkEntry, error) {
+	return node.collectChunks(r, offsetSize, chunkDims, math.MaxUint64)
+}
+
+// collectChunks walks the B-tree rooted at node and returns its leaf entries.
+//
+// The node graph comes from the file, so the walk mirrors the checks the C
+// library makes while loading nodes (review finding H1):
+//   - a child must be one level below its parent: H5B__iterate_helper passes
+//     bt->level-1 as the expected level (H5B.c:1146) and the cache rejects a
+//     node whose level differs (H5Bcache.c:173-176). Levels strictly decrease,
+//     so the walk ends after at most 256 levels;
+//   - a node may be visited once: a valid B-tree is a tree, while a child
+//     pointing back up, or many entries pointing to one subtree, would loop or
+//     multiply the work beyond the size of the file;
+//   - the number of leaf entries may not exceed maxEntries, which the caller
+//     derives from the chunk grid (each chunk has one entry).
+//
+// Every violation wraps utils.ErrCorrupt.
+func (node *BTreeV1Node) collectChunks(r io.ReaderAt, offsetSize uint8, chunkDims []uint64, maxEntries uint64) ([]ChunkEntry, error) {
+	w := &chunkWalk{
+		r:          r,
+		offsetSize: offsetSize,
+		chunkDims:  chunkDims,
+		maxEntries: maxEntries,
+		visited:    map[uint64]bool{node.Address: true},
 	}
 
-	// Non-leaf node: children point to other B-tree nodes.
-	// Recursively collect chunks from all child nodes.
+	if err := w.walk(node); err != nil {
+		return nil, err
+	}
+
+	return w.chunks, nil
+}
+
+// chunkWalk is the state of one B-tree walk.
+type chunkWalk struct {
+	r          io.ReaderAt
+	offsetSize uint8
+	chunkDims  []uint64
+	maxEntries uint64
+	visited    map[uint64]bool
+	chunks     []ChunkEntry
+}
+
+func (w *chunkWalk) walk(node *BTreeV1Node) error {
+	if node.NodeLevel == 0 {
+		if uint64(len(w.chunks))+uint64(node.EntriesUsed) > w.maxEntries {
+			return fmt.Errorf("%w: chunk B-tree has more than %d entries, the most its chunk grid allows",
+				utils.ErrCorrupt, w.maxEntries)
+		}
+		for i := 0; i < int(node.EntriesUsed); i++ {
+			w.chunks = append(w.chunks, ChunkEntry{Key: node.Keys[i], Address: node.Children[i]})
+		}
+		return nil
+	}
+
 	for i := 0; i < int(node.EntriesUsed); i++ {
 		childAddr := node.Children[i]
+		if w.visited[childAddr] {
+			return fmt.Errorf("%w: chunk B-tree node at 0x%X is reached twice (from node 0x%X)",
+				utils.ErrCorrupt, childAddr, node.Address)
+		}
+		w.visited[childAddr] = true
 
-		// Parse child node.
-		childNode, err := ParseBTreeV1Node(r, childAddr, offsetSize, ndims, chunkDims)
+		child, err := ParseBTreeV1Node(w.r, childAddr, w.offsetSize, len(w.chunkDims), w.chunkDims)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse child node at 0x%x: %w", childAddr, err)
+			return fmt.Errorf("failed to parse child node at 0x%x: %w", childAddr, err)
 		}
 
-		// Recursively collect chunks from child.
-		childChunks, err := childNode.CollectAllChunks(r, offsetSize, chunkDims)
-		if err != nil {
-			return nil, fmt.Errorf("failed to collect chunks from child at 0x%x: %w", childAddr, err)
+		if child.NodeLevel != node.NodeLevel-1 {
+			return fmt.Errorf("%w: chunk B-tree node at 0x%X has level %d, its parent 0x%X has level %d",
+				utils.ErrCorrupt, childAddr, child.NodeLevel, node.Address, node.NodeLevel)
 		}
 
-		chunks = append(chunks, childChunks...)
+		if err := w.walk(child); err != nil {
+			return err
+		}
 	}
 
-	return chunks, nil
+	return nil
 }

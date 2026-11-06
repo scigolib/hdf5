@@ -25,139 +25,103 @@ const (
 	DatatypeComplex   DatatypeClass = 11 // Complex (HDF5 2.0+).
 )
 
-// DatatypeMessage represents HDF5 datatype message.
+// DatatypeMessage represents an HDF5 datatype message (format spec IV.A.2.d),
+// the file form of the C library's H5T_t.
+//
+// Class, Version, Size and ClassBitField are the message header. Properties
+// holds exactly the class-specific property bytes that follow the header in
+// the file, nested datatypes included; [DecodeDatatype] sets it to the bytes
+// it consumed, never to "the rest of the buffer".
+//
+// The fields after Properties are the decoded properties of the class (the
+// union in H5T_shared_t). [DecodeDatatype] fills the ones of the message's
+// class, and [EncodeDatatypeMessage] writes the message from them, never from
+// Properties. Build new datatypes with the constructors in datatype_codec.go
+// (NewFixedPointDatatype, NewCompoundDatatype, ...), which return messages
+// in exactly the form the decoder produces.
 type DatatypeMessage struct {
 	Class         DatatypeClass
 	Version       uint8
 	Size          uint32
 	ClassBitField uint32
 	Properties    []byte
+
+	// BitOffset and Precision locate the significant bits of a fixed-point,
+	// floating-point or bitfield value (H5T_atomic_t offset, prec); Precision
+	// is also the time precision. Zero Precision means "Size*8 bits at offset
+	// 0" to the encoder, as zero is never a valid stored precision.
+	BitOffset uint16
+	Precision uint16
+
+	// Floating-point layout (H5T_atomic_t.u.f): bit positions and sizes of
+	// exponent and mantissa, and the exponent bias. The sign bit position and
+	// normalization live in ClassBitField (bits 8-15 and 4-5). When both sizes
+	// are zero the encoder writes the IEEE 754 layout for Size 2, 4 or 8.
+	ExponentLocation uint8
+	ExponentSize     uint8
+	MantissaLocation uint8
+	MantissaSize     uint8
+	ExponentBias     uint32
+
+	// OpaqueTag is the ASCII tag of an opaque datatype.
+	OpaqueTag string
+
+	// Members are the fields of a compound datatype, in file order.
+	Members []CompoundMember
+
+	// EnumNames and EnumValues are the members of an enumeration: the names
+	// in order and their values packed in the base type's representation,
+	// len(EnumNames)*Base.Size bytes.
+	EnumNames  []string
+	EnumValues []byte
+
+	// ArrayDims are the dimensions of an array datatype.
+	ArrayDims []uint32
+
+	// Base is the parent datatype of an enumeration, variable-length
+	// sequence or string, array or complex number.
+	Base *DatatypeMessage
 }
 
-// calculateCompoundPropsLen calculates the exact length of compound datatype properties.
-// This is needed for inline parsing of nested compounds, where we can't just take "all remaining".
-//
-// Algorithm:
-//  1. Read member count (4 bytes for v3, 2 bytes embedded in header for v1)
-//  2. For each member:
-//     - Skip name (null-terminated, padded to 8-byte boundary for v1)
-//     - Skip offset field (4 bytes)
-//     - Skip array info (28 bytes for v1, not present in v3)
-//     - Recursively calculate member datatype size
-//  3. Return total properties length
-func calculateCompoundPropsLen(properties []byte, version uint8) (int, error) {
-	// Version 1 or 2: member count is embedded in ClassBitField (not in properties)
-	// This is complex, so for now return error to use fallback
-	if version != 3 {
-		return 0, errors.New("compound v1/v2 inline size calculation not yet implemented")
-	}
-
-	// Version 3: member count is first 4 bytes
-	if len(properties) < 4 {
-		return 0, errors.New("compound v3 properties too short for member count")
-	}
-	numMembers := binary.LittleEndian.Uint32(properties[0:4])
-	offset := 4
-
-	for i := uint32(0); i < numMembers; i++ {
-		// Skip member name (null-terminated, NOT padded in v3)
-		nameEnd := offset
-		for nameEnd < len(properties) && properties[nameEnd] != 0 {
-			nameEnd++
-		}
-		if nameEnd >= len(properties) {
-			return 0, fmt.Errorf("member %d: name not null-terminated", i)
-		}
-		offset = nameEnd + 1 // Skip past null terminator
-
-		// Skip member offset field (4 bytes)
-		if offset+4 > len(properties) {
-			return 0, fmt.Errorf("member %d: offset field truncated", i)
-		}
-		offset += 4
-
-		// Parse member datatype to calculate its size
-		if offset+8 > len(properties) {
-			return 0, fmt.Errorf("member %d: datatype header truncated", i)
-		}
-
-		// Recursively calculate member datatype size
-		memberDt, err := ParseDatatypeMessage(properties[offset:])
-		if err != nil {
-			return 0, fmt.Errorf("member %d: failed to parse datatype: %w", i, err)
-		}
-		memberDtSize := 8 + len(memberDt.Properties)
-		offset += memberDtSize
-	}
-
-	return offset, nil
-}
-
-// ParseDatatypeMessage parses a datatype message from header message data.
+// ParseDatatypeMessage decodes the datatype message at the start of data.
+// Bytes after the message are ignored, as H5O__dtype_decode does with the
+// remainder of an object header message. Errors on invalid bytes wrap
+// utils.ErrCorrupt.
 func ParseDatatypeMessage(data []byte) (*DatatypeMessage, error) {
-	if len(data) < 8 {
-		return nil, errors.New("datatype message too short")
+	dt, _, err := DecodeDatatype(data)
+	if err != nil {
+		return nil, err
 	}
+	return dt, nil
+}
 
-	// Bytes 0-3: Class and Version packed.
-	classAndVersion := binary.LittleEndian.Uint32(data[0:4])
+// MsgFlagShared is the "shared" object header message flag,
+// H5O_MSG_FLAG_SHARED (H5Oprivate.h:74): the message body is a reference to
+// a shared message (a committed datatype, H5Oshared.h), not the message.
+const MsgFlagShared uint8 = 0x02
 
-	class := DatatypeClass(classAndVersion & 0x0F)
-	version := uint8((classAndVersion >> 4) & 0x0F)
-	classBitField := (classAndVersion >> 8) & 0x00FFFFFF
+// attrFlagTypeShared is H5O_ATTR_FLAG_TYPE_SHARED (H5Oattr.c:88): the
+// attribute message flag that marks its datatype as shared.
+const attrFlagTypeShared = 0x01
 
-	// Bytes 4-7: Size.
-	size := binary.LittleEndian.Uint32(data[4:8])
+// errSharedDatatype reports a datatype message that refers to a committed
+// datatype. Such files are valid HDF5; the library does not resolve the
+// reference yet, so this is deliberately not utils.ErrCorrupt.
+var errSharedDatatype = errors.New("committed (shared) datatype not supported yet")
 
-	// Calculate property size based on class
-	// This is needed for inline parsing (e.g., compound members)
-	var propsLen int
-	switch class {
-	case DatatypeFixed: // Integer
-		propsLen = 4 // bit offset + precision
-	case DatatypeFloat:
-		propsLen = 12 // full IEEE 754 info
-	case DatatypeBitfield:
-		propsLen = 4
-	case DatatypeTime:
-		propsLen = 2
-	case DatatypeString:
-		// String properties are variable, but typically minimal
-		// For now, take all remaining (safe for top-level parsing)
-		propsLen = len(data) - 8
-	case DatatypeCompound:
-		// Compound types: properties are variable length and self-describing
-		// For inline parsing (nested compounds), we must calculate the exact size
-		// by walking through the member definitions
-		calculatedLen, err := calculateCompoundPropsLen(data[8:], version)
-		if err != nil {
-			// Fallback: take all remaining (for backward compatibility)
-			propsLen = len(data) - 8
-		} else {
-			propsLen = calculatedLen
-		}
-	case DatatypeArray, DatatypeEnum, DatatypeReference, DatatypeOpaque, DatatypeVarLen:
-		// Complex types: properties are variable length
-		// For inline parsing, take all remaining
-		propsLen = len(data) - 8
-	default:
-		// Unknown type: take all remaining
-		propsLen = len(data) - 8
+// ParseDatatypeHeaderMessage decodes the datatype message msg of an object
+// header. A shared message (a committed datatype) is reported with an error
+// that does not wrap utils.ErrCorrupt; every other message decodes as with
+// ParseDatatypeMessage.
+func ParseDatatypeHeaderMessage(msg *HeaderMessage) (*DatatypeMessage, error) {
+	if msg.Flags&MsgFlagShared != 0 {
+		return nil, fmt.Errorf("datatype message at 0x%x: %w", msg.Offset, errSharedDatatype)
 	}
-
-	// Ensure we don't read past end of data
-	if 8+propsLen > len(data) {
-		propsLen = len(data) - 8
+	dt, err := ParseDatatypeMessage(msg.Data)
+	if err != nil {
+		return nil, fmt.Errorf("datatype message at 0x%x: %w", msg.Offset, err)
 	}
-
-	//nolint:gosec // G602: bounds checked above (8+propsLen <= len(data))
-	return &DatatypeMessage{
-		Class:         class,
-		Version:       version,
-		Size:          size,
-		ClassBitField: classBitField,
-		Properties:    data[8 : 8+propsLen],
-	}, nil
+	return dt, nil
 }
 
 // IsFloat64 checks if datatype is IEEE 754 double precision (64-bit).
@@ -265,38 +229,26 @@ func (dt *DatatypeMessage) GetByteOrder() binary.ByteOrder {
 	return binary.BigEndian
 }
 
-// GetEncodedSize returns the total size of this datatype message when encoded.
-// This includes the 8-byte header plus properties.
-// Property sizes from HDF5 spec (H5Odtype.c:1630):
-// - Integer: 4 bytes (offset + precision).
-// - Float: 12 bytes (byte order, padding, mantissa, exponent info).
-// - Bitfield: 4 bytes (offset + precision).
-// - Time: 2 bytes.
-// - String: variable (character set + padding type).
-// - Compound: variable (member definitions).
+// GetEncodedSize returns the size of this datatype message in the file: the
+// 8-byte header plus the property bytes. The fixed property sizes are those of
+// H5O__dtype_size (H5Odtype.c:1636-1655); for every other class the size is
+// that of Properties (empty for decoded strings and references,
+// H5Odtype.c:1732-1738).
 func (dt *DatatypeMessage) GetEncodedSize() int {
 	switch dt.Class {
-	case DatatypeFixed: // Integer.
-		// 8-byte header + 4 bytes properties (bit offset + precision).
-		return 12
+	case DatatypeFixed, DatatypeBitfield:
+		return datatypeHeaderSize + 4
 	case DatatypeFloat:
-		// 8-byte header + 12 bytes properties (byte orders, padding, exponents, etc).
-		return 20
-	case DatatypeBitfield:
-		// 8-byte header + 4 bytes properties (bit offset + precision).
-		return 12
+		return datatypeHeaderSize + 12
 	case DatatypeTime:
-		// 8-byte header + 2 bytes properties.
-		return 10
-	case DatatypeString:
-		// String properties are minimal, usually just 8-byte header.
-		// but can have padding/charset info.
-		return 8 + len(dt.Properties)
-	case DatatypeCompound:
-		// Compound types: 8-byte header + all member definitions.
-		return 8 + len(dt.Properties)
+		return datatypeHeaderSize + 2
 	default:
-		// For other types, use actual properties length.
-		return 8 + len(dt.Properties)
+		return datatypeHeaderSize + len(dt.Properties)
 	}
+}
+
+// IsSharedDatatype reports whether err says that a datatype is a committed
+// (shared) datatype, which the library cannot resolve yet.
+func IsSharedDatatype(err error) bool {
+	return errors.Is(err, errSharedDatatype)
 }

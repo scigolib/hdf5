@@ -118,8 +118,9 @@ func TestParseAttributeMessage_Basic(t *testing.T) {
 
 	// Calculate exact size needed for V1 format with 8-byte alignment:
 	// 1 (version) + 1 (flags) + 2 (name size) + 2 (datatype size) + 2 (dataspace size)
-	// + 8 (name "test\0" aligned to 8) + 8 (datatype) + 8 (dataspace) + 4 (data)
-	// = 36 bytes minimum
+	// + 8 (name "test\0" aligned to 8) + 16 (int32 datatype, 12 aligned to 8)
+	// + 8 (dataspace) + 4 (data) = 44 bytes minimum
+	dtBytes := testInt32DatatypeBytes(t)
 	data := make([]byte, 64) // Use larger buffer to be safe
 	offset := 0
 
@@ -136,7 +137,7 @@ func TestParseAttributeMessage_Basic(t *testing.T) {
 	offset += 2
 
 	// Datatype size
-	binary.LittleEndian.PutUint16(data[offset:offset+2], 8) // 8 bytes for int32 datatype
+	binary.LittleEndian.PutUint16(data[offset:offset+2], uint16(len(dtBytes))) // 12 bytes for int32 datatype
 	offset += 2
 
 	// Dataspace size
@@ -147,11 +148,9 @@ func TestParseAttributeMessage_Basic(t *testing.T) {
 	copy(data[offset:], "test\x00\x00\x00\x00") // 5 bytes + 3 padding = 8
 	offset += 8                                 // V1 alignment: (5 + 7) & ~7 = 8
 
-	// Datatype message (simplified - int32)
-	data[offset] = 0                                          // Class: fixed-point
-	data[offset+1] = 1                                        // Flags
-	binary.LittleEndian.PutUint32(data[offset+4:offset+8], 4) // Size: 4 bytes (FIXED: proper slice bounds)
-	offset += 8
+	// Datatype message (int32), V1 aligns its 12 bytes to 16
+	copy(data[offset:], dtBytes)
+	offset += 16
 
 	// Dataspace message (scalar)
 	data[offset] = 1   // Version
@@ -218,15 +217,16 @@ func TestParseAttributeMessage_EdgeCases(t *testing.T) {
 		{
 			name: "dataspace extends beyond message",
 			data: func() []byte {
-				d := make([]byte, 30)
-				d[0] = 1                                  // version
-				d[1] = 0                                  // flags
-				binary.LittleEndian.PutUint16(d[2:4], 5)  // name size
-				binary.LittleEndian.PutUint16(d[4:6], 8)  // datatype size
-				binary.LittleEndian.PutUint16(d[6:8], 50) // dataspace size too large
+				dt := testInt32DatatypeBytes(t)
+				d := make([]byte, 40)
+				d[0] = 1                                               // version
+				d[1] = 0                                               // flags
+				binary.LittleEndian.PutUint16(d[2:4], 5)               // name size
+				binary.LittleEndian.PutUint16(d[4:6], uint16(len(dt))) // datatype size
+				binary.LittleEndian.PutUint16(d[6:8], 50)              // dataspace size too large
 				copy(d[8:], "test\x00")
-				// Add minimal datatype
-				d[13] = 0 // class
+				// Valid int32 datatype after the 8-byte aligned name
+				copy(d[16:], dt)
 				return d
 			}(),
 			wantErr: true,
@@ -236,21 +236,20 @@ func TestParseAttributeMessage_EdgeCases(t *testing.T) {
 			name: "empty name (nameSize = 0)",
 			data: func() []byte {
 				// Need space for: version(1) + flags(1) + name_size(2) + dt_size(2) + ds_size(2)
-				// + datatype(8) + dataspace(8) = 24 bytes minimum
-				d := make([]byte, 24)
-				d[0] = 1                                 // version
-				d[1] = 0                                 // flags
-				binary.LittleEndian.PutUint16(d[2:4], 0) // name size = 0 (empty name)
-				binary.LittleEndian.PutUint16(d[4:6], 8) // datatype size
-				binary.LittleEndian.PutUint16(d[6:8], 8) // dataspace size
+				// + datatype(12, aligned to 16) + dataspace(8) = 32 bytes minimum
+				dt := testInt32DatatypeBytes(t)
+				d := make([]byte, 32)
+				d[0] = 1                                               // version
+				d[1] = 0                                               // flags
+				binary.LittleEndian.PutUint16(d[2:4], 0)               // name size = 0 (empty name)
+				binary.LittleEndian.PutUint16(d[4:6], uint16(len(dt))) // datatype size
+				binary.LittleEndian.PutUint16(d[6:8], 8)               // dataspace size
 				// No name bytes (size = 0)
 				// Datatype message at offset 8
-				d[8] = 0                                   // class
-				d[9] = 1                                   // flags
-				binary.LittleEndian.PutUint32(d[12:16], 4) // size
-				// Dataspace message at offset 16
-				d[16] = 1 // version
-				d[17] = 0 // dimensionality
+				copy(d[8:], dt)
+				// Dataspace message at offset 24
+				d[24] = 1 // version
+				d[25] = 0 // dimensionality
 				return d
 			}(),
 			wantErr: false, // Empty name is allowed
@@ -293,7 +292,8 @@ func TestParseAttributeMessage_Version3(t *testing.T) {
 	offset += 2
 
 	// Datatype size
-	binary.LittleEndian.PutUint16(data[offset:offset+2], 8)
+	dtBytes := testInt32DatatypeBytes(t)
+	binary.LittleEndian.PutUint16(data[offset:offset+2], uint16(len(dtBytes)))
 	offset += 2
 
 	// Dataspace size
@@ -308,11 +308,9 @@ func TestParseAttributeMessage_Version3(t *testing.T) {
 	copy(data[offset:], "test\x00")
 	offset += 5
 
-	// Datatype message
-	data[offset] = 0
-	data[offset+1] = 1
-	binary.LittleEndian.PutUint32(data[offset+4:offset+8], 4)
-	offset += 8
+	// Datatype message (int32, no alignment in V3)
+	copy(data[offset:], dtBytes)
+	offset += len(dtBytes)
 
 	// Dataspace message (scalar)
 	data[offset] = 1
@@ -827,4 +825,17 @@ func TestAttributeReadValue_VariableLengthString(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "variable-length non-string types not yet supported")
 	})
+}
+
+// testInt32DatatypeBytes returns an int32 datatype message as the codec (and
+// the C library) encodes it. The attribute fixtures above used an 8-byte
+// header without the 4 property bytes and with version 0, which the C
+// decoder rejects (H5Odtype.c:151, :175-176).
+func testInt32DatatypeBytes(t *testing.T) []byte {
+	t.Helper()
+	dt, err := NewIntegerDatatype(4, true)
+	require.NoError(t, err)
+	b, err := EncodeDatatypeMessage(dt)
+	require.NoError(t, err)
+	return b
 }

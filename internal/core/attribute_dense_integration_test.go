@@ -1278,10 +1278,10 @@ func buildV3AttrMessage(t *testing.T, name string, value int32) []byte {
 
 	nameBytes := append([]byte(name), 0) // null-terminated
 
-	// Datatype: int32 (class 0, size 4)
-	dtBytes := make([]byte, 8)
-	dtBytes[0] = 0x30 // class=0 (fixed), version=3
-	binary.LittleEndian.PutUint32(dtBytes[4:8], 4)
+	// Datatype: int32 as the codec (and the C library) encodes it; the
+	// 8-byte header without bit offset and precision that stood here is
+	// rejected by the C decoder (H5Odtype.c:175-176).
+	dtBytes := testInt32DatatypeBytes(t)
 
 	// Dataspace: scalar (version 1, dimensionality 0)
 	dsBytes := make([]byte, 8)

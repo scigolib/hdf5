@@ -64,97 +64,46 @@ func (d *Dataset) ChunkIterator() (*ChunkIterator, error) {
 //	    // Process chunk...
 //	}
 func (d *Dataset) ChunkIteratorWithContext(ctx context.Context) (*ChunkIterator, error) {
-	// Read object header to get layout info.
-	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
+	desc, err := d.descriptor()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read object header: %w", err)
+		return nil, err
 	}
 
-	// Extract required messages.
-	var layoutMsg, dataspaceMsg *core.HeaderMessage
-	for _, msg := range header.Messages {
-		switch msg.Type {
-		case core.MsgDataLayout:
-			layoutMsg = msg
-		case core.MsgDataspace:
-			dataspaceMsg = msg
-		}
-	}
-
-	if layoutMsg == nil {
-		return nil, errors.New("data layout message not found")
-	}
-	if dataspaceMsg == nil {
-		return nil, errors.New("dataspace message not found")
-	}
-
-	// Parse layout.
-	layout, err := core.ParseDataLayoutMessage(layoutMsg.Data, d.file.sb)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse layout: %w", err)
-	}
-
-	// Validate layout is chunked.
-	if !layout.IsChunked() {
+	if desc.Layout().Class != core.LayoutChunked {
 		return nil, errors.New("ChunkIterator only supports chunked datasets; use Read() or ReadSlice() for compact/contiguous datasets")
 	}
 
-	// Parse dataspace.
-	dataspace, err := core.ParseDataspaceMessage(dataspaceMsg.Data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse dataspace: %w", err)
-	}
-
 	// Get chunk coordinates from B-tree.
-	chunkCoords, err := d.collectChunkCoordinates(layout, dataspace)
+	chunkCoords, err := d.collectChunkCoordinates(desc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to collect chunk coordinates: %w", err)
 	}
 
-	// Trim chunk dimensions to match dataset dimensions.
-	// Layout may store ndims+1 dimensions (extra dimension for datatype size,
-	// per H5Dchunk.c:909-913). We only expose the actual data dimensions.
-	actualChunkDims := layout.ChunkSize
-	if len(actualChunkDims) > len(dataspace.Dimensions) {
-		actualChunkDims = actualChunkDims[:len(dataspace.Dimensions)]
-	}
-
+	// The layout stores rank+1 dimensions, the last being the element size
+	// (H5Dchunk.c:909-913); ChunkDims exposes only the data dimensions.
 	return &ChunkIterator{
 		dataset:     d,
 		chunkCoords: chunkCoords,
-		chunkDims:   actualChunkDims,
-		datasetDims: dataspace.Dimensions,
+		chunkDims:   desc.ChunkDims(),
+		datasetDims: desc.Dims(),
 		current:     0,
 		ctx:         ctx,
 	}, nil
 }
 
-// collectChunkCoordinates retrieves all chunk coordinates from the B-tree.
-func (d *Dataset) collectChunkCoordinates(layout *core.DataLayoutMessage, dataspace *core.DataspaceMessage) ([][]uint64, error) {
-	// Parse B-tree to get all chunks.
-	btreeNode, err := core.ParseBTreeV1Node(
-		d.file.reader,
-		layout.DataAddress,
-		d.file.sb.OffsetSize,
-		len(layout.ChunkSize),
-		layout.ChunkSize,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse chunk B-tree: %w", err)
-	}
-
-	allChunks, err := btreeNode.CollectAllChunks(d.file.reader, d.file.sb.OffsetSize, layout.ChunkSize)
+// collectChunkCoordinates retrieves all chunk coordinates from the B-tree,
+// through the validated, bounded walk (DatasetDescriptor.CollectChunks).
+func (d *Dataset) collectChunkCoordinates(desc *core.DatasetDescriptor) ([][]uint64, error) {
+	allChunks, err := desc.CollectChunks(d.file.reader, d.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to collect chunks: %w", err)
 	}
 
 	// Extract coordinates.
-	ndims := len(dataspace.Dimensions)
+	ndims := len(desc.Dims())
 	coords := make([][]uint64, 0, len(allChunks))
 	for _, chunk := range allChunks {
-		coord := make([]uint64, ndims)
-		copy(coord, chunk.Key.Scaled[:ndims])
-		coords = append(coords, coord)
+		coords = append(coords, append([]uint64(nil), chunk.Key.Scaled[:ndims]...))
 	}
 
 	return coords, nil

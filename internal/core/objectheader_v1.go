@@ -220,7 +220,7 @@ func parseV1MessagesInBlock(r io.ReaderAt, start, end uint64, maxMessages uint16
 
 		msgType := MessageType(sb.Endianness.Uint16(msgHeaderBuf[0:2]))
 		msgSize := sb.Endianness.Uint16(msgHeaderBuf[2:4])
-		// msgFlags := msgHeaderBuf[4]  // Unused for now.
+		msgFlags := msgHeaderBuf[4] // H5Ocache.c:1277-1279
 		utils.ReleaseBuffer(msgHeaderBuf)
 
 		if msgSize == 0 {
@@ -262,6 +262,7 @@ func parseV1MessagesInBlock(r io.ReaderAt, start, end uint64, maxMessages uint16
 			Type:   msgType,
 			Offset: current,
 			Data:   data,
+			Flags:  msgFlags,
 		})
 
 		// Messages are 8-byte aligned in v1.

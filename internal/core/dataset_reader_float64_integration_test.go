@@ -199,14 +199,9 @@ func TestReadDatasetFloat64_EmptyDataset(t *testing.T) {
 
 // buildFloat64DatatypeMessage creates a float64 datatype message.
 func buildFloat64DatatypeMessage() []byte {
-	// Datatype message format (version 1):
-	// Byte 0-3: class | version << 4 | class bit field
-	// Byte 4-7: size
-	data := make([]byte, 8)
-	classAndVersion := uint32(DatatypeFloat) | (1 << 4) // Version 1
-	binary.LittleEndian.PutUint32(data[0:4], classAndVersion)
-	binary.LittleEndian.PutUint32(data[4:8], 8) // 8 bytes for float64
-	return data
+	// H5T_IEEE_F64LE as the codec (and the C library) encodes it; a bare
+	// 8-byte header without the 12 property bytes is rejected (H5Odtype.c:226).
+	return fixtureDatatypeBytes(DatatypeFloat, 8)
 }
 
 // buildSimpleDataspaceMessage creates a simple dataspace message.
@@ -230,8 +225,6 @@ func buildSimpleDataspaceMessage(dims []uint64) []byte {
 }
 
 // buildContiguousLayoutMessage creates a contiguous layout message.
-//
-//nolint:unparam // address parameter is intentionally flexible for test helpers
 func buildContiguousLayoutMessage(address, size uint64) []byte {
 	// Layout message format (version 3):
 	// Byte 0: version

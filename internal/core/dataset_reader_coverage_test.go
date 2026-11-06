@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/scigolib/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -138,12 +139,12 @@ func TestReadChunkedData_Synthetic(t *testing.T) {
 		Endianness: binary.LittleEndian,
 	}
 
-	// Call readChunkedData.
-	rawData, err := readChunkedData(
-		bytes.NewReader(buf),
-		layout, dataspace, datatype, sb,
-		nil, // No filter pipeline
-	)
+	// Call readChunkedData through a validated descriptor (no filter pipeline).
+	r := bytes.NewReader(buf)
+	desc, err := newDatasetDescriptor(r, sb, datatype, dataspace, layout, nil)
+	require.NoError(t, err)
+
+	rawData, err := readChunkedData(r, sb, desc, ResultFloat64, utils.DefaultReadLimit)
 	require.NoError(t, err)
 	require.Len(t, rawData, 64, "expected 8 float64 = 64 bytes")
 
@@ -181,10 +182,11 @@ func TestReadChunkedData_ErrorMissingBTree(t *testing.T) {
 	}
 
 	// Small buffer that cannot contain valid B-tree.
-	_, err := readChunkedData(
-		bytes.NewReader(make([]byte, 100)),
-		layout, dataspace, datatype, sb, nil,
-	)
+	r := bytes.NewReader(make([]byte, 100))
+	desc, err := newDatasetDescriptor(r, sb, datatype, dataspace, layout, nil)
+	require.NoError(t, err)
+
+	_, err = readChunkedData(r, sb, desc, ResultFloat64, utils.DefaultReadLimit)
 	require.Error(t, err)
 }
 
@@ -660,10 +662,10 @@ func TestEncodeDatatypeMessage_AllClasses(t *testing.T) {
 			dt: &DatatypeMessage{
 				Class:   DatatypeArray,
 				Size:    16,
-				Version: 1,
+				Version: 3, // a valid array version, so the missing base is what fails
 			},
 			wantErr: true,
-			errMsg:  "EncodeArrayDatatypeMessage",
+			errMsg:  "has no base type", // the C decoder always reads a parent (H5Odtype.c:825)
 		},
 		{
 			name: "enum via EncodeDatatypeMessage returns error",
@@ -673,7 +675,7 @@ func TestEncodeDatatypeMessage_AllClasses(t *testing.T) {
 				Version: 1,
 			},
 			wantErr: true,
-			errMsg:  "EncodeEnumDatatypeMessage",
+			errMsg:  "enumeration has no base type", // the C decoder always reads a parent (H5Odtype.c:683)
 		},
 	}
 
@@ -704,8 +706,8 @@ func TestEncodeDatatypeMessage_VarLenString(t *testing.T) {
 		Class:         DatatypeVarLen,
 		Size:          16, // Typical vlen string size in HDF5
 		Version:       1,
-		ClassBitField: 0x01, // String type
-		Properties:    make([]byte, 8),
+		ClassBitField: 0x01,                  // String type
+		Base:          fixtureUnsignedByte(), // a vlen needs its base type (H5Odtype.c:771); Properties never fed the encoder
 	}
 
 	encoded, err := EncodeDatatypeMessage(dt)

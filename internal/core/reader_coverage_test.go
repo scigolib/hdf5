@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/scigolib/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -647,7 +648,7 @@ func TestReadDatasetStrings_ContiguousReadError(t *testing.T) {
 
 	_, err := ReadDatasetStrings(bytes.NewReader(make([]byte, 64)), header, sb)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to read contiguous data")
+	require.ErrorIs(t, err, utils.ErrCorrupt) // Rejected when the descriptor is built (ADR-004).
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,10 +1011,9 @@ func buildTestV3AttrMessage(t *testing.T, name string, value int32) []byte {
 
 	nameBytes := append([]byte(name), 0)
 
-	// Datatype: int32 (class 0, size 4).
-	dtBytes := make([]byte, 8)
-	dtBytes[0] = 0x30 // class=0 (fixed), version=3
-	binary.LittleEndian.PutUint32(dtBytes[4:8], 4)
+	// Datatype: int32, codec-encoded (the bare 8-byte header had no
+	// precision, H5Odtype.c:175-176).
+	dtBytes := fixtureDatatypeBytes(DatatypeFixed, 4)
 
 	// Dataspace: scalar (version 1, dimensionality 0).
 	dsBytes := make([]byte, 8)

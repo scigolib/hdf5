@@ -242,13 +242,29 @@ func TestEncodeDatatypeMessage_Numeric(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "invalid numeric size 3",
+			// Before the codec the encoder refused every numeric size but
+			// 1, 2, 4 and 8. The C library encodes integers of any size
+			// (H5Odtype.c:951-1021), so a 3-byte integer is valid; a 3-byte
+			// float has no IEEE layout to default to and needs an explicit
+			// one.
+			name: "invalid float size 3 without layout",
+			dt: &DatatypeMessage{
+				Class:         DatatypeFloat,
+				Size:          3,
+				ClassBitField: 0x00,
+			},
+			wantErr: true,
+		},
+		{
+			name: "int24 is valid",
 			dt: &DatatypeMessage{
 				Class:         DatatypeFixed,
 				Size:          3,
 				ClassBitField: 0x00,
 			},
-			wantErr: true,
+			validate: func(t *testing.T, data []byte) {
+				assert.Equal(t, []byte{0x10, 0, 0, 0, 3, 0, 0, 0, 0, 0, 24, 0}, data)
+			},
 		},
 	}
 
@@ -286,8 +302,11 @@ func TestEncodeDatatypeMessage_String(t *testing.T) {
 			},
 			wantErr: false,
 			validate: func(t *testing.T, data []byte) {
-				// Header (8) + string properties (1)
-				assert.Equal(t, 9, len(data))
+				// Header only: a string has no properties, padding and
+				// character set are class flags (H5Odtype.c:1148-1160,
+				// :1733-1737). Before the codec 1 property byte was
+				// written (9 bytes).
+				assert.Equal(t, 8, len(data))
 
 				class := DatatypeClass(binary.LittleEndian.Uint32(data[0:4]) & 0x0F)
 				assert.Equal(t, DatatypeString, class)
@@ -336,7 +355,9 @@ func TestEncodeDatatypeMessage_Compound(t *testing.T) {
 
 	_, err := EncodeDatatypeMessage(dt)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "compound datatype has no member definitions")
+	// The codec encodes from Members (H5Odtype.c:1247); "compound datatype
+	// has no member definitions" before the codec.
+	assert.Contains(t, err.Error(), "compound with 0 members")
 }
 
 func TestEncodeDataspaceMessage(t *testing.T) {
@@ -658,9 +679,10 @@ func TestEncodeAttributeMessage(t *testing.T) {
 				assert.Equal(t, uint16(6), nameSize)
 				offset += 2
 
-				// Datatype size (9 bytes for string)
+				// Datatype size: 8 bytes for a string, no properties
+				// (H5Odtype.c:1733-1737; 9 before the codec).
 				datatypeSize := binary.LittleEndian.Uint16(encoded[offset : offset+2])
-				assert.Equal(t, uint16(9), datatypeSize)
+				assert.Equal(t, uint16(8), datatypeSize)
 				offset += 2
 
 				// Dataspace size (16 bytes for scalar: 8 header + 8 for one dimension)
@@ -680,7 +702,7 @@ func TestEncodeAttributeMessage(t *testing.T) {
 				offset++
 
 				// Skip datatype and dataspace
-				offset += 9 + 16 // datatype 9, dataspace 16 for scalar
+				offset += 8 + 16 // datatype 8, dataspace 16 for scalar
 
 				// Verify data
 				assert.Equal(t, []byte("Celsius\x00\x00\x00"), encoded[offset:offset+10])

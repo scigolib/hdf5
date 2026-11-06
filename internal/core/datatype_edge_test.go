@@ -110,19 +110,23 @@ func TestParseDatatypeMessage_Reference(t *testing.T) {
 }
 
 // TestParseDatatypeMessage_VarLen tests variable-length datatype.
+//
+// Until the codec this fixture was a 13-byte message with a 3-byte class
+// word (decoding as an array of size 0x30000000) whose class 10 the test
+// asserted; the C decoder rejects those bytes. It is now a well-formed
+// variable-length sequence of int32 (H5Odtype.c:757-784).
 func TestParseDatatypeMessage_VarLen(t *testing.T) {
-	// Version 1 variable-length datatype
-	data := []byte{
-		0x10 | 10, // version 1, class 10 (variable-length)
-		0, 0,      // class bits: type = sequence
+	data := append([]byte{
+		0x19,    // version 1, class 9 (variable-length)
+		0, 0, 0, // class bits: kind = sequence
 		16, 0, 0, 0, // size 16
-		// Base type (int32)
-		0x30, // version 3, integer (class 0)
-		0, 0,
-		4, 0, 0, 0, // size 4
-	}
+	}, int32LEBytes...) // base type int32
 
 	dt, err := ParseDatatypeMessage(data)
 	require.NoError(t, err)
-	require.Equal(t, DatatypeClass(10), dt.Class)
+	require.Equal(t, DatatypeVarLen, dt.Class)
+	require.NotNil(t, dt.Base)
+	require.Equal(t, DatatypeFixed, dt.Base.Class)
+	require.Equal(t, uint32(4), dt.Base.Size)
+	require.Equal(t, int32LEBytes[datatypeHeaderSize:], dt.Base.Properties)
 }

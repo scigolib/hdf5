@@ -4,7 +4,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
+
+// dataspaceMaxRank is the largest dataspace rank, H5S_MAX_RANK (H5Spublic.h:55).
+const dataspaceMaxRank = 32
 
 // DataspaceType represents the type of dataspace.
 type DataspaceType uint8
@@ -63,6 +68,13 @@ func ParseDataspaceMessage(data []byte) (*DataspaceMessage, error) {
 
 	dimensionality := data[1]
 	flags := data[2]
+
+	// C refuses a rank above H5S_MAX_RANK while decoding the message
+	// (H5Osdspace.c:137-138); every reader indexes dimensions by that rank.
+	if dimensionality > dataspaceMaxRank {
+		return nil, fmt.Errorf("%w: simple dataspace dimensionality %d is too large (maximum %d)",
+			utils.ErrCorrupt, dimensionality, dataspaceMaxRank)
+	}
 
 	// Bit 0 indicates max dimensions present.
 	hasMaxDims := (flags & 0x01) != 0

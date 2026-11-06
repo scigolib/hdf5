@@ -2,6 +2,7 @@ package hdf5
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -185,13 +186,41 @@ func (h *basicTypeHandler) GetInfo(_ *datasetConfig) (*datatypeInfo, error) {
 }
 
 func (h *basicTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, error) {
-	msg := &core.DatatypeMessage{
-		Class:         info.class,
-		Version:       1,
-		Size:          info.size,
-		ClassBitField: info.classBitField,
+	return encodeDatatypeInfo(info)
+}
+
+// datatypeFromInfo builds the datatype described by info with the codec's
+// constructors, which give each type the bytes the C library writes for it.
+func datatypeFromInfo(info *datatypeInfo) (*core.DatatypeMessage, error) {
+	switch info.class {
+	case core.DatatypeFixed:
+		return core.NewIntegerDatatype(info.size, info.classBitField&datatypeSignedFlag != 0)
+	case core.DatatypeFloat:
+		return core.NewFloatDatatype(info.size)
+	case core.DatatypeString:
+		pad := core.StringPadding(info.classBitField & 0x0F)
+		cset := core.CharacterSet((info.classBitField >> 4) & 0x0F)
+		return core.NewStringDatatype(info.size, pad, cset)
+	case core.DatatypeReference:
+		return core.NewReferenceDatatype(core.ReferenceType(info.classBitField&0x0F), info.size)
+	case core.DatatypeOpaque:
+		return core.NewOpaqueDatatype(info.size, info.opaqueTag)
+	default:
+		return nil, fmt.Errorf("unsupported datatype class %d for a basic type", info.class)
 	}
-	return core.EncodeDatatypeMessage(msg)
+}
+
+// datatypeSignedFlag is the two's-complement flag of a fixed-point class bit
+// field (H5Odtype.c:174).
+const datatypeSignedFlag = 0x08
+
+// encodeDatatypeInfo encodes the datatype described by info.
+func encodeDatatypeInfo(info *datatypeInfo) ([]byte, error) {
+	dt, err := datatypeFromInfo(info)
+	if err != nil {
+		return nil, err
+	}
+	return core.EncodeDatatypeMessage(dt)
 }
 
 // stringTypeHandler handles fixed-length string datatypes.
@@ -209,13 +238,7 @@ func (h *stringTypeHandler) GetInfo(config *datasetConfig) (*datatypeInfo, error
 }
 
 func (h *stringTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, error) {
-	msg := &core.DatatypeMessage{
-		Class:         info.class,
-		Version:       1,
-		Size:          info.size,
-		ClassBitField: info.classBitField,
-	}
-	return core.EncodeDatatypeMessage(msg)
+	return encodeDatatypeInfo(info)
 }
 
 // arrayTypeHandler handles array datatypes (fixed-size collections of base types).
@@ -255,20 +278,22 @@ func (h *arrayTypeHandler) GetInfo(config *datasetConfig) (*datatypeInfo, error)
 }
 
 func (h *arrayTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, error) {
-	// Encode base type message first
-	baseMsg := &core.DatatypeMessage{
-		Class:         info.baseType.class,
-		Version:       1,
-		Size:          info.baseType.size,
-		ClassBitField: info.baseType.classBitField,
-	}
-	baseData, err := core.EncodeDatatypeMessage(baseMsg)
+	base, err := datatypeFromInfo(info.baseType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode array base type: %w", err)
 	}
-
-	// Encode array datatype message with dimensions
-	return core.EncodeArrayDatatypeMessage(baseData, info.arrayDims, info.size)
+	dims := make([]uint32, len(info.arrayDims))
+	for i, d := range info.arrayDims {
+		if d > math.MaxUint32 {
+			return nil, fmt.Errorf("array dimension %d too large (max 2^32-1)", d)
+		}
+		dims[i] = uint32(d)
+	}
+	dt, err := core.NewArrayDatatype(base, dims)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode array datatype: %w", err)
+	}
+	return core.EncodeDatatypeMessage(dt)
 }
 
 // enumTypeHandler handles enumeration datatypes (named integer constants).
@@ -306,14 +331,7 @@ func (h *enumTypeHandler) GetInfo(config *datasetConfig) (*datatypeInfo, error) 
 }
 
 func (h *enumTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, error) {
-	// Encode base type message first
-	baseMsg := &core.DatatypeMessage{
-		Class:         info.baseType.class,
-		Version:       1,
-		Size:          info.baseType.size,
-		ClassBitField: info.baseType.classBitField,
-	}
-	baseData, err := core.EncodeDatatypeMessage(baseMsg)
+	base, err := datatypeFromInfo(info.baseType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode enum base type: %w", err)
 	}
@@ -334,8 +352,11 @@ func (h *enumTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, err
 		}
 	}
 
-	// Encode enum datatype message
-	return core.EncodeEnumDatatypeMessage(baseData, info.enumNames, valueBytes, info.size)
+	dt, err := core.NewEnumDatatype(base, info.enumNames, valueBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode enum datatype: %w", err)
+	}
+	return core.EncodeDatatypeMessage(dt)
 }
 
 // referenceTypeHandler handles reference datatypes (object and region references).
@@ -353,13 +374,7 @@ func (h *referenceTypeHandler) GetInfo(_ *datasetConfig) (*datatypeInfo, error) 
 }
 
 func (h *referenceTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, error) {
-	msg := &core.DatatypeMessage{
-		Class:         info.class,
-		Version:       1,
-		Size:          info.size,
-		ClassBitField: info.classBitField,
-	}
-	return core.EncodeDatatypeMessage(msg)
+	return encodeDatatypeInfo(info)
 }
 
 // opaqueTypeHandler handles opaque datatypes (uninterpreted byte sequences).
@@ -377,14 +392,7 @@ func (h *opaqueTypeHandler) GetInfo(config *datasetConfig) (*datatypeInfo, error
 }
 
 func (h *opaqueTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, error) {
-	msg := &core.DatatypeMessage{
-		Class:         core.DatatypeOpaque,
-		Version:       1,
-		Size:          info.size,
-		ClassBitField: 0,
-		Properties:    []byte(info.opaqueTag),
-	}
-	return core.EncodeDatatypeMessage(msg)
+	return encodeDatatypeInfo(info)
 }
 
 // vlenTypeHandler handles variable-length datatypes (strings, ragged arrays).
@@ -404,62 +412,37 @@ func (h *vlenTypeHandler) GetInfo(_ *datasetConfig) (*datatypeInfo, error) {
 }
 
 func (h *vlenTypeHandler) EncodeDatatypeMessage(_ *datatypeInfo) ([]byte, error) {
-	// VLen datatype message structure (HDF5 spec section 3.2.2.2):
-	// - Version (1 byte): 0 or 1
-	// - Class (3 bytes): 9 (VarLen), 0, 0
-	// - ClassBitField (4 bytes): type (1 byte), padding (1 byte), charset (2 bytes for strings)
-	// - Size (4 bytes): 16 (heap ID size)
-	// - Base type message (nested)
-
-	// Determine base type encoding
-	var baseTypeMsg []byte
+	// A variable-length string is a null-terminated ASCII string whose base
+	// type is unsigned char, as H5Tset_size(H5T_VARIABLE) builds it
+	// (H5T.c:4940-4970); a sequence has the element type as its base.
+	var dt *core.DatatypeMessage
 	var err error
-
 	if h.baseType == 0 {
-		// VLenString - base type is character (1-byte)
-		// Use ASCII string as base type
-		baseMsg := &core.DatatypeMessage{
-			Class:         core.DatatypeString,
-			Version:       1,
-			Size:          1,    // Character size
-			ClassBitField: 0x00, // ASCII, null-pad
-		}
-		baseTypeMsg, err = core.EncodeDatatypeMessage(baseMsg)
+		dt, err = core.NewVLenStringDatatype(core.StringNullTerm, core.CharsetASCII)
 	} else {
-		// VLen sequence - use numeric base type
-		baseHandler, ok := datatypeRegistry[h.baseType]
-		if !ok {
-			return nil, fmt.Errorf("unsupported vlen base type: %d", h.baseType)
-		}
-		baseInfo, err2 := baseHandler.GetInfo(nil)
-		if err2 != nil {
-			return nil, fmt.Errorf("get base type info: %w", err2)
-		}
-		baseTypeMsg, err = baseHandler.EncodeDatatypeMessage(baseInfo)
+		dt, err = vlenSequenceDatatype(h.baseType)
 	}
+	if err != nil {
+		return nil, fmt.Errorf("encode vlen datatype: %w", err)
+	}
+	return core.EncodeDatatypeMessage(dt)
+}
+
+// vlenSequenceDatatype builds a variable-length sequence of baseType.
+func vlenSequenceDatatype(baseType Datatype) (*core.DatatypeMessage, error) {
+	baseHandler, ok := datatypeRegistry[baseType]
+	if !ok {
+		return nil, fmt.Errorf("unsupported vlen base type: %d", baseType)
+	}
+	baseInfo, err := baseHandler.GetInfo(nil)
+	if err != nil {
+		return nil, fmt.Errorf("get base type info: %w", err)
+	}
+	base, err := datatypeFromInfo(baseInfo)
 	if err != nil {
 		return nil, fmt.Errorf("encode base type: %w", err)
 	}
-
-	// Build VLen message
-	// VLen type indicator: 0x00 = sequence, 0x01 = string
-	vlenType := byte(0x00) // Sequence by default
-	if h.baseType == 0 {
-		vlenType = 0x01 // String
-	}
-
-	// ClassBitField for VLen: type (1 byte) + padding (1 byte) + charset (2 bytes)
-	classBitField := uint32(vlenType) | (uint32(0x00) << 8) | (uint32(0x00) << 16) // UTF-8 charset
-
-	msg := &core.DatatypeMessage{
-		Class:         core.DatatypeVarLen,
-		Version:       1,  // Version 1 minimum for VLen (C ref: H5Odtype.c:151 rejects version < 1)
-		Size:          16, // Heap ID size
-		ClassBitField: classBitField,
-		Properties:    baseTypeMsg, // Nested base type message
-	}
-
-	return core.EncodeDatatypeMessage(msg)
+	return core.NewVLenSequenceDatatype(base)
 }
 
 // datatypeRegistry is the global registry mapping Datatype constants to their handlers.
@@ -1292,6 +1275,9 @@ type DatasetWriter struct {
 //	// Flatten row-major: [[1,2,3,4], [5,6,7,8], [9,10,11,12]]
 //	ds2.Write([]float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
 func (dw *DatasetWriter) Write(data interface{}) error {
+	if dw.dtype == nil {
+		return errCommittedDatatypeData
+	}
 	// Handle variable-length data separately (uses global heap)
 	if dw.dtype.Class == core.DatatypeVarLen {
 		return dw.writeVLen(data)
@@ -1356,6 +1342,9 @@ func (dw *DatasetWriter) Write(data interface{}) error {
 //	data := []byte{/* encoded struct bytes */}
 //	err := ds.WriteRaw(data)
 func (dw *DatasetWriter) WriteRaw(data []byte) error {
+	if dw.dtype == nil {
+		return errCommittedDatatypeData
+	}
 	// Verify size matches expected dataset size
 	if uint64(len(data)) != dw.dataSize {
 		return fmt.Errorf("data size mismatch: expected %d bytes, got %d bytes", dw.dataSize, len(data))
@@ -1588,6 +1577,9 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 //
 //nolint:gocyclo,cyclop // Complex by nature: resize involves validation, header update, and state management
 func (dw *DatasetWriter) Resize(newDims []uint64) error {
+	if dw.dtype == nil {
+		return errCommittedDatatypeData
+	}
 	// 1. Validate input.
 	if !dw.isChunked {
 		return fmt.Errorf("resize requires chunked layout")
@@ -2323,11 +2315,18 @@ func (fw *FileWriter) OpenDataset(path string) (*DatasetWriter, error) {
 	var dataspaceMsg *core.DataspaceMessage
 	var layoutMsg *core.DataLayoutMessage
 	var attrInfoMsg *core.AttributeInfoMessage
+	var sharedType bool
 
 	for _, msg := range oh.Messages {
 		switch msg.Type {
 		case core.MsgDatatype:
-			datatypeMsg, err = core.ParseDatatypeMessage(msg.Data)
+			datatypeMsg, err = core.ParseDatatypeHeaderMessage(msg)
+			if core.IsSharedDatatype(err) {
+				// A committed datatype: attributes can still be written; data
+				// writes are refused until committed types are resolved.
+				sharedType = true
+				err = nil
+			}
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse datatype: %w", err)
 			}
@@ -2349,16 +2348,19 @@ func (fw *FileWriter) OpenDataset(path string) (*DatasetWriter, error) {
 		}
 	}
 
-	if datatypeMsg == nil || dataspaceMsg == nil || layoutMsg == nil {
+	if (datatypeMsg == nil && !sharedType) || dataspaceMsg == nil || layoutMsg == nil {
 		return nil, fmt.Errorf("dataset metadata incomplete (missing datatype, dataspace, or layout)")
 	}
 
-	// Step 4: Calculate data size
+	// Step 4: Calculate data size (unknown for a committed datatype)
 	totalElements := uint64(1)
 	for _, dim := range dataspaceMsg.Dimensions {
 		totalElements *= dim
 	}
-	dataSize := totalElements * uint64(datatypeMsg.Size)
+	var dataSize uint64
+	if datatypeMsg != nil {
+		dataSize = totalElements * uint64(datatypeMsg.Size)
+	}
 
 	// Step 5: Create DatasetWriter
 	dsw := &DatasetWriter{
@@ -3081,3 +3083,9 @@ func writeRootGroupHeader(fw *writer.FileWriter, btreeAddr, heapAddr uint64, off
 
 	return rootGroupAddr, rootGroupSize, nil
 }
+
+// errCommittedDatatypeData refuses data writes to a dataset opened with
+// OpenDataset whose datatype is a committed (shared) datatype: the library
+// does not resolve committed datatypes yet, so it does not know the element
+// layout. Attributes of such a dataset can still be written.
+var errCommittedDatatypeData = errors.New("dataset has a committed (shared) datatype: writing its data is not supported yet")

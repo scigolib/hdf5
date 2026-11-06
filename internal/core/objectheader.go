@@ -28,6 +28,14 @@ type ObjectHeader struct {
 	Name       string
 	Attributes []*Attribute
 
+	// Times and AttrPhaseChange are the optional version-2 prefix fields,
+	// kept verbatim so a rewritten header keeps them (decoded at
+	// H5Ocache.c:404-418, encoded at :1030-1055): the access, modification,
+	// change and birth times (flag 0x20, 16 bytes) and the max compact / min
+	// dense attribute counts (flag 0x10, 4 bytes).
+	Times           []byte
+	AttrPhaseChange []byte
+
 	// ReferenceCount tracks the number of hard links to this object.
 	// For V1 headers: Stored directly in header (bytes 4-7).
 	// For V2 headers: Stored in RefCount message (type 0x0016) if >1.
@@ -40,6 +48,11 @@ type HeaderMessage struct {
 	Type   MessageType
 	Offset uint64
 	Data   []byte
+
+	// Flags are the message flags of the header message (format spec
+	// IV.A.1, H5Ocache.c:1277-1279). MsgFlagShared means Data is a
+	// shared-message reference (H5Oshared.h), not the message itself.
+	Flags uint8
 
 	// FromContinuation is true if this message was read from an OCHK
 	// continuation block rather than the main OHDR chunk. Used by the
@@ -124,6 +137,10 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 		header.Messages, header.Name, err = parseV2Header(r, address, header.Flags, sb, isBE)
 		if err != nil {
 			return nil, utils.WrapError("v2 header parse failed", err)
+		}
+		header.Times, header.AttrPhaseChange, err = readV2PrefixFields(r, address, header.Flags)
+		if err != nil {
+			return nil, utils.WrapError("v2 header prefix read failed", err)
 		}
 		// For V2, reference count defaults to 1 (may be overridden by RefCount message)
 		header.ReferenceCount = 1
@@ -267,27 +284,10 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 	}
 
 	for current < end {
-		// Always read 6 bytes - enough for either 4-byte or 6-byte header
-		headerBuf := utils.GetBuffer(6)
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		if _, err := r.ReadAt(headerBuf, int64(current)); err != nil {
-			utils.ReleaseBuffer(headerBuf)
+		msgType, msgSize, msgFlags, err := readV2MessageHeader(r, current, isBE)
+		if err != nil {
 			return nil, "", utils.WrapError("message header read failed", err)
 		}
-
-		// Type is 1 byte, size is 2 bytes, flags is 1 byte
-		// (optional: creation index is 2 bytes if tracked)
-		msgType := MessageType(headerBuf[0])
-		var msgSize uint16
-		if isBE {
-			msgSize = binary.BigEndian.Uint16(headerBuf[1:3])
-		} else {
-			msgSize = binary.LittleEndian.Uint16(headerBuf[1:3])
-		}
-		msgFlags := headerBuf[3]
-		_ = msgFlags // Unused for now
-		// Creation index at headerBuf[4:6] if tracked - not currently used
-		utils.ReleaseBuffer(headerBuf)
 
 		if msgSize == 0 {
 			current += msgHeaderSize
@@ -309,6 +309,7 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 			Type:   msgType,
 			Offset: current,
 			Data:   data,
+			Flags:  msgFlags,
 		})
 
 		current += msgHeaderSize + uint64(msgSize)
@@ -387,21 +388,10 @@ func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags 
 	current := msgStart
 
 	for current < msgEnd {
-		headerBuf := utils.GetBuffer(6)
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		if _, err := r.ReadAt(headerBuf, int64(current)); err != nil {
-			utils.ReleaseBuffer(headerBuf)
+		msgType, msgSize, msgFlags, err := readV2MessageHeader(r, current, isBE)
+		if err != nil {
 			return nil, "", utils.WrapError("OCHK message header read failed", err)
 		}
-
-		msgType := MessageType(headerBuf[0])
-		var msgSize uint16
-		if isBE {
-			msgSize = binary.BigEndian.Uint16(headerBuf[1:3])
-		} else {
-			msgSize = binary.LittleEndian.Uint16(headerBuf[1:3])
-		}
-		utils.ReleaseBuffer(headerBuf)
 
 		if msgSize == 0 {
 			current += msgHeaderSize
@@ -423,6 +413,7 @@ func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags 
 			Type:   msgType,
 			Offset: current,
 			Data:   data,
+			Flags:  msgFlags,
 		})
 
 		current += msgHeaderSize + uint64(msgSize)
@@ -466,4 +457,55 @@ func (oh *ObjectHeader) DecrementReferenceCount() uint32 {
 //   - >1: Object has multiple hard links
 func (oh *ObjectHeader) GetReferenceCount() uint32 {
 	return oh.ReferenceCount
+}
+
+// readV2MessageHeader reads the header of the version-2 object header message
+// at addr: type (1 byte), size (2 bytes) and flags (1 byte), followed by a
+// creation index the caller skips when tracked (H5Ocache.c:1258-1279). Six
+// bytes are read, enough for either header size.
+func readV2MessageHeader(r io.ReaderAt, addr uint64, isBE bool) (MessageType, uint16, uint8, error) {
+	headerBuf := utils.GetBuffer(6)
+	defer utils.ReleaseBuffer(headerBuf)
+	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
+	if _, err := r.ReadAt(headerBuf, int64(addr)); err != nil {
+		return 0, 0, 0, err
+	}
+	order := binary.ByteOrder(binary.LittleEndian)
+	if isBE {
+		order = binary.BigEndian
+	}
+	return MessageType(headerBuf[0]), order.Uint16(headerBuf[1:3]), headerBuf[3], nil
+}
+
+// Optional version-2 object header prefix fields (H5Opkg.h H5O_HDR_* flags).
+const (
+	ohdrFlagStoreTimes       = 0x20 // H5O_HDR_STORE_TIMES: 4 x 4-byte times
+	ohdrFlagAttrPhaseChange  = 0x10 // H5O_HDR_ATTR_STORE_PHASE_CHANGE: 2 x 2-byte counts
+	ohdrFlagAttrCrtOrder     = 0x0C // H5O_HDR_ATTR_CRT_ORDER_TRACKED | _INDEXED
+	ohdrTimesSize            = 16
+	ohdrAttrPhaseChangeSize  = 4
+	ohdrPrefixFieldsStartOff = 6 // after "OHDR", version and flags
+)
+
+// readV2PrefixFields reads the optional times and attribute phase change
+// fields of the version-2 header at addr, which follow the flags byte
+// (H5Ocache.c:404-418).
+func readV2PrefixFields(r io.ReaderAt, addr uint64, flags uint8) (times, phase []byte, err error) {
+	off := addr + ohdrPrefixFieldsStartOff
+	if flags&ohdrFlagStoreTimes != 0 {
+		times = make([]byte, ohdrTimesSize)
+		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
+		if _, err := r.ReadAt(times, int64(off)); err != nil {
+			return nil, nil, err
+		}
+		off += ohdrTimesSize
+	}
+	if flags&ohdrFlagAttrPhaseChange != 0 {
+		phase = make([]byte, ohdrAttrPhaseChangeSize)
+		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
+		if _, err := r.ReadAt(phase, int64(off)); err != nil {
+			return nil, nil, err
+		}
+	}
+	return times, phase, nil
 }

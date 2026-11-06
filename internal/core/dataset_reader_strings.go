@@ -10,104 +10,35 @@ import (
 )
 
 // ReadDatasetStrings reads a string dataset and returns values as string array.
-// Supports both fixed-length and variable-length strings.
+// It builds the dataset's descriptor and applies the default read limit;
+// callers that hold a descriptor use ReadStrings.
 func ReadDatasetStrings(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]string, error) {
-	// 1. Extract required messages from object header.
-	var datatypeMsg, dataspaceMsg, layoutMsg *HeaderMessage
-
-	for _, msg := range header.Messages {
-		switch msg.Type {
-		case MsgDatatype:
-			datatypeMsg = msg
-		case MsgDataspace:
-			dataspaceMsg = msg
-		case MsgDataLayout:
-			layoutMsg = msg
-		}
-	}
-
-	// Validate we have all required messages.
-	if datatypeMsg == nil {
-		return nil, errors.New("datatype message not found")
-	}
-	if dataspaceMsg == nil {
-		return nil, errors.New("dataspace message not found")
-	}
-	if layoutMsg == nil {
-		return nil, errors.New("data layout message not found")
-	}
-
-	// 2. Parse datatype.
-	datatype, err := ParseDatatypeMessage(datatypeMsg.Data)
+	desc, err := NewDatasetDescriptor(r, header, sb)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse datatype: %w", err)
+		return nil, err
 	}
 
-	// Verify it's a string type.
-	if !datatype.IsString() {
-		return nil, fmt.Errorf("datatype is not string: %s", datatype)
+	return ReadStrings(r, sb, desc, utils.DefaultReadLimit)
+}
+
+// ReadStrings reads every element of a string dataset. Fixed-length strings
+// are decoded; variable-length strings are reported as unsupported here (the
+// vlen reader handles them).
+func ReadStrings(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, limit uint64) ([]string, error) {
+	if !desc.datatype.IsString() {
+		return nil, fmt.Errorf("datatype is not string: %s", desc.datatype)
 	}
 
-	// 3. Parse dataspace.
-	dataspace, err := ParseDataspaceMessage(dataspaceMsg.Data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse dataspace: %w", err)
-	}
-
-	// 4. Parse layout.
-	layout, err := ParseDataLayoutMessage(layoutMsg.Data, sb)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse layout: %w", err)
-	}
-
-	// 5. Calculate total number of elements.
-	totalElements := dataspace.TotalElements()
-	if totalElements == 0 {
+	if desc.nelmts == 0 {
 		return []string{}, nil
 	}
 
-	// 6. Read data based on layout type.
-	var rawData []byte
-
-	switch {
-	case layout.IsCompact():
-		// Data is stored directly in the layout message.
-		rawData = layout.CompactData
-
-	case layout.IsContiguous():
-		// Data is stored contiguously at specific address. Size and region come
-		// from file metadata; validate before allocating (ADR-003, cf.
-		// H5D__contig_check).
-		rawData, err = readContiguousDatasetData(r, sb, layout, totalElements, uint64(datatype.Size))
-		if err != nil {
-			return nil, fmt.Errorf("failed to read contiguous data: %w", err)
-		}
-
-	case layout.IsChunked():
-		// Data is stored in chunks indexed by B-tree.
-		// Extract filter pipeline if present.
-		var filterPipeline *FilterPipelineMessage
-		for _, msg := range header.Messages {
-			if msg.Type == MsgFilterPipeline {
-				filterPipeline, err = ParseFilterPipelineMessage(msg.Data)
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse filter pipeline: %w", err)
-				}
-				break
-			}
-		}
-
-		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read chunked data: %w", err)
-		}
-
-	default:
-		return nil, fmt.Errorf("unsupported layout class: %d", layout.Class)
+	rawData, err := readRawData(r, sb, desc, ResultString, limit)
+	if err != nil {
+		return nil, err
 	}
 
-	// 7. Convert raw bytes to string array based on string type.
-	return convertToStrings(rawData, datatype, totalElements)
+	return convertToStrings(rawData, desc.datatype, desc.nelmts)
 }
 
 // convertToStrings converts raw bytes to string array based on string datatype.

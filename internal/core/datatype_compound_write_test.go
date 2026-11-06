@@ -555,26 +555,35 @@ func TestCompoundDatatypeEncodeDecode_Binary(t *testing.T) {
 		t.Errorf("Expected size 4, got %d", size)
 	}
 
-	// Byte 8-11: member count (version 3 uses uint32)
-	memberCount := binary.LittleEndian.Uint32(encoded[8:12])
+	// Bytes 1-2: member count in the low 16 bits of the class bit field.
+	// Until the codec this test expected a 4-byte count at bytes 8-11, which
+	// the C library reads as a member name and rejects with "invalid number
+	// of members: 0" (H5Odtype.c:358; encoder H5Odtype.c:1247).
+	memberCount := binary.LittleEndian.Uint16(encoded[1:3])
 	if memberCount != 1 {
 		t.Errorf("Expected 1 member, got %d", memberCount)
 	}
 
-	// Byte 12+: member name "x" (null-terminated)
-	if encoded[12] != 'x' {
-		t.Errorf("Expected member name 'x', got byte %c", encoded[12])
+	// Byte 8+: member name "x" (null-terminated, not padded)
+	if encoded[8] != 'x' {
+		t.Errorf("Expected member name 'x', got byte %c", encoded[8])
 	}
-	if encoded[13] != 0 {
-		t.Errorf("Expected null terminator after name, got byte %d", encoded[13])
-	}
-
-	// Byte 14-17: member offset (uint32)
-	memberOffset := binary.LittleEndian.Uint32(encoded[14:18])
-	if memberOffset != 0 {
-		t.Errorf("Expected member offset 0, got %d", memberOffset)
+	if encoded[9] != 0 {
+		t.Errorf("Expected null terminator after name, got byte %d", encoded[9])
 	}
 
-	// Byte 18+: member datatype (should be int32)
-	// This is a nested datatype message, so format repeats
+	// Byte 10: member offset in H5VM_limit_enc_size(4) = 1 byte (was a
+	// 4-byte offset before the codec; H5Odtype.c:1273-1274).
+	if encoded[10] != 0 {
+		t.Errorf("Expected member offset 0, got %d", encoded[10])
+	}
+
+	// Byte 11+: member datatype, a complete unsigned 32-bit integer message.
+	member, n, err := DecodeDatatype(encoded[11:])
+	if err != nil {
+		t.Fatalf("member datatype: %v", err)
+	}
+	if n != len(encoded)-11 || member.Class != DatatypeFixed || member.Precision != 32 {
+		t.Errorf("member datatype: class %d precision %d, %d of %d bytes", member.Class, member.Precision, n, len(encoded)-11)
+	}
 }

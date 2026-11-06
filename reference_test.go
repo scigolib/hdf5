@@ -53,7 +53,9 @@ func classifyFile(name string) fileClassification {
 	// We test these to verify our error handling is correct.
 	if name == "bad_compound.h5" {
 		class.expectError = true
-		class.expectErrorReason = "intentionally invalid (h5dump also fails)"
+		// Open and Walk succeed, as in C; the error comes from /dataset, whose
+		// committed compound type has zero members (H5Odtype.c:358-360).
+		class.expectErrorReason = "intentionally invalid: /dataset's datatype does not decode (h5dump also fails)"
 	}
 
 	return class
