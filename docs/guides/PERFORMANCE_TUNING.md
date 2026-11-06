@@ -396,6 +396,11 @@ The smart rebalancer considers:
 
 ### Benchmark Comparison
 
+> **Historical figures.** The table below was measured when the rebalancing strategies were introduced
+> (v0.11.x) and has not been re-measured since; the format code it ran on has changed a lot. Since then the
+> default is immediate rebalancing (on), as in the C library; `WithBTreeRebalancing(false)` gives the "None" row.
+> Re-measure your workload with the benchmarks in `btree_rebalancing_bench_test.go`.
+
 **Test Setup**:
 - 1000 attributes created, then 500 deleted
 - Measured on modern desktop (AMD Ryzen 7, NVMe SSD)
@@ -403,7 +408,7 @@ The smart rebalancer considers:
 
 | Rebalancing Mode | Deletion Speed | Space Efficiency | CPU Overhead | Pause Time |
 |------------------|----------------|------------------|--------------|------------|
-| **None** (default) | **100%** (baseline) | 60% (sparse tree) | 0% | None |
+| **None** | **100%** (baseline) | 60% (sparse tree) | 0% | None |
 | **Lazy** (5% threshold) | 95% (5% slower) | 95% (tight tree) | ~2% | 100-500ms batches |
 | **Incremental** (100ms budget) | 92% (8% slower) | 95% (tight tree) | ~4% | None (background) |
 | **Smart** (auto) | 88% (12% slower) | 90-95% (adapts) | ~6% | Varies |

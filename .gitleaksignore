@@ -1,0 +1,3 @@
+# False positive: compound_test.go "nested too long" case uses the 16-character string "0123456789abcdef"
+# to overflow a FixedString member; it is test data, not a key.
+40c6d3573aa41a6fad3dea957c155b457c6ba881:compound_test.go:generic-api-key:532

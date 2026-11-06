@@ -12,7 +12,7 @@ package core
 // Reference:
 //   - HDF5 C Library: H5checksum.c - H5_checksum_metadata() and H5_checksum_lookup3()
 //   - Algorithm: http://burtleburtle.net/bob/hash/doobs.html
-//   - Format Spec: https://docs.hdfgroup.org/hdf5/latest/_f_m_t3.html
+//   - Format Spec: https://docs.hdfgroup.org/documentation/hdf5/latest/_f_m_t3.html
 //
 // Parameters:
 //   - data: byte slice to checksum

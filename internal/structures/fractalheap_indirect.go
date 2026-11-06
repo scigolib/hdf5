@@ -19,7 +19,7 @@ import (
 // This enables the heap to grow beyond a single direct block and support large objects.
 //
 // Reference: H5HFiblock.c, H5HFpkg.h (struct H5HF_indirect_t)
-// Format Spec: https://docs.hdfgroup.org/hdf5/latest/_f_m_t3.html#FractalHeap
+// Format Spec: https://docs.hdfgroup.org/documentation/hdf5/latest/_f_m_t3.html#FractalHeap
 //
 // On-Disk Format:
 //   - Signature: "FHIB" (4 bytes)

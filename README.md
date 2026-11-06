@@ -143,7 +143,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 
 **Use for**: Batch deletion workloads, medium/large files (100-500MB)
 
-**Performance**: ~2% overhead, occasional 100-500ms pauses
+**Performance**: low overhead, with occasional pauses while a batch is rebalanced
 
 ---
 
@@ -164,7 +164,7 @@ defer fw.Close()  // Stops background goroutine
 
 **Use for**: Large files (>500MB), continuous operations, TB-scale data
 
-**Performance**: ~4% overhead, **zero user-visible pause**
+**Performance**: rebalancing runs in the background, with **no user-visible pause**
 
 ---
 
@@ -183,19 +183,21 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 
 **Use for**: Unknown workloads, mixed operations, research environments
 
-**Performance**: ~6% overhead, adapts automatically
+**Performance**: adapts the mode to the observed workload
 
 ---
 
 ### Performance Comparison
 
-| Mode | Deletion Speed | Pause Time | Use Case |
-|------|----------------|------------|----------|
-| **None** (`WithBTreeRebalancing(false)`) | 100% (baseline) | None | Append-only, small files |
-| **Immediate** (default) | Slowest for batch deletions | None | Few deletions |
-| **Lazy** | 95% (10-100x faster than immediate!) | 100-500ms batches | Batch deletions |
-| **Incremental** | 92% | None (background) | Large files, continuous ops |
-| **Smart** | 88% | Varies | Unknown workloads |
+| Mode | Deletion cost | Pause Time | Use Case |
+|------|---------------|------------|----------|
+| **None** (`WithBTreeRebalancing(false)`) | lowest (no rebalancing) | None | Append-only, small files |
+| **Immediate** (default) | highest for batch deletions | None | Few deletions |
+| **Lazy** | low, batched | Short batches | Batch deletions |
+| **Incremental** | low, in the background | None (background) | Large files, continuous ops |
+| **Smart** | depends on the selected mode | Varies | Unknown workloads |
+
+Measure your own workload with the benchmarks in `btree_rebalancing_bench_test.go`.
 
 **Learn more**:
 - **[Performance Tuning Guide](docs/guides/PERFORMANCE_TUNING.md)**: Comprehensive guide with benchmarks, recommendations, troubleshooting
@@ -206,7 +208,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 
 ## 🎯 Current Status
 
-**HDF5 2.0.0 Ready with 88%+ library coverage!** 🎉
+**HDF5 2.0.0 ready; library packages have 82–95% test coverage (v0.14.3).**
 
 ### ✅ Fully Implemented
 - **File Structure**:
@@ -243,7 +245,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 - **Navigation**: Full file tree traversal via Walk()
 
 - **Code Quality**:
-  - Test coverage: 88%+ library packages (target: >70%) ✅
+  - Test coverage: 82–95% per library package (target: >70%) ✅
   - Lint issues: 0 (34+ linters) ✅
   - TODO items: 0 (all resolved) ✅
   - Official HDF5 test suite: 379 of 383 valid files ✅

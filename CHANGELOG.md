@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.14.3] - 2026-11-06
+
 This release completes the security work of v0.14.2 (GHSA-8p88-h28q-w6m9) and brings the reader and the
 writer in line with the HDF5 C library, which is the reference for every check below. Several fixes change
 behaviour that earlier versions got wrong; they are listed under **Changed**. Files written by earlier
@@ -22,9 +24,10 @@ whole-dataset reads; this release closes the same class of bug on every other pa
 - **Hyperslab reads (#75).** `ReadSlice` sized its buffer before any check: one changed byte in a 5,656-byte
   file made a 12-value read request 40.9 GB and abort the process. Every reader now works from one validated
   dataset descriptor, built once per dataset as the C library validates storage when it opens a dataset.
-- **Chunk indexes.** The v1 B-tree walk checks node levels, visited addresses and entry counts. Every index
-  walk (v1 and v2 B-tree, fixed and extensible array) and the fractal heap reader charge one byte budget:
-  a walk never reads more than the file holds. Before, overlapping blocks made a 73 KB file read 8.4 MB, and
+- **Chunk indexes and group B-trees.** The v1 B-tree walk checks node levels, visited addresses and entry
+  counts. Every index walk (v1 and v2 B-tree, fixed and extensible array), the group B-tree walk with its
+  symbol table nodes, object header continuations and the fractal heap reader charge one byte budget: a walk
+  never reads more than the file holds. Before, overlapping blocks made a 73 KB file read 8.4 MB, and
   larger parameters amounted to tens of gigabytes. Listing the chunks of an unallocated index no longer walks
   its whole grid (a 2^40-chunk dataset hung), and `ChunkIteratorWithContext` honours cancellation inside the
   walk.
