@@ -38,6 +38,30 @@ func newBlockBudget(r io.ReaderAt, sb *Superblock) *blockBudget {
 	return &blockBudget{limit: dataLimit(r, sb)}
 }
 
+// WalkBudget is the blockBudget of one walk over a linked structure read
+// outside this package: the group B-tree and its symbol table nodes
+// (internal/structures). The same rule applies there: version 1 B-tree nodes
+// carry no checksum, so nodes at distinct but overlapping addresses pass a
+// visited set and only the budget bounds the walk (deep review of v0.14.3).
+type WalkBudget struct {
+	b *blockBudget
+}
+
+// NewWalkBudget returns the budget of one walk over r, limited to the readable
+// end of the file.
+func NewWalkBudget(r io.ReaderAt, sb *Superblock) *WalkBudget {
+	return &WalkBudget{b: newBlockBudget(r, sb)}
+}
+
+// Charge counts n bytes of the block at addr, about to be read; see
+// blockBudget.charge. A nil WalkBudget charges nothing.
+func (w *WalkBudget) Charge(n, addr uint64, what string) error {
+	if w == nil {
+		return nil
+	}
+	return w.b.charge(n, addr, what)
+}
+
 // charge counts n bytes of the block at addr, about to be read, against the
 // budget. what names the structure in the error. A nil budget charges
 // nothing. Running over wraps utils.ErrCorrupt: a valid file cannot.
