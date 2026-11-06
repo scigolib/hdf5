@@ -58,6 +58,12 @@ type HeaderMessage struct {
 	// shared-message reference (H5Oshared.h), not the message itself.
 	Flags uint8
 
+	// CreationIndex is the creation index of the message header, present
+	// when the version 2 object header tracks attribute creation order
+	// (H5Ocache.c:1301-1304). It orders compact attributes; C writes 0 for
+	// every other message (H5Omessage.c:1969-1974).
+	CreationIndex uint16
+
 	// FromContinuation is true if this message was read from an OCHK
 	// continuation block rather than the main OHDR chunk. Used by the
 	// write path to avoid rewriting continuation messages into the main header.
@@ -80,11 +86,21 @@ const (
 	MsgFilterPipeline MessageType = 11 // Filter Pipeline (compression, etc)
 	MsgAttribute      MessageType = 12
 	MsgName           MessageType = 13 // Corrected: Name is 0x000D
-	MsgAttributeInfo  MessageType = 15 // Attribute Info (0x000F) - for dense attribute storage
 	MsgContinuation   MessageType = 16 // Object header continuation (0x0010)
 	MsgSymbolTable    MessageType = 17
 	MsgLinkMessage    MessageType = 6
 	MsgRefCount       MessageType = 22 // Reference Count (0x0016) - for hard links (v2 only)
+
+	// MsgAttributeInfo is the attribute info message of dense attribute
+	// storage (H5O_AINFO_ID 0x0015, H5Oprivate.h:228).
+	MsgAttributeInfo MessageType = 21
+
+	// MsgSharedMessageTable is the shared object header message table
+	// (H5O_SHMESG_ID 0x000F, H5Oprivate.h:222). C writes it only in the
+	// superblock extension's header. This library up to v0.14.2 wrote its
+	// attribute info messages with this ID in ordinary object headers; the
+	// readers accept that legacy layout there (attributeInfoMessage).
+	MsgSharedMessageTable MessageType = 15
 )
 
 // ReadObjectHeader reads and parses an HDF5 object header from the specified address.
@@ -102,7 +118,7 @@ func readObjectHeader(r io.ReaderAt, address uint64, sb *Superblock, withAttribu
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	offset := int64(address)
 	if offset < 0 {
-		return nil, fmt.Errorf("negative offset: %d", offset)
+		return nil, fmt.Errorf("%w: object header address 0x%X is out of range", utils.ErrCorrupt, address)
 	}
 
 	prefix := utils.GetBuffer(8)
@@ -135,7 +151,9 @@ func readObjectHeader(r io.ReaderAt, address uint64, sb *Superblock, withAttribu
 		version = 1
 		header.Flags = 0
 	} else {
-		return nil, fmt.Errorf("invalid object header signature: % x", prefix[0:4])
+		// C: "bad object header version number" (H5Ocache.c:1017, :1101,
+		// H5O__prefix_deserialize).
+		return nil, fmt.Errorf("%w: invalid object header signature: % x", utils.ErrCorrupt, prefix[0:4])
 	}
 
 	header.Version = version
@@ -289,45 +307,9 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 	// The 4-byte Jenkins lookup3 checksum follows immediately after the messages.
 	end := current + chunkSize
 
-	// Determine message header size based on flags.
-	// V2 message format: Type (1) + Size (2) + Flags (1) = 4 bytes
-	// If H5O_HDR_ATTR_CRT_ORDER_TRACKED (bit 2 = 0x04) is set,
-	// there's an additional 2-byte creation index, making it 6 bytes.
-	msgHeaderSize := uint64(4)
-	if flags&0x04 != 0 {
-		msgHeaderSize = 6
-	}
-
-	for current < end {
-		msgType, msgSize, msgFlags, err := readV2MessageHeader(r, current, isBE)
-		if err != nil {
-			return nil, "", utils.WrapError("message header read failed", err)
-		}
-
-		if msgSize == 0 {
-			current += msgHeaderSize
-			continue
-		}
-
-		data := utils.GetBuffer(int(msgSize))
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		if _, err := r.ReadAt(data, int64(current+msgHeaderSize)); err != nil {
-			utils.ReleaseBuffer(data)
-			return nil, "", utils.WrapError("message data read failed", err)
-		}
-
-		if msgType == MsgName && len(data) > 1 {
-			name = string(data[1:])
-		}
-
-		messages = append(messages, &HeaderMessage{
-			Type:   msgType,
-			Offset: current,
-			Data:   data,
-			Flags:  msgFlags,
-		})
-
-		current += msgHeaderSize + uint64(msgSize)
+	messages, name, err := parseV2ChunkMessages(r, current, end, flags, isBE)
+	if err != nil {
+		return nil, "", err
 	}
 
 	// Follow continuation messages (type 0x0010) to OCHK blocks.
@@ -335,10 +317,17 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 	// We reuse the V1 continuation infrastructure for parsing the continuation
 	// message data (address + size), but V2 OCHK blocks have a different layout.
 	if sb != nil {
-		continuations := findContinuations(messages, sb)
+		continuations, err := findContinuations(messages, sb)
+		if err != nil {
+			return nil, "", err
+		}
+		walk := newContinuationWalk(r, sb, headerAddr)
 		for len(continuations) > 0 {
 			cont := continuations[0]
 			continuations = continuations[1:]
+			if err := walk.admit(cont); err != nil {
+				return nil, "", err
+			}
 
 			contMessages, contName, err := parseV2ContinuationBlock(r, cont.Address, cont.Size, flags, isBE)
 			if err != nil {
@@ -356,7 +345,10 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 
 			// Check for chained continuations inside the OCHK block.
 			if sb != nil {
-				newConts := findContinuations(contMessages, sb)
+				newConts, err := findContinuations(contMessages, sb)
+				if err != nil {
+					return nil, "", err
+				}
 				continuations = append(continuations, newConts...)
 			}
 		}
@@ -389,27 +381,54 @@ func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags 
 	}
 
 	// Messages start after "OCHK" (4 bytes) and end before checksum (4 bytes).
-	msgStart := blockAddr + 4
-	msgEnd := blockAddr + blockSize - 4
+	return parseV2ChunkMessages(r, blockAddr+4, blockAddr+blockSize-4, flags, isBE)
+}
 
-	// Determine message header size (same as main OHDR).
-	msgHeaderSize := uint64(4)
-	if flags&0x04 != 0 {
-		msgHeaderSize = 6
-	}
+// parseV2ChunkMessages decodes the messages of one version-2 object header
+// chunk, [start, end) without the checksum, as H5O__chunk_deserialize does
+// (H5Ocache.c:1246-1522). A message header is 4 bytes, 6 when the header
+// tracks attribute creation order (H5O_SIZEOF_MSGHDR_VERS, H5Opkg.h:112-122).
+//
+// A tail shorter than a message header is the chunk's gap, which C skips
+// (H5Ocache.c:1507-1521): the writer leaves one when a message shrinks and
+// the remainder cannot hold a null message. C refuses a gap in a chunk that
+// has null messages (the space would have gone into one) and a chunk that is
+// a gap only. A message running past the chunk end is corrupt: it would be
+// read from the checksum or the bytes after the chunk.
+//
+// The gap length is not kept: callers get the messages only.
+func parseV2ChunkMessages(r io.ReaderAt, start, end uint64, flags uint8, isBE bool) ([]*HeaderMessage, string, error) {
+	msgHeaderSize := V2MessageHeaderSize(flags)
+	tracked := flags&ohdrFlagAttrCrtTracked != 0
 
 	var messages []*HeaderMessage
 	var name string
-	current := msgStart
+	decoded, nulls := 0, 0
+	for current := start; current < end; {
+		if gap := end - current; gap < msgHeaderSize {
+			if decoded == 0 || nulls != 0 {
+				return nil, "", fmt.Errorf("%w: object header chunk at 0x%x has a %d-byte gap after %d messages, %d of them null",
+					utils.ErrCorrupt, start, gap, decoded, nulls)
+			}
+			break
+		}
 
-	for current < msgEnd {
-		msgType, msgSize, msgFlags, err := readV2MessageHeader(r, current, isBE)
+		msgType, msgSize, msgFlags, crtIdx, err := readV2MessageHeader(r, current, isBE)
 		if err != nil {
-			return nil, "", utils.WrapError("OCHK message header read failed", err)
+			return nil, "", utils.WrapError("message header read failed", err)
+		}
+		next := current + msgHeaderSize + uint64(msgSize)
+		if next > end {
+			return nil, "", fmt.Errorf("%w: object header message at 0x%x (%d bytes) runs past its chunk's end 0x%x",
+				utils.ErrCorrupt, current, msgSize, end)
+		}
+		decoded++
+		if msgType == MsgNil {
+			nulls++
 		}
 
 		if msgSize == 0 {
-			current += msgHeaderSize
+			current = next
 			continue
 		}
 
@@ -417,21 +436,24 @@ func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags 
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(data, int64(current+msgHeaderSize)); err != nil {
 			utils.ReleaseBuffer(data)
-			return nil, "", utils.WrapError("OCHK message data read failed", err)
+			return nil, "", utils.WrapError("message data read failed", err)
 		}
 
 		if msgType == MsgName && len(data) > 1 {
 			name = string(data[1:])
 		}
 
-		messages = append(messages, &HeaderMessage{
+		msg := &HeaderMessage{
 			Type:   msgType,
 			Offset: current,
 			Data:   data,
 			Flags:  msgFlags,
-		})
-
-		current += msgHeaderSize + uint64(msgSize)
+		}
+		if tracked {
+			msg.CreationIndex = crtIdx
+		}
+		messages = append(messages, msg)
+		current = next
 	}
 
 	return messages, name, nil
@@ -476,27 +498,52 @@ func (oh *ObjectHeader) GetReferenceCount() uint32 {
 
 // readV2MessageHeader reads the header of the version-2 object header message
 // at addr: type (1 byte), size (2 bytes) and flags (1 byte), followed by a
-// creation index the caller skips when tracked (H5Ocache.c:1258-1279). Six
-// bytes are read, enough for either header size.
-func readV2MessageHeader(r io.ReaderAt, addr uint64, isBE bool) (MessageType, uint16, uint8, error) {
+// 2-byte creation index when the header tracks attribute creation order
+// (H5Ocache.c:1258-1304). Six bytes are read, enough for either header size;
+// the caller ignores the creation index of an untracked header.
+func readV2MessageHeader(r io.ReaderAt, addr uint64, isBE bool) (MessageType, uint16, uint8, uint16, error) {
 	headerBuf := utils.GetBuffer(6)
 	defer utils.ReleaseBuffer(headerBuf)
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(headerBuf, int64(addr)); err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 	order := binary.ByteOrder(binary.LittleEndian)
 	if isBE {
 		order = binary.BigEndian
 	}
-	return MessageType(headerBuf[0]), order.Uint16(headerBuf[1:3]), headerBuf[3], nil
+	return MessageType(headerBuf[0]), order.Uint16(headerBuf[1:3]), headerBuf[3], order.Uint16(headerBuf[4:6]), nil
+}
+
+// V2MessageHeaderSize is the size of a message header in a version 2 object
+// header with the given flags: type, size and flags, plus a 2-byte creation
+// index when the header tracks attribute creation order (H5O_SIZEOF_MSGHDR_VERS,
+// H5Opkg.h:112-122).
+func V2MessageHeaderSize(ohFlags uint8) uint64 {
+	if ohFlags&ohdrFlagAttrCrtTracked != 0 {
+		return 6
+	}
+	return 4
+}
+
+// TracksAttrCreationOrder reports whether a version 2 object header tracks
+// attribute creation order (H5O_HDR_ATTR_CRT_ORDER_TRACKED).
+func (oh *ObjectHeader) TracksAttrCreationOrder() bool {
+	return oh.Version == 2 && oh.Flags&ohdrFlagAttrCrtTracked != 0
+}
+
+// IndexesAttrCreationOrder reports whether a version 2 object header indexes
+// attribute creation order (H5O_HDR_ATTR_CRT_ORDER_INDEXED).
+func (oh *ObjectHeader) IndexesAttrCreationOrder() bool {
+	return oh.Version == 2 && oh.Flags&ohdrFlagAttrCrtIndexed != 0
 }
 
 // Optional version-2 object header prefix fields (H5Opkg.h H5O_HDR_* flags).
 const (
 	ohdrFlagStoreTimes       = 0x20 // H5O_HDR_STORE_TIMES: 4 x 4-byte times
 	ohdrFlagAttrPhaseChange  = 0x10 // H5O_HDR_ATTR_STORE_PHASE_CHANGE: 2 x 2-byte counts
-	ohdrFlagAttrCrtOrder     = 0x0C // H5O_HDR_ATTR_CRT_ORDER_TRACKED | _INDEXED
+	ohdrFlagAttrCrtTracked   = 0x04 // H5O_HDR_ATTR_CRT_ORDER_TRACKED: messages carry a 2-byte creation index
+	ohdrFlagAttrCrtIndexed   = 0x08 // H5O_HDR_ATTR_CRT_ORDER_INDEXED
 	ohdrTimesSize            = 16
 	ohdrAttrPhaseChangeSize  = 4
 	ohdrPrefixFieldsStartOff = 6 // after "OHDR", version and flags

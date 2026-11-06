@@ -51,7 +51,14 @@ func TestReadLimit_Chunked(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []float64{100, 101, 102, 103, 104, 105, 106, 107}, part)
 
+	// The limit covers the result and the read's chunk bookkeeping: one bit per
+	// chunk of the walked v1 index (8 chunks, 1 byte; TASK-058). At exactly the
+	// result size the bookkeeping does not fit.
 	f.SetReadLimit(8192)
+	_, err = ds.Read()
+	require.ErrorIs(t, err, ErrLimit)
+
+	f.SetReadLimit(8192 + 1)
 	all, err := ds.Read()
 	require.NoError(t, err)
 	require.Len(t, all, 1024)

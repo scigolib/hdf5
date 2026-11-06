@@ -479,6 +479,20 @@ func applyFletcher32(data []byte) ([]byte, error) {
 // (H5Zfletcher32.c).
 const fletcherLen = 4
 
+// Fletcher32 returns the Fletcher32 checksum C computes for data
+// (H5_checksum_fletcher32, H5checksum.c:94-136). The writer's Fletcher32
+// filter appends it; there is one implementation for both directions.
+func Fletcher32(data []byte) uint32 {
+	return fletcher32(data)
+}
+
+// VerifyFletcher32 checks the Fletcher32 checksum stored in the last 4 bytes
+// of a chunk and returns the bytes before it, as the reader's pipeline does;
+// errors wrap utils.ErrCorrupt.
+func VerifyFletcher32(data []byte) ([]byte, error) {
+	return applyFletcher32(data)
+}
+
 // fletcher32 is H5_checksum_fletcher32 (H5checksum.c:94-136): 16-bit words
 // read big-endian, an odd last byte as the high half of a word, both sums
 // folded to 16 bits after every 360 words (the most that cannot overflow) and

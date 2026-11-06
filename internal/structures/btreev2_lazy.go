@@ -202,14 +202,9 @@ func (bt *WritableBTreeV2) DeleteRecordLazy(name string) error {
 	}
 
 	// Phase 1: Find and remove record (same as immediate rebalancing)
-	hash := jenkinsHash(name)
-
-	recordIndex := -1
-	for i, record := range bt.records {
-		if record.NameHash == hash {
-			recordIndex = i
-			break
-		}
+	recordIndex, err := bt.findByName(name)
+	if err != nil {
+		return err
 	}
 
 	if recordIndex == -1 {

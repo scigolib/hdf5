@@ -464,7 +464,7 @@ func TestBTreeV2LoadFromFile_HeapIDPreservation(t *testing.T) {
 	// Verify heap IDs are preserved (first 7 bytes)
 	for i, name := range names {
 		expectedHash := jenkinsHash(name)
-		var expectedHeapID [7]byte
+		var expectedHeapID [8]byte
 		var temp [8]byte
 		binary.LittleEndian.PutUint64(temp[:], heapIDs[i])
 		copy(expectedHeapID[:], temp[:7])

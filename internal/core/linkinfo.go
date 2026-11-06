@@ -135,14 +135,14 @@ func ParseLinkInfoMessage(data []byte, sb *Superblock) (*LinkInfoMessage, error)
 	if len(data) < offset+int(sb.OffsetSize) {
 		return nil, errors.New("link info message truncated (missing fractal heap address)")
 	}
-	lim.FractalHeapAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
+	lim.FractalHeapAddress = DecodeAddress(data[offset:], int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Read name B-tree address (always present)
 	if len(data) < offset+int(sb.OffsetSize) {
 		return nil, errors.New("link info message truncated (missing name B-tree address)")
 	}
-	lim.NameBTreeAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
+	lim.NameBTreeAddress = DecodeAddress(data[offset:], int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Read creation order B-tree address (optional, only if indexed)
@@ -150,7 +150,7 @@ func ParseLinkInfoMessage(data []byte, sb *Superblock) (*LinkInfoMessage, error)
 		if len(data) < offset+int(sb.OffsetSize) {
 			return nil, errors.New("link info message truncated (missing creation order B-tree address)")
 		}
-		lim.CreationOrderBTreeAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
+		lim.CreationOrderBTreeAddress = DecodeAddress(data[offset:], int(sb.OffsetSize), sb.Endianness)
 	} else {
 		lim.CreationOrderBTreeAddress = 0
 	}

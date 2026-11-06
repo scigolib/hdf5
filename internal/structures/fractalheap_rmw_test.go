@@ -115,6 +115,16 @@ func TestFractalHeapLoadFromFile(t *testing.T) {
 				t.Errorf("Existing object 1 mismatch: got %q, want %q", retrieved1, obj1)
 			}
 
+			// The heap learns its live objects from the indexes that point
+			// at them before an insert; a heap in the C layout keeps its IDs.
+			remap, err := heap2.AdoptObjects([][]byte{id1, id2, id3})
+			if err != nil {
+				t.Fatalf("Failed to adopt live objects: %v", err)
+			}
+			if remap != nil {
+				t.Fatalf("C-layout heap returned a heap ID remap: %v", remap)
+			}
+
 			// Insert a NEW object (this is the read-modify-write!)
 			obj4 := []byte("fourth object - appended!")
 

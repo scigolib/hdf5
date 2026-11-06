@@ -48,7 +48,7 @@ func TestBTreeV2_InsertSingleRecord(t *testing.T) {
 	require.Equal(t, expectedHash, bt.records[0].NameHash)
 
 	// Verify heap ID is stored (7 bytes)
-	require.NotEqual(t, [7]byte{}, bt.records[0].HeapID)
+	require.NotEqual(t, [8]byte{}, bt.records[0].HeapID)
 }
 
 // TestBTreeV2_InsertMultipleRecords tests inserting multiple records and sorting.
@@ -499,21 +499,21 @@ func TestBTreeV2_DefaultNodeSize(t *testing.T) {
 // TestInsertRecordSorted tests sorted insertion helper.
 func TestInsertRecordSorted(t *testing.T) {
 	// Empty slice
-	records := []LinkNameRecord{}
-	record := LinkNameRecord{NameHash: 100}
+	records := []IndexRecord{}
+	record := IndexRecord{NameHash: 100}
 	records = insertRecordSorted(records, record)
 	require.Len(t, records, 1)
 	require.Equal(t, uint32(100), records[0].NameHash)
 
 	// Insert at beginning
-	record = LinkNameRecord{NameHash: 50}
+	record = IndexRecord{NameHash: 50}
 	records = insertRecordSorted(records, record)
 	require.Len(t, records, 2)
 	require.Equal(t, uint32(50), records[0].NameHash)
 	require.Equal(t, uint32(100), records[1].NameHash)
 
 	// Insert at end
-	record = LinkNameRecord{NameHash: 150}
+	record = IndexRecord{NameHash: 150}
 	records = insertRecordSorted(records, record)
 	require.Len(t, records, 3)
 	require.Equal(t, uint32(50), records[0].NameHash)
@@ -521,7 +521,7 @@ func TestInsertRecordSorted(t *testing.T) {
 	require.Equal(t, uint32(150), records[2].NameHash)
 
 	// Insert in middle
-	record = LinkNameRecord{NameHash: 75}
+	record = IndexRecord{NameHash: 75}
 	records = insertRecordSorted(records, record)
 	require.Len(t, records, 4)
 	require.Equal(t, uint32(50), records[0].NameHash)
@@ -559,7 +559,7 @@ func TestBTreeV2_HeapIDEncoding(t *testing.T) {
 
 	// Verify 7-byte encoding
 	record := bt.records[0]
-	require.NotEqual(t, [7]byte{}, record.HeapID)
+	require.NotEqual(t, [8]byte{}, record.HeapID)
 
 	// Verify heap ID is non-zero
 	isZero := true

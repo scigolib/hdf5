@@ -92,9 +92,10 @@ func (d *Dataset) ChunkIteratorWithContext(ctx context.Context) (*ChunkIterator,
 }
 
 // collectChunkCoordinates retrieves all chunk coordinates from the B-tree,
-// through the validated, bounded walk (DatasetDescriptor.CollectChunks).
+// through the validated, bounded walk (DatasetDescriptor.CollectChunks),
+// whose entries count against the file's read limit.
 func (d *Dataset) collectChunkCoordinates(desc *core.DatasetDescriptor) ([][]uint64, error) {
-	allChunks, err := desc.CollectChunks(d.file.reader, d.file.sb)
+	allChunks, err := desc.CollectChunks(d.file.reader, d.file.sb, d.file.ReadLimit())
 	if err != nil {
 		return nil, fmt.Errorf("failed to collect chunks: %w", err)
 	}

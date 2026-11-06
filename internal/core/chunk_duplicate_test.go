@@ -47,7 +47,7 @@ func TestCollectChunks_RejectsDuplicateKeys(t *testing.T) {
 		nelmts: 8, elemSize: 1, dataBytes: 8, chunkBytes: 4,
 	}
 
-	_, err := d.CollectChunks(bytes.NewReader(file), sharedTestSB())
+	_, err := d.CollectChunks(bytes.NewReader(file), sharedTestSB(), utils.DefaultReadLimit)
 	require.ErrorIs(t, err, utils.ErrCorrupt)
 	require.ErrorContains(t, err, "more than once")
 }

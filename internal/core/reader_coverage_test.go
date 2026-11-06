@@ -219,10 +219,15 @@ func TestReadVariableLengthString_EmptyString(t *testing.T) {
 // readDenseAttributes — end-to-end with in-memory BTHD + BTLF + FRHP + FHDB
 // ---------------------------------------------------------------------------
 
-// TestReadDenseAttributes_EndToEnd constructs a complete in-memory dense
-// attribute storage (B-tree v2 header, leaf node, fractal heap header,
-// and direct block) containing one attribute, and verifies the full
+// TestReadDenseAttributes_EndToEnd lays out a complete in-memory dense
+// attribute storage (B-tree v2 header, leaf node, fractal heap header and
+// direct block) holding one attribute, and verifies the full
 // readDenseAttributes pipeline.
+//
+// TASK-058: the storage used to be built with an unchecksummed header and
+// leaf and 11-byte records under the attribute type 8; since the index is
+// read with the checked v2 B-tree reader it is built as C writes it
+// (buildDenseStorage: 17-byte type 8 records, checksums).
 func TestReadDenseAttributes_EndToEnd(t *testing.T) {
 	t.Parallel()
 
@@ -232,111 +237,18 @@ func TestReadDenseAttributes_EndToEnd(t *testing.T) {
 		Endianness: binary.LittleEndian,
 	}
 
-	// Build a Version 3 attribute message for a scalar int32 named "density".
-	attrMsg := buildTestV3AttrMessage(t, "density", 12345)
+	buf, attrInfo := buildDenseAttributeStorage([][]byte{buildTestV3AttrMessage(t, "density", 12345)})
 
-	// We need a valid BTHD + BTLF + FRHP + FHDB.
-	// Addresses in our memory buffer:
-	//   0x0100 : BTHD (B-tree v2 header)
-	//   0x0200 : BTLF (B-tree v2 leaf node)
-	//   0x0300 : FRHP (Fractal Heap header)
-	//   0x0500 : FHDB (Direct block with the attribute data)
-
-	const bthdAddr = 0x0100
-	const btlfAddr = 0x0200
-	const frhpAddr = 0x0300
-	const fhdbAddr = 0x0500
-
-	buf := make([]byte, 0x0800)
-
-	// --- BTHD at 0x0100 ---
-	bthd := buf[bthdAddr:]
-	copy(bthd[0:4], "BTHD")
-	bthd[4] = 0                                          // version
-	bthd[5] = 8                                          // type (attribute name index)
-	binary.LittleEndian.PutUint32(bthd[6:10], 4096)      // node size
-	binary.LittleEndian.PutUint16(bthd[10:12], 11)       // record size (4 hash + 7 heapID)
-	binary.LittleEndian.PutUint16(bthd[12:14], 0)        // depth (0 = leaf root)
-	bthd[14] = 75                                        // split %
-	bthd[15] = 40                                        // merge %
-	binary.LittleEndian.PutUint64(bthd[16:24], btlfAddr) // root node address
-	binary.LittleEndian.PutUint16(bthd[24:26], 1)        // 1 record in root
-	binary.LittleEndian.PutUint64(bthd[26:34], 1)        // 1 total record
-
-	// --- BTLF at 0x0200 ---
-	btlf := buf[btlfAddr:]
-	copy(btlf[0:4], "BTLF")
-	btlf[4] = 0 // version
-	btlf[5] = 8 // type
-	// Record: hash(4) + heapID(7)
-	offset := 6
-	binary.LittleEndian.PutUint32(btlf[offset:offset+4], 0xAABBCCDD) // name hash
-	offset += 4
-	// Heap ID for managed object: type=0 (bits 4-5 of byte 0), offset in heap, length.
-	// We need HeapOffsetSize and HeapLengthSize from the FRHP header.
-	// With MaxHeapSize=16 => HeapOffsetSize = ceil(16/8) = 2.
-	// With MaxDirectBlockSize=4096 and MaxManagedObjSize=512 =>
-	//   HeapLengthSize = min(computeOffsetSize(4096), computeOffsetSize(512))
-	//   = min(2, 2) = 2.
-	// So heap ID: byte0(type=0) + 2-byte offset + 2-byte length + 2 unused = 7 bytes.
-	heapIDBytes := [7]byte{}
-	heapIDBytes[0] = 0x00 // type=0 (managed)
-	// Offset = 0 (start of direct block data).
-	heapIDBytes[1] = 0
-	heapIDBytes[2] = 0
-	// Length = len(attrMsg).
-	heapIDBytes[3] = byte(len(attrMsg) & 0xFF)
-	heapIDBytes[4] = byte((len(attrMsg) >> 8) & 0xFF)
-	// Unused padding.
-	heapIDBytes[5] = 0
-	heapIDBytes[6] = 0
-	copy(btlf[offset:offset+7], heapIDBytes[:])
-
-	// --- FRHP at 0x0300 ---
-	frhp := buf[frhpAddr:]
-	copy(frhp[0:4], "FRHP")
-	frhp[4] = 0                                     // version
-	binary.LittleEndian.PutUint16(frhp[5:7], 7)     // Heap ID Length
-	binary.LittleEndian.PutUint16(frhp[7:9], 0)     // I/O Filters Encoded Length
-	frhp[9] = 0x00                                  // flags (no checksum)
-	binary.LittleEndian.PutUint32(frhp[10:14], 512) // Max Managed Object Size
-	// offset 110: Table Width.
-	binary.LittleEndian.PutUint16(frhp[110:112], 4)
-	// offset 112: Starting Block Size (8 bytes).
-	binary.LittleEndian.PutUint64(frhp[112:120], 4096)
-	// offset 120: Max Direct Block Size (8 bytes).
-	binary.LittleEndian.PutUint64(frhp[120:128], 4096)
-	// offset 128: Max Heap Size (2 bytes) -- log2 of max heap size.
-	binary.LittleEndian.PutUint16(frhp[128:130], 16)
-	// offset 132: Root Block Address (8 bytes).
-	binary.LittleEndian.PutUint64(frhp[132:140], fhdbAddr)
-
-	// --- FHDB at 0x0500 ---
-	fhdb := buf[fhdbAddr:]
-	copy(fhdb[0:4], "FHDB")
-	fhdb[4] = 0 // version
-	// Heap header address (8 bytes).
-	binary.LittleEndian.PutUint64(fhdb[5:13], frhpAddr)
-	// Block offset in heap space (HeapOffsetSize=2 bytes).
-	binary.LittleEndian.PutUint16(fhdb[13:15], 0) // block starts at heap offset 0
-	// Attribute message data starts at offset 15 in the direct block.
-	copy(fhdb[15:], attrMsg)
-
-	reader := bytes.NewReader(buf)
-
-	attrInfo := &AttributeInfoMessage{
-		FractalHeapAddr:    frhpAddr,
-		BTreeNameIndexAddr: bthdAddr,
-	}
-
-	attrs, err := readDenseAttributes(reader, attrInfo, sb)
+	attrs, err := readDenseAttributes(bytes.NewReader(buf), attrInfo, sb)
 	require.NoError(t, err)
 	require.Len(t, attrs, 1)
 	require.Equal(t, "density", attrs[0].Name)
 }
 
 // TestReadDenseAttributes_InvalidHeapHeader tests error when fractal heap
-// header has an invalid signature.
+// header has an invalid signature. TASK-058: the B-tree is built as C
+// writes it (buildDenseStorage), and the error names the fractal heap header
+// (it read "failed to read heap header" before the dense walker).
 func TestReadDenseAttributes_InvalidHeapHeader(t *testing.T) {
 	t.Parallel()
 
@@ -346,49 +258,12 @@ func TestReadDenseAttributes_InvalidHeapHeader(t *testing.T) {
 		Endianness: binary.LittleEndian,
 	}
 
-	const bthdAddr = 0x0100
-	const btlfAddr = 0x0200
-	const frhpAddr = 0x0300
+	buf, attrInfo := buildDenseAttributeStorage([][]byte{buildTestV3AttrMessage(t, "density", 1)})
+	copy(buf[denseTestFRHP:denseTestFRHP+4], "XXXX")
 
-	buf := make([]byte, 0x0500)
-
-	// Valid BTHD.
-	bthd := buf[bthdAddr:]
-	copy(bthd[0:4], "BTHD")
-	bthd[4] = 0
-	bthd[5] = 8
-	binary.LittleEndian.PutUint32(bthd[6:10], 4096)
-	binary.LittleEndian.PutUint16(bthd[10:12], 11)
-	binary.LittleEndian.PutUint16(bthd[12:14], 0)
-	bthd[14] = 75
-	bthd[15] = 40
-	binary.LittleEndian.PutUint64(bthd[16:24], btlfAddr)
-	binary.LittleEndian.PutUint16(bthd[24:26], 1) // 1 record
-	binary.LittleEndian.PutUint64(bthd[26:34], 1)
-
-	// Valid BTLF with 1 record.
-	btlf := buf[btlfAddr:]
-	copy(btlf[0:4], "BTLF")
-	btlf[4] = 0
-	btlf[5] = 8
-	offset := 6
-	binary.LittleEndian.PutUint32(btlf[offset:offset+4], 0x11111111)
-	offset += 4
-	copy(btlf[offset:offset+7], make([]byte, 7))
-
-	// Invalid FRHP.
-	copy(buf[frhpAddr:frhpAddr+4], "XXXX")
-
-	reader := bytes.NewReader(buf)
-
-	attrInfo := &AttributeInfoMessage{
-		FractalHeapAddr:    frhpAddr,
-		BTreeNameIndexAddr: bthdAddr,
-	}
-
-	_, err := readDenseAttributes(reader, attrInfo, sb)
+	_, err := readDenseAttributes(bytes.NewReader(buf), attrInfo, sb)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to read heap header")
+	require.Contains(t, err.Error(), "fractal heap header")
 }
 
 // ---------------------------------------------------------------------------

@@ -95,7 +95,7 @@ func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) (
 		childAddr := readAddress(data[pos:], int(sb.OffsetSize), sb.Endianness)
 		pos += int(sb.OffsetSize)
 
-		if childAddr != 0 && childAddr != 0xFFFFFFFFFFFFFFFF {
+		if childAddr != 0 && childAddr != undefinedAddress {
 			snodAddresses = append(snodAddresses, childAddr)
 		}
 	}
@@ -125,29 +125,10 @@ func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) (
 	return allEntries, nil
 }
 
-// readAddress reads a variable-sized address from byte slice using the specified endianness.
-//
-//nolint:gosec // G602: bounds are checked by clamping size to len(data) before switch
+// readAddress reads a file address of size bytes; an all-ones address is
+// HADDR_UNDEF at any width (core.DecodeAddress, H5Fint.c:3046-3050).
 func readAddress(data []byte, size int, endianness binary.ByteOrder) uint64 {
-	if size > len(data) {
-		size = len(data)
-	}
-
-	switch size {
-	case 1:
-		return uint64(data[0])
-	case 2:
-		return uint64(endianness.Uint16(data[:2]))
-	case 4:
-		return uint64(endianness.Uint32(data[:4]))
-	case 8:
-		return endianness.Uint64(data[:8])
-	default:
-		// Pad to 8 bytes.
-		var buf [8]byte
-		copy(buf[:], data[:size])
-		return endianness.Uint64(buf[:])
-	}
+	return core.DecodeAddress(data, size, endianness)
 }
 
 // BTreeNodeV1 represents a B-tree version 1 node for group symbol tables.

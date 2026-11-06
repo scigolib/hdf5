@@ -38,7 +38,7 @@ func TestFletcher32_OfficialFiles(t *testing.T) {
 
 			desc, err := ds.descriptor()
 			require.NoError(t, err)
-			chunks, err := desc.CollectChunks(f.reader, f.sb)
+			chunks, err := desc.CollectChunks(f.reader, f.sb, utils.DefaultReadLimit)
 			require.NoError(t, err)
 			require.NotEmpty(t, chunks)
 			addr := chunks[0].Address

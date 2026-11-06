@@ -9,7 +9,9 @@ package hdf5
 // except where no C-written file has the combination (said in the case).
 
 import (
+	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -405,4 +407,33 @@ func TestWriterDataspaceMessage_ResizeKeepsVersion(t *testing.T) {
 
 	got := headerMessage(t, datasetHeaderMessages(t, file, "/d"), core.MsgDataspace)
 	require.Equal(t, "02010101"+"0800000000000000"+"ffffffffffffffff", hex.EncodeToString(got.Data))
+}
+
+// TestWriterAttributeDataspace_MatchesC: an attribute's dataspace takes the
+// version of the file's format (H5S_set_version, H5Aint.c:361) and
+// stores its maximum dimensions, equal to the dimensions as
+// H5Screate_simple sets them without a maximum (H5S.c:1291-1298), like a
+// dataset's (review of TASK-072, LOW 3).
+func TestWriterAttributeDataspace_MatchesC(t *testing.T) {
+	for _, tc := range []struct {
+		sb      uint8
+		version uint8
+	}{{SuperblockV0, core.DataspaceVersion1}, {SuperblockV2, core.DataspaceVersion2}} {
+		t.Run(fmt.Sprintf("sb%d", tc.sb), func(t *testing.T) {
+			file := writeOne(t, tc.sb, func(fw *FileWriter) (*DatasetWriter, error) {
+				return fw.CreateDataset("/d", Int32, []uint64{6})
+			}, func(ds *DatasetWriter) error {
+				if err := ds.WriteAttribute("v", []float64{1, 2, 3}); err != nil {
+					return err
+				}
+				return ds.Write(sixInt32s())
+			})
+			msg := headerMessage(t, datasetHeaderMessages(t, file, "/d"), core.MsgAttribute)
+			attr, err := core.ParseAttributeMessage(msg.Data, binary.LittleEndian)
+			require.NoError(t, err)
+			require.Equal(t, tc.version, attr.Dataspace.Version)
+			require.Equal(t, []uint64{3}, attr.Dataspace.Dimensions)
+			require.Equal(t, []uint64{3}, attr.Dataspace.MaxDims)
+		})
+	}
 }

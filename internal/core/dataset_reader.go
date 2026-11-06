@@ -431,69 +431,72 @@ func (di *DatasetInfo) String() string {
 // terabyte (ADR-004 §1). Each chunk is read through ReadBlock, bounded by the
 // file and by the ADR-003 chunk cap.
 func readChunkedData(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, resultElemSize, limit uint64) ([]byte, error) {
-	layout := desc.layout
-
-	// Only the version 1 B-tree index is read here. A version 4 layout can name
-	// a fixed/extensible array or a v2 B-tree; the address in that case points
-	// at a different structure, so reading it as a B-tree would return garbage.
-	if layout.ChunkIndexType != ChunkIndexBTREE {
-		return nil, fmt.Errorf("unsupported chunk index type %d: only the v1 B-tree index is supported: %w",
-			layout.ChunkIndexType, utils.ErrNotSupported)
-	}
-
 	totalBytes, err := desc.ResultSize(desc.nelmts, resultElemSize, limit)
 	if err != nil {
 		return nil, err
 	}
 
-	// The B-tree walk is bounded and every key checked against the chunk grid
-	// (DatasetDescriptor.CollectChunks), before the result is allocated.
-	chunks, err := desc.CollectChunks(r, sb)
-	if err != nil {
-		return nil, fmt.Errorf("failed to collect chunks: %w", err)
-	}
-
 	rawData := make([]byte, totalBytes)
-
-	// Chunks never written read as the fill value; filling first and copying
-	// the stored chunks over it leaves the fill only where storage is missing.
-	if desc.ChunksMissing(len(chunks)) {
-		if err := desc.FillUnallocated(rawData); err != nil {
-			return nil, err
-		}
-	}
-
 	dataDims := desc.dataspace.Dimensions
 	chunkDims := desc.ChunkDims()
 
-	for _, chunk := range chunks {
-		chunkAddr := chunk.Address
+	// Chunks never written read as the fill value (H5Dchunk.c:2936-2949,
+	// 3041-3046). One chunk of fill is built on the first missing chunk; a
+	// zero fill leaves the zeroed result as it is.
+	var fillChunk []byte
+	var fillZero bool
 
-		// The stored size is a uint32 from the B-tree key, i.e. file metadata:
-		// the block funnel bounds it by the file and by the chunk cap
-		// (CVE-2025-7067, ADR-003).
-		chunkData, err := ReadBlock(r, sb, chunkAddr, uint64(chunk.Key.Nbytes), utils.MaxChunkSize, "chunk data")
-		if err != nil {
-			return nil, fmt.Errorf("failed to read chunk at 0x%x: %w", chunkAddr, err)
-		}
-
-		// Apply filters (decompression, etc) if present.
-		if desc.filterPipeline != nil {
-			chunkData, err = desc.filterPipeline.ApplyFiltersMasked(chunkData, chunk.Key.FilterMask, desc.chunkBytes)
+	// The index walk is bounded and every entry checked against the chunk grid
+	// (DatasetDescriptor.VisitChunks); its bookkeeping, at most one bit per
+	// chunk and so at most an eighth of the result, shares the read limit.
+	err = desc.VisitChunks(r, sb, nil, limit-uint64(totalBytes), ChunkVisitor{ //nolint:gosec // G115: a result size is never negative.
+		Stored: func(chunk *ChunkEntry) error {
+			chunkData, err := desc.ReadChunk(r, sb, chunk)
 			if err != nil {
-				return nil, fmt.Errorf("failed to apply filters to chunk at 0x%x: %w", chunkAddr, err)
+				return err
 			}
-		}
 
-		chunkCoords := chunk.Key.Scaled[:len(dataDims)]
+			return copyChunkToArray(chunkData, rawData, chunk.Key.Scaled[:len(dataDims)], chunkDims, dataDims, desc.elemSize)
+		},
+		Missing: func(scaled []uint64) error {
+			if fillChunk == nil {
+				var err error
+				if fillChunk, fillZero, err = desc.FillChunk(); err != nil {
+					return err
+				}
+			}
+			if fillZero {
+				return nil
+			}
 
-		err = copyChunkToArray(chunkData, rawData, chunkCoords, chunkDims, dataDims, desc.elemSize)
-		if err != nil {
-			return nil, fmt.Errorf("failed to copy chunk %v: %w", chunkCoords, err)
-		}
+			return copyChunkToArray(fillChunk, rawData, scaled, chunkDims, dataDims, desc.elemSize)
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to read chunks: %w", err)
 	}
 
 	return rawData, nil
+}
+
+// ReadChunk reads one stored chunk and decodes it through the filter
+// pipeline. The stored size comes from the index, i.e. file metadata: the
+// block funnel bounds it by the file and by the chunk cap (CVE-2025-7067,
+// ADR-003), and no filter may produce more than the chunk's byte size.
+func (d *DatasetDescriptor) ReadChunk(r io.ReaderAt, sb *Superblock, chunk *ChunkEntry) ([]byte, error) {
+	chunkData, err := ReadBlock(r, sb, chunk.Address, uint64(chunk.Key.Nbytes), utils.MaxChunkSize, "chunk data")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read chunk at 0x%x: %w", chunk.Address, err)
+	}
+
+	if d.filterPipeline != nil {
+		chunkData, err = d.filterPipeline.ApplyFiltersMasked(chunkData, chunk.Key.FilterMask, d.chunkBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to apply filters to chunk at 0x%x: %w", chunk.Address, err)
+		}
+	}
+
+	return chunkData, nil
 }
 
 // copyChunkToArray copies chunk data to the correct position in full array.

@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/scigolib/hdf5/internal/core"
 	"github.com/scigolib/hdf5/internal/structures"
@@ -58,9 +59,11 @@ type denseLink struct {
 // Reference: H5Gdense.c - H5G_dense_create().
 func NewDenseGroupWriter(name string) *DenseGroupWriter {
 	return &DenseGroupWriter{
-		name:        name,
-		fractalHeap: structures.NewWritableFractalHeap(512 * 1024), // 512KB default
-		btree:       structures.NewWritableBTreeV2(4096),           // 4KB node
+		name: name,
+		// The C link heap parameters (H5Gdense.c:43-49); its heap IDs are
+		// 7 bytes (H5G_DENSE_FHEAP_ID_LEN, H5Gpkg.h:40).
+		fractalHeap: structures.NewLinkFractalHeap(),
+		btree:       structures.NewWritableBTreeV2(4096), // 4KB node
 		linkInfo: &core.LinkInfoMessage{
 			Version: 0,
 			Flags:   0, // No creation order tracking for MVP
@@ -130,10 +133,19 @@ func (dgw *DenseGroupWriter) WriteToFile(fw *FileWriter, allocator *Allocator, s
 		return 0, errors.New("dense group must have at least one link")
 	}
 
+	// The direct block prefix holds a file address, so the heap layout
+	// depends on the superblock's address size.
+	if err := dgw.fractalHeap.SetAddressSize(sb.OffsetSize); err != nil {
+		return 0, fmt.Errorf("dense group heap: %w", err)
+	}
+
 	// Step 1: Process all links
 	for _, link := range dgw.links {
 		// 1a. Create link message (hard link format)
-		linkMsg := dgw.createLinkMessage(link, sb)
+		linkMsg, err := dgw.createLinkMessage(link, sb)
+		if err != nil {
+			return 0, err
+		}
 
 		// 1b. Insert into fractal heap
 		heapID, err := dgw.fractalHeap.InsertObject(linkMsg)
@@ -141,14 +153,14 @@ func (dgw *DenseGroupWriter) WriteToFile(fw *FileWriter, allocator *Allocator, s
 			return 0, fmt.Errorf("failed to insert link %s into heap: %w", link.name, err)
 		}
 
-		// 1c. Convert heap ID to uint64 for B-tree
-		// Heap ID is 8 bytes, read as little-endian uint64
-		var heapIDUint64 uint64
-		if len(heapID) >= 8 {
-			heapIDUint64 = binary.LittleEndian.Uint64(heapID[:8])
-		} else {
+		// 1c. Convert heap ID to uint64 for B-tree. A link heap ID is 7
+		// bytes, little-endian; the type 5 record stores the same 7 bytes.
+		if len(heapID) == 0 || len(heapID) > 8 {
 			return 0, fmt.Errorf("invalid heap ID length for link %s: %d bytes", link.name, len(heapID))
 		}
+		var idBuf [8]byte
+		copy(idBuf[:], heapID)
+		heapIDUint64 := binary.LittleEndian.Uint64(idBuf[:])
 
 		// 1d. Insert into B-tree v2
 		err = dgw.btree.InsertRecord(link.name, heapIDUint64)
@@ -183,65 +195,35 @@ func (dgw *DenseGroupWriter) WriteToFile(fw *FileWriter, allocator *Allocator, s
 	return ohAddr, nil
 }
 
-// createLinkMessage creates link message for fractal heap storage.
+// createLinkMessage encodes the link message of a hard link as
+// H5O__link_encode writes it into the dense link heap (H5Olink.c:282-380,
+// H5Gdense.c H5G__dense_insert): version 1, flags with the narrowest name
+// length field (bits 0-1) and no optional fields (the link type, creation
+// order and character set take their defaults), the name length, the name,
+// then the target object header address (H5F_addr_encode, little-endian).
 //
-// Format (from H5Olinfo.c - link message):
-//   - Version: 1 (1 byte)
-//   - Type: 0 = Hard Link (1 byte)
-//   - Creation Order Present: 0 (1 byte, bit flags) - MVP: no creation order
-//   - Link Name Encoding: 0 = ASCII/UTF-8 (1 byte)
-//   - Link Name Length: variable (compact uint64 encoding)
-//   - Link Name: UTF-8 bytes
-//   - Link Info:
-//   - For hard link: target object header address (offsetSize bytes)
-//
-// Reference: H5Ollink.c - H5O__link_encode().
-func (dgw *DenseGroupWriter) createLinkMessage(link denseLink, sb *core.Superblock) []byte {
-	nameBytes := []byte(link.name)
-	nameLen := uint64(len(nameBytes))
-
-	// Calculate message size
-	// Version (1) + Type (1) + Flags (1) + Encoding (1) + Name Length (variable) + Name + Address
-	// For MVP: name length encoded as compact uint64 (1-8 bytes based on value)
-	nameLenSize := compactUint64Size(nameLen)
-	messageSize := 4 + nameLenSize + len(nameBytes) + int(sb.OffsetSize)
-
-	buf := make([]byte, messageSize)
-	offset := 0
-
-	// Version (1 byte)
-	buf[offset] = 1 // Link message version 1
-	offset++
-
-	// Type (1 byte): 0 = Hard Link
-	buf[offset] = 0
-	offset++
-
-	// Flags (1 byte)
-	// Bit 0: creation order present (0 = no)
-	// Bit 1: link type field present (0 = no, type is in separate field)
-	// Bit 2: link name character set field present (1 = yes)
-	// Bit 3: link name is stored as a creation order (0 = no)
-	// For MVP: only bit 2 set (character set field present)
-	buf[offset] = 0x04 // Character set field present
-	offset++
-
-	// Link Name Character Set Encoding (1 byte)
-	buf[offset] = 0 // ASCII/UTF-8
-	offset++
-
-	// Link Name Length (compact uint64)
-	encodeCompactUint64(buf[offset:], nameLen)
-	offset += nameLenSize
-
-	// Link Name (UTF-8 bytes)
-	copy(buf[offset:], nameBytes)
-	offset += len(nameBytes)
-
-	// Link Info: For hard link, this is the target object header address
-	writeUint64(buf[offset:], link.targetAddr, int(sb.OffsetSize), sb.Endianness)
-
-	return buf
+// It replaces an encoding with a link type byte, flag 0x04 and a character
+// set byte in fixed positions, which the C library decoded as a creation
+// order flag and garbage, so h5ls and h5dump saw none of the links.
+func (dgw *DenseGroupWriter) createLinkMessage(link denseLink, sb *core.Superblock) ([]byte, error) {
+	lm := &core.LinkMessage{Version: 1, Type: core.LinkTypeHard, Name: link.name}
+	switch n := uint64(len(link.name)); {
+	case n <= math.MaxUint8:
+		// Flags bits 0-1 stay 0: one-byte length.
+	case n <= math.MaxUint16:
+		lm.Flags |= 1
+	case n <= math.MaxUint32:
+		lm.Flags |= 2
+	default:
+		lm.Flags |= 3
+	}
+	lm.LinkValue = make([]byte, sb.OffsetSize)
+	writeUint64(lm.LinkValue, link.targetAddr, int(sb.OffsetSize), binary.LittleEndian)
+	msg, err := core.EncodeLinkMessage(lm, sb)
+	if err != nil {
+		return nil, fmt.Errorf("encode link message %q: %w", link.name, err)
+	}
+	return msg, nil
 }
 
 // createObjectHeader creates object header with Link Info Message.

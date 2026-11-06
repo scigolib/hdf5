@@ -552,18 +552,20 @@ func (w *runWriter) readRuns(coords []uint64) error {
 }
 
 // readHyperslabChunked reads hyperslab from chunked layout dataset.
-// Chunked layout stores data in separate chunks indexed by a B-tree.
 //
-// Only the stored chunks are visited: the B-tree entries (validated and
-// bounded by DatasetDescriptor.CollectChunks) are filtered by the range of
-// chunks the selection overlaps. The grid of overlapping chunk coordinates is
-// never materialized, which used to cost a slice and a formatted map key per
-// grid cell even for chunks that were never written (review finding M1).
-// Missing chunks leave their elements zero.
+// Only the chunks the selection touches are visited, as C builds its piece
+// map from the selection (H5D__create_piece_file_map_hyper, H5Dchunk.c:2070)
+// and looks each chunk up (H5D__chunk_lookup, H5Dchunk.c:4004): the indexes
+// that address a chunk directly are asked per chunk, the walked ones are
+// filtered by the selection (DatasetDescriptor.VisitChunks). Nothing
+// proportional to the whole chunk grid is allocated; the walked indexes keep
+// one bit per touched chunk, charged with the result against the read limit.
+// Chunks never written read as the fill value (H5Dchunk.c:2936-2949,
+// 3041-3046).
 //
 // The result is sized under the read limit (DatasetDescriptor.ResultSize): a
 // chunked dataset may legitimately be larger than the file, because unwritten
-// chunks read as the fill value (H5Dchunk.c:3041-3046).
+// chunks read as the fill value.
 func (d *Dataset) readHyperslabChunked(
 	selection *HyperslabSelection,
 	desc *core.DatasetDescriptor,
@@ -587,48 +589,58 @@ func (d *Dataset) readHyperslabChunked(
 		return nil, err
 	}
 
-	first, last, err := chunkRange(selection, chunkDims, dims)
+	touched, err := selectedChunks(selection, chunkDims, dims)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute overlapping chunks: %w", err)
 	}
 
-	chunks, err := desc.CollectChunks(d.file.reader, d.file.sb)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get chunk index: %w", err)
-	}
-
 	outputData := make([]byte, outSize)
-
-	// Chunks never written read as the fill value (H5Dchunk.c:2936-2949,
-	// 3041-3046): fill the result first, the stored chunks overwrite it below.
-	if chunksMissingInRange(chunks, first, last, len(dims)) {
-		if err := desc.FillUnallocated(outputData); err != nil {
-			return nil, err
-		}
-	}
+	var fillChunk []byte
+	var fillZero bool // A zero fill leaves the zeroed output as it is.
 
 	// Each element is placed at the output offset computed from its
 	// coordinates (see extractChunkPortionRecursive), NOT a running counter:
-	// the chunks are visited in B-tree order, which is not the selection's
-	// row-major order, and missing sparse chunks leave gaps.
-	for i := range chunks {
-		coord := chunks[i].Key.Scaled[:len(dims)]
-		if !chunkInRange(coord, first, last) {
-			continue
-		}
+	// the walked indexes yield chunks in their own order, which is not the
+	// selection's row-major order.
+	err = desc.VisitChunks(d.file.reader, d.file.sb, touched, limit-uint64(outSize), core.ChunkVisitor{ //nolint:gosec // G115: a result size is never negative.
+		Stored: func(chunk *core.ChunkEntry) error {
+			chunkData, err := desc.ReadChunk(d.file.reader, d.file.sb, chunk)
+			if err != nil {
+				return err
+			}
+			extractChunkPortion(chunkData, chunk.Key.Scaled[:len(dims)], chunkDims, dims, selection, desc.ElementSize(), outputData)
 
-		if err := d.extractFromChunk(&chunks[i], chunkDims, dims, selection, desc, outputData); err != nil {
-			return nil, fmt.Errorf("failed to extract from chunk %v: %w", coord, err)
-		}
+			return nil
+		},
+		Missing: func(scaled []uint64) error {
+			if fillChunk == nil {
+				var err error
+				if fillChunk, fillZero, err = desc.FillChunk(); err != nil {
+					return err
+				}
+			}
+			if fillZero {
+				return nil
+			}
+			extractChunkPortion(fillChunk, scaled, chunkDims, dims, selection, desc.ElementSize(), outputData)
+
+			return nil
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to read chunks: %w", err)
 	}
 
 	// Convert bytes to float64
 	return core.ConvertToFloat64(outputData, desc.Datatype(), outputElements)
 }
 
-// chunkRange returns, per dimension, the first and last chunk indices the
-// hyperslab selection overlaps (scaled chunk indices, not element indices).
-func chunkRange(sel *HyperslabSelection, chunkDims, datasetDims []uint64) (first, last []uint64, err error) {
+// selectedChunks returns, per dimension, the chunk coordinates the hyperslab
+// selection touches, as ascending, disjoint ranges. A chunk in the bounding
+// range that falls between strided blocks is left out. The selection was
+// validated against the dataset, its blocks ascend and do not overlap, so the
+// work and the ranges are at most Count[i] along each dimension.
+func selectedChunks(sel *HyperslabSelection, chunkDims, datasetDims []uint64) (core.ChunkSelection, error) {
 	ndims := len(sel.Start)
 
 	// The selection and the dataset must agree on the rank, and the chunk grid
@@ -636,105 +648,32 @@ func chunkRange(sel *HyperslabSelection, chunkDims, datasetDims []uint64) (first
 	// dimensions are rejected at layout parse, but the check is cheap and keeps
 	// this function safe on its own.
 	if len(datasetDims) != ndims || len(chunkDims) < ndims {
-		return nil, nil, fmt.Errorf("rank mismatch: selection %d, chunk %d, dataset %d",
+		return nil, fmt.Errorf("rank mismatch: selection %d, chunk %d, dataset %d",
 			ndims, len(chunkDims), len(datasetDims))
 	}
 
-	for i, dim := range chunkDims {
-		if dim == 0 {
-			return nil, nil, fmt.Errorf("chunk dimension %d is zero", i)
-		}
-	}
-
-	first = make([]uint64, ndims)
-	last = make([]uint64, ndims)
-
+	out := make(core.ChunkSelection, ndims)
 	for i := 0; i < ndims; i++ {
-		first[i] = sel.Start[i] / chunkDims[i]
-
-		// End position = start + (count-1)*stride + block - 1, within the
-		// dataset (the selection was validated against it).
-		endPos := sel.Start[i] + (sel.Count[i]-1)*sel.Stride[i] + sel.Block[i] - 1
-		if endPos >= datasetDims[i] {
-			endPos = datasetDims[i] - 1
+		cd := chunkDims[i]
+		if cd == 0 {
+			return nil, fmt.Errorf("chunk dimension %d is zero", i)
 		}
 
-		last[i] = endPos / chunkDims[i]
-	}
-
-	return first, last, nil
-}
-
-// chunksMissingInRange reports whether the chunk grid cells in [first, last]
-// outnumber the stored chunks there, i.e. some chunk the selection may touch
-// was never written. The descriptor keeps every chunk key inside the grid.
-func chunksMissingInRange(chunks []core.ChunkEntry, first, last []uint64, rank int) bool {
-	cells := uint64(1)
-	for i := range first {
-		var err error
-		if cells, err = utils.SafeMultiply(cells, last[i]-first[i]+1); err != nil {
-			return true
+		var list []core.ChunkRange
+		for b := uint64(0); b < sel.Count[i]; b++ {
+			start := sel.Start[i] + b*sel.Stride[i]
+			end := min(start+sel.Block[i]-1, datasetDims[i]-1)
+			first, last := start/cd, end/cd
+			if n := len(list); n > 0 && first <= list[n-1].Last+1 {
+				list[n-1].Last = max(list[n-1].Last, last) // Touches or overlaps the previous range.
+				continue
+			}
+			list = append(list, core.ChunkRange{First: first, Last: last})
 		}
+		out[i] = list
 	}
 
-	var present uint64
-	for i := range chunks {
-		if chunkInRange(chunks[i].Key.Scaled[:rank], first, last) {
-			present++
-		}
-	}
-
-	return present < cells
-}
-
-// chunkInRange reports whether chunk coordinates lie within [first, last] in
-// every dimension.
-func chunkInRange(coord, first, last []uint64) bool {
-	for i := range first {
-		if coord[i] < first[i] || coord[i] > last[i] {
-			return false
-		}
-	}
-
-	return true
-}
-
-// extractFromChunk reads a single chunk, decompresses if needed, and extracts relevant portion.
-func (d *Dataset) extractFromChunk(
-	chunk *core.ChunkEntry,
-	chunkDims []uint64,
-	datasetDims []uint64,
-	selection *HyperslabSelection,
-	desc *core.DatasetDescriptor,
-	outputData []byte,
-) error {
-	// Read chunk data. The size is a uint32 from the B-tree key, i.e. file
-	// metadata, so it goes through the block funnel: the sibling whole-dataset
-	// path validates the same field, and on a 32-bit target make() would panic
-	// above MaxInt.
-	chunkData, err := core.ReadBlock(d.file.reader, d.file.sb, chunk.Address,
-		uint64(chunk.Key.Nbytes), utils.MaxChunkSize, "chunk data")
-	if err != nil {
-		return fmt.Errorf("failed to read chunk data: %w", err)
-	}
-
-	// Decode through the filter pipeline; no filter may produce more than the
-	// chunk's byte size (review finding H4).
-	if filterPipeline := desc.FilterPipeline(); filterPipeline != nil {
-		chunkData, err = filterPipeline.ApplyFiltersMasked(chunkData, chunk.Key.FilterMask, desc.ChunkBytes())
-		if err != nil {
-			return fmt.Errorf("failed to apply filters: %w", err)
-		}
-	}
-
-	// Extract portion of this chunk that intersects with selection
-	extractChunkPortion(
-		chunkData, chunk.Key.Scaled[:len(datasetDims)], chunkDims, datasetDims,
-		selection, desc.ElementSize(),
-		outputData,
-	)
-
-	return nil
+	return out, nil
 }
 
 // extractChunkPortion extracts the portion of a chunk that intersects with the selection.

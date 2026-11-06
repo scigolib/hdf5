@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"github.com/scigolib/hdf5/internal/core"
 )
 
 // FilterID represents HDF5 standard filter identifiers.
@@ -34,14 +36,6 @@ const filterReserved FilterID = 256
 const (
 	FilterFlagMandatory uint16 = 0x0000 // H5Z_FLAG_MANDATORY
 	FilterFlagOptional  uint16 = 0x0001 // H5Z_FLAG_OPTIONAL
-)
-
-// Filter pipeline message versions (H5Oprivate.h:741-747) and the version
-// H5O_pline_set_version picks for the file's low bound (H5Opline.c:85-93):
-// version 1 for the earliest format, version 2 from the 1.8 format on.
-const (
-	PipelineVersion1 uint8 = 1
-	PipelineVersion2 uint8 = 2
 )
 
 // Filter interface for data transformation.
@@ -162,7 +156,7 @@ func (fp *FilterPipeline) EncodePipelineMessage(version uint8) ([]byte, error) {
 	if fp.IsEmpty() {
 		return nil, errors.New("empty filter pipeline")
 	}
-	if version != PipelineVersion1 && version != PipelineVersion2 {
+	if version != core.PipelineVersion1 && version != core.PipelineVersion2 {
 		return nil, fmt.Errorf("filter pipeline message version %d is not 1 or 2", version)
 	}
 	if len(fp.filters) > maxFilters {
@@ -171,7 +165,7 @@ func (fp *FilterPipeline) EncodePipelineMessage(version uint8) ([]byte, error) {
 
 	buf := make([]byte, 0, 8+len(fp.filters)*32)
 	buf = append(buf, version, byte(len(fp.filters))) //nolint:gosec // G115: at most maxFilters, checked above
-	if version == PipelineVersion1 {
+	if version == core.PipelineVersion1 {
 		buf = append(buf, 0, 0, 0, 0, 0, 0) // reserved
 	}
 	for _, filter := range fp.filters {
@@ -199,7 +193,7 @@ func appendFilter(buf []byte, f Filter, version uint8) ([]byte, error) {
 	// stores the padded length (H5O_ALIGN_OLD), version 2 writes none for the
 	// library's own filters.
 	var name string
-	if version == PipelineVersion1 || f.ID() >= filterReserved {
+	if version == core.PipelineVersion1 || f.ID() >= filterReserved {
 		name = f.Name()
 	}
 	nameLen := 0
@@ -207,7 +201,7 @@ func appendFilter(buf []byte, f Filter, version uint8) ([]byte, error) {
 		nameLen = len(name) + 1
 	}
 	storedNameLen := nameLen
-	if version == PipelineVersion1 {
+	if version == core.PipelineVersion1 {
 		storedNameLen = (nameLen + 7) &^ 7
 	}
 	if storedNameLen > 0xFFFF {
@@ -215,7 +209,7 @@ func appendFilter(buf []byte, f Filter, version uint8) ([]byte, error) {
 	}
 
 	buf = binary.LittleEndian.AppendUint16(buf, uint16(f.ID()))
-	if version == PipelineVersion1 || f.ID() >= filterReserved {
+	if version == core.PipelineVersion1 || f.ID() >= filterReserved {
 		buf = binary.LittleEndian.AppendUint16(buf, uint16(storedNameLen))
 	}
 	buf = binary.LittleEndian.AppendUint16(buf, flags)
@@ -227,7 +221,7 @@ func appendFilter(buf []byte, f Filter, version uint8) ([]byte, error) {
 	for _, v := range cdValues {
 		buf = binary.LittleEndian.AppendUint32(buf, v)
 	}
-	if version == PipelineVersion1 && len(cdValues)%2 != 0 {
+	if version == core.PipelineVersion1 && len(cdValues)%2 != 0 {
 		buf = binary.LittleEndian.AppendUint32(buf, 0)
 	}
 	return buf, nil

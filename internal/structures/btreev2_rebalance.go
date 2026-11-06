@@ -64,15 +64,10 @@ import (
 //
 // Reference: H5B2.c - H5B2_remove(), H5B2int.c - H5B2__remove_internal/leaf().
 func (bt *WritableBTreeV2) DeleteRecordWithRebalancing(name string) error {
-	// Phase 1: Find and remove record
-	hash := jenkinsHash(name)
-
-	recordIndex := -1
-	for i, record := range bt.records {
-		if record.NameHash == hash {
-			recordIndex = i
-			break
-		}
+	// Phase 1: Find and remove record (by hash, then name; H5B2_remove).
+	recordIndex, err := bt.findByName(name)
+	if err != nil {
+		return err
 	}
 
 	if recordIndex == -1 {
@@ -177,7 +172,7 @@ func (bt *WritableBTreeV2) calculateMinRecords() int {
 // Reference: H5B2int.c - H5B2__merge2().
 func (bt *WritableBTreeV2) mergeNodes(left, right *BTreeV2LeafNode) error {
 	// Combine records
-	mergedRecords := make([]LinkNameRecord, len(left.Records)+len(right.Records))
+	mergedRecords := make([]IndexRecord, len(left.Records)+len(right.Records))
 	copy(mergedRecords, left.Records)
 	copy(mergedRecords[len(left.Records):], right.Records)
 
@@ -226,7 +221,7 @@ func (bt *WritableBTreeV2) mergeNodes(left, right *BTreeV2LeafNode) error {
 //nolint:unparam // error reserved for future validation
 func (bt *WritableBTreeV2) redistributeRecords(left, right *BTreeV2LeafNode) error {
 	// Combine all records
-	allRecords := make([]LinkNameRecord, len(left.Records)+len(right.Records))
+	allRecords := make([]IndexRecord, len(left.Records)+len(right.Records))
 	copy(allRecords, left.Records)
 	copy(allRecords[len(left.Records):], right.Records)
 
@@ -275,7 +270,7 @@ func (bt *WritableBTreeV2) borrowFromLeft(current, left *BTreeV2LeafNode) error 
 	left.Records = left.Records[:len(left.Records)-1]
 
 	// Insert at beginning of current
-	current.Records = append([]LinkNameRecord{borrowedRecord}, current.Records...)
+	current.Records = append([]IndexRecord{borrowedRecord}, current.Records...)
 
 	return nil
 }

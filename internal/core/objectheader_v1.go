@@ -43,7 +43,9 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 	// Parse header fields.
 	version := headerBuf[0]
 	if version != 1 {
-		return nil, "", 0, utils.WrapError("invalid v1 header version", nil)
+		// utils.WrapError with a nil cause is nil: this used to return no
+		// error. C: "bad object header version number" (H5Ocache.c:1101).
+		return nil, "", 0, fmt.Errorf("%w: bad object header version number %d", utils.ErrCorrupt, version)
 	}
 
 	numMessages := sb.Endianness.Uint16(headerBuf[2:4])
@@ -70,10 +72,17 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 
 	// Process continuation messages
 	// We need to iterate through messages and follow any continuations
-	continuations := findContinuations(messages, sb)
+	continuations, err := findContinuations(messages, sb)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	walk := newContinuationWalk(r, sb, headerAddr)
 	for len(continuations) > 0 {
 		cont := continuations[0]
 		continuations = continuations[1:]
+		if err := walk.admit(cont); err != nil {
+			return nil, "", 0, err
+		}
 
 		// Parse continuation block
 		contMessages, contName, err := parseV1ContinuationBlock(r, cont.Address, cont.Size, sb)
@@ -91,7 +100,10 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 		}
 
 		// Check if continuation block has more continuations
-		newConts := findContinuations(contMessages, sb)
+		newConts, err := findContinuations(contMessages, sb)
+		if err != nil {
+			return nil, "", 0, err
+		}
 		continuations = append(continuations, newConts...)
 	}
 
@@ -104,23 +116,66 @@ type continuationInfo struct {
 	Size    uint64
 }
 
+// continuationWalk guards the continuation chain of one object header. C
+// loads each chunk through the metadata cache; a chunk reached a second time
+// comes back with the chunk number of its first load and H5O_protect fails
+// with "incorrect chunk number for object header chunk" (H5Oint.c:1063-1064).
+// The walk refuses a repeated address the same way, the header's own address
+// included, so a cycle cannot loop forever. It also caps the bytes of all
+// blocks at the readable end of the file: distinct blocks lie in the file,
+// so together they cannot be larger, and a chain of many small blocks stays
+// bounded by the file's size.
+type continuationWalk struct {
+	seen  map[uint64]bool
+	total uint64
+	limit uint64 // 0: unknown, only repeats are refused.
+}
+
+func newContinuationWalk(r io.ReaderAt, sb *Superblock, headerAddr uint64) *continuationWalk {
+	return &continuationWalk{seen: map[uint64]bool{headerAddr: true}, limit: dataLimit(r, sb)}
+}
+
+// admit records a continuation block, or refuses it with utils.ErrCorrupt.
+func (w *continuationWalk) admit(c continuationInfo) error {
+	if w.seen[c.Address] {
+		return fmt.Errorf("%w: object header continuation at 0x%X is reached twice "+
+			"(incorrect chunk number for object header chunk, H5Oint.c:1063-1064)", utils.ErrCorrupt, c.Address)
+	}
+	w.seen[c.Address] = true
+
+	total, err := utils.SafeAdd(w.total, c.Size)
+	if err != nil || (w.limit > 0 && total > w.limit) {
+		return fmt.Errorf("%w: object header continuation blocks claim more than the file's %d bytes "+
+			"(block of %d bytes at 0x%X)", utils.ErrCorrupt, w.limit, c.Size, c.Address)
+	}
+	w.total = total
+
+	return nil
+}
+
 // findContinuations extracts continuation block information from messages.
-func findContinuations(messages []*HeaderMessage, sb *Superblock) []continuationInfo {
+// A continuation message that cannot be decoded fails the header with
+// utils.ErrCorrupt, as H5O__chunk_deserialize does: it decodes every
+// continuation message and reports "bad continuation message found"
+// (H5Ocache.c:1417-1422) when H5O__cont_decode fails (H5Ocont.c:98-106).
+// Skipping it would return the header without the messages of the chunk it
+// names.
+func findContinuations(messages []*HeaderMessage, sb *Superblock) ([]continuationInfo, error) {
 	var continuations []continuationInfo
 	for _, msg := range messages {
-		if msg.Type == MsgContinuation && len(msg.Data) > 0 {
-			// Parse continuation message data
-			// Format: Address (OffsetSize bytes) + Size (LengthSize bytes)
-			// Reference: H5Ocont.c decode function
-			cont, err := parseContinuationMessage(msg.Data, sb)
-			if err != nil {
-				// Skip invalid continuation messages
-				continue
-			}
-			continuations = append(continuations, cont)
+		if msg.Type != MsgContinuation {
+			continue
 		}
+
+		cont, err := parseContinuationMessage(msg.Data, sb)
+		if err != nil {
+			return nil, fmt.Errorf("%w: bad continuation message found at 0x%X (H5Ocache.c:1420-1422): %w",
+				utils.ErrCorrupt, msg.Offset, err)
+		}
+		continuations = append(continuations, cont)
 	}
-	return continuations
+
+	return continuations, nil
 }
 
 // parseContinuationMessage extracts address and size from continuation message data.
@@ -202,9 +257,12 @@ func parseV1MessagesInBlock(r io.ReaderAt, start, end uint64, maxMessages uint16
 			break
 		}
 
-		// Check if we have enough space for message header
+		// A tail too short for a message header is a gap, which only
+		// version-2 headers may have (H5Ocache.c:1507-1511): version-1
+		// chunks and messages are 8-byte aligned.
 		if current+8 > end {
-			break
+			return nil, "", fmt.Errorf("%w: version 1 object header block at 0x%x has a %d-byte gap",
+				utils.ErrCorrupt, start, end-current)
 		}
 
 		// Read message header (8 bytes).

@@ -356,6 +356,10 @@ func TestDatatypeCodec_CWrittenByteExact(t *testing.T) {
 // it cannot read), measured 2026-11-06; a change means the corpus coverage
 // changed and the floors above need a look.
 const (
-	corpusSkippedFiles   = 65 // mostly family/multi-file members and known-invalid files
+	// Mostly family/multi-file members and known-invalid files. 65 before the
+	// version-2 header gap fix of TASK-058 opened torderattr.h5 and h5stat_tsohm.h5;
+	// 63 before its fractal heap reader found the dense links of h5stat_newgrat.h5
+	// and h5repack_objs.h5 through indirect blocks.
+	corpusSkippedFiles   = 61
 	corpusSkippedHeaders = 0
 )

@@ -61,7 +61,49 @@ type DataLayoutMessage struct {
 	CompactData    []byte   // Data itself (for compact layout).
 	ChunkSize      []uint64 // Chunk dimensions (for chunked layout) - uint64 for HDF5 2.0.0+ support.
 	ChunkKeySize   uint8    // Size of chunk keys in bytes: 4 (uint32) or 8 (uint64).
-	ChunkIndexType uint8    // Chunk index type (version 4 only); ChunkIndexBTREE otherwise.
+	ChunkIndexType uint8    // Chunk index type (versions 4 and 5); ChunkIndexBTREE otherwise.
+	ChunkFlags     uint8    // Chunked layout flags (versions 4 and 5): chunkLayoutFlag*.
+
+	// Index holds the chunk index creation parameters of a version 4 or 5
+	// chunked layout (H5O_layout_chunk_t, H5Oprivate.h:455-488).
+	Index ChunkIndexParams
+}
+
+// ChunkIndexParams holds the creation parameters a version 4 or 5 chunked
+// layout stores after the index type (H5Olayout.c:383-516). Only the fields of
+// the message's index type are set.
+type ChunkIndexParams struct {
+	// SingleNbytes and SingleFilterMask are the stored size and filter mask of
+	// a filtered single chunk (H5O_storage_chunk_single_filt_t).
+	SingleNbytes     uint64
+	SingleFilterMask uint32
+
+	// FArrayPageBits is log2 of the elements in a fixed array data block page.
+	FArrayPageBits uint8
+
+	// EArray holds the extensible array parameters.
+	EArray EArrayParams
+
+	// BT2 holds the v2 B-tree parameters.
+	BT2 BT2Params
+}
+
+// EArrayParams are the extensible array creation parameters (H5EA_create_t,
+// H5EAprivate.h), one byte each in the layout message.
+type EArrayParams struct {
+	MaxNelmtsBits         uint8 // log2 of the most elements the array can hold.
+	IdxBlkElmts           uint8 // Elements stored in the index block.
+	SupBlkMinDataPtrs     uint8 // Least data block pointers in a super block.
+	DataBlkMinElmts       uint8 // Least elements in a data block.
+	MaxDblkPageNelmtsBits uint8 // log2 of the elements in a data block page.
+}
+
+// BT2Params are the v2 B-tree creation parameters stored in the layout
+// message (H5O_layout_chunk_bt2_t).
+type BT2Params struct {
+	NodeSize     uint32
+	SplitPercent uint8
+	MergePercent uint8
 }
 
 // ParseDataLayoutMessage parses a data layout message from header message data.
@@ -72,11 +114,8 @@ func ParseDataLayoutMessage(data []byte, sb *Superblock) (*DataLayoutMessage, er
 
 	version := data[0]
 
-	// Versions 1-4 are defined (H5O_LAYOUT_VERSION_1..4); C rejects any other
-	// (H5Olayout.c:103-104). Version 5 is HDF5 2.0's, not supported here.
-	if version == 5 {
-		return nil, fmt.Errorf("unsupported data layout version: %d: %w", version, utils.ErrNotSupported)
-	}
+	// Versions 1-5 are defined (H5O_LAYOUT_VERSION_1..5, H5Oprivate.h:442-455);
+	// C rejects any other (H5Olayout.c:103-104).
 	if version < 1 || version > 5 {
 		return nil, fmt.Errorf("unsupported data layout version: %d: %w", version, utils.ErrCorrupt)
 	}
@@ -91,7 +130,9 @@ func ParseDataLayoutMessage(data []byte, sb *Superblock) (*DataLayoutMessage, er
 		return parseLayoutV1V2(data, sb, msg)
 	case 3:
 		return parseLayoutV3(data, sb, msg)
-	case 4:
+	case 4, 5:
+		// Version 5 (HDF5 2.0) has the version 4 body; only the width of a
+		// filtered chunk's stored size in the index differs (H5Dfarray.c:55-63).
 		return parseLayoutV4(data, sb, msg)
 	}
 
@@ -413,47 +454,131 @@ func parseChunkedLayoutV4(data []byte, sb *Superblock, msg *DataLayoutMessage) (
 	}
 
 	msg.ChunkIndexType = data[offset]
+	msg.ChunkFlags = flags
 	offset++
 
-	skip, err := chunkIndexParamSize(msg.ChunkIndexType, flags, sb)
+	params, err := decodeChunkIndexParams(data[offset:], msg.ChunkIndexType, flags, sb)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: chunked layout: %w", utils.ErrCorrupt, err)
+	}
+	msg.Index = params.ChunkIndexParams
+
+	offset += params.size
+	if offset+int(sb.OffsetSize) > len(data) {
+		return nil, fmt.Errorf("%w: chunked layout index data truncated: no room for the index address", utils.ErrCorrupt)
 	}
 
-	if offset+skip+int(sb.OffsetSize) > len(data) {
-		return nil, errors.New("chunked layout index data truncated")
-	}
-
-	offset += skip
 	msg.DataAddress = readLayoutAddress(data[offset:], int(sb.OffsetSize), sb.Endianness)
 
 	return msg, nil
 }
 
-// chunkIndexParamSize returns the size of the index creation parameters that
-// follow the index type in a version 4 chunked layout message.
-// Reference: H5Olayout.c:384-516.
-func chunkIndexParamSize(indexType, flags uint8, sb *Superblock) (int, error) {
+// decodedIndexParams is a decoded parameter block and its encoded size.
+type decodedIndexParams struct {
+	ChunkIndexParams
+	size int
+}
+
+// decodeChunkIndexParams decodes the index creation parameters that follow the
+// index type in a version 4 or 5 chunked layout message, with the checks
+// H5O__layout_decode makes (H5Olayout.c:383-516):
+//   - the v1 B-tree cannot appear in these versions (:383-386);
+//   - a single chunk index stores the chunk's size and filter mask only when
+//     the "single index with filter" flag is set (:392-409);
+//   - the fixed array page bits and the five extensible array parameters are
+//     nonzero (:416-418, :431-469);
+//   - the v2 B-tree split and merge percentages are in 1..100 (:481-505);
+//   - any other index type is invalid (:511-512).
+func decodeChunkIndexParams(data []byte, indexType, flags uint8, sb *Superblock) (decodedIndexParams, error) {
+	var p decodedIndexParams
+
+	n, err := chunkIndexParamsSize(indexType, flags, sb)
+	if err != nil {
+		return p, err
+	}
+	if n > len(data) {
+		return p, fmt.Errorf("chunk index data truncated: type %d parameters need %d bytes, have %d", indexType, n, len(data))
+	}
+	p.size = n
+	data = data[:n]
+
+	switch indexType {
+	case ChunkIndexSingle:
+		if n > 0 {
+			ls := int(sb.LengthSize)
+			p.SingleNbytes = readUint64(data, ls, sb.Endianness)
+			p.SingleFilterMask = binary.LittleEndian.Uint32(data[ls:])
+		}
+	case ChunkIndexFArray:
+		if data[0] == 0 {
+			return p, errors.New("invalid fixed array creation parameter: page bits are zero")
+		}
+		p.FArrayPageBits = data[0]
+	case ChunkIndexEArray:
+		p.EArray, err = decodeEArrayParams(data)
+	case ChunkIndexBT2:
+		p.BT2, err = decodeBT2Params(data)
+	}
+
+	return p, err
+}
+
+// chunkIndexParamsSize returns the encoded size of the creation parameters of
+// a version 4 or 5 chunk index type, or an error for a type these versions
+// cannot hold.
+func chunkIndexParamsSize(indexType, flags uint8, sb *Superblock) (int, error) {
 	switch indexType {
 	case ChunkIndexBTREE:
-		return 0, errors.New("chunked layout version 4 cannot use the v1 B-tree index")
+		return 0, errors.New("version 4 cannot use the v1 B-tree index")
 	case ChunkIndexNone:
 		return 0, nil
 	case ChunkIndexSingle:
-		if flags&chunkLayoutFlagSingleWithFilter != 0 {
-			return int(sb.LengthSize) + 4, nil // Chunk size + filter mask.
+		if flags&chunkLayoutFlagSingleWithFilter == 0 {
+			return 0, nil
 		}
 
-		return 0, nil
+		return int(sb.LengthSize) + 4, nil
 	case ChunkIndexFArray:
-		return 1, nil // max_dblk_page_nelmts_bits.
+		return 1, nil
 	case ChunkIndexEArray:
-		return 5, nil // Five one-byte creation parameters.
+		return 5, nil
 	case ChunkIndexBT2:
-		return 6, nil // node_size(4) + split_percent(1) + merge_percent(1).
+		return 6, nil
 	default:
-		return 0, fmt.Errorf("unsupported chunk index type: %d", indexType)
+		return 0, fmt.Errorf("unsupported chunk index type %d", indexType)
 	}
+}
+
+// decodeEArrayParams decodes the five extensible array creation parameters,
+// each of which must be nonzero (H5Olayout.c:431-469).
+func decodeEArrayParams(data []byte) (EArrayParams, error) {
+	for i, b := range data {
+		if b == 0 {
+			return EArrayParams{}, fmt.Errorf("invalid extensible array creation parameter %d: zero", i)
+		}
+	}
+
+	return EArrayParams{
+		MaxNelmtsBits:         data[0],
+		IdxBlkElmts:           data[1],
+		SupBlkMinDataPtrs:     data[2],
+		DataBlkMinElmts:       data[3],
+		MaxDblkPageNelmtsBits: data[4],
+	}, nil
+}
+
+// decodeBT2Params decodes the v2 B-tree creation parameters: node size, then
+// split and merge percentages in 1..100 (H5Olayout.c:481-505).
+func decodeBT2Params(data []byte) (BT2Params, error) {
+	p := BT2Params{NodeSize: binary.LittleEndian.Uint32(data), SplitPercent: data[4], MergePercent: data[5]}
+	if p.SplitPercent == 0 || p.SplitPercent > 100 {
+		return p, fmt.Errorf("bad v2 B-tree split percent %d: must be in 1..100", p.SplitPercent)
+	}
+	if p.MergePercent == 0 || p.MergePercent > 100 {
+		return p, fmt.Errorf("bad v2 B-tree merge percent %d: must be in 1..100", p.MergePercent)
+	}
+
+	return p, nil
 }
 
 // readLayoutAddress decodes a file address of the given width. An address made of
@@ -462,6 +587,14 @@ func chunkIndexParamSize(indexType, flags uint8, sb *Superblock) (int, error) {
 // 4-byte offsets an unallocated dataset stores 0xffffffff, which must not be
 // taken for a location inside the file.
 func readLayoutAddress(data []byte, size int, endianness binary.ByteOrder) uint64 {
+	return DecodeAddress(data, size, endianness)
+}
+
+// DecodeAddress decodes a file address of size bytes (the superblock's
+// offset size). An address made of 0xff bytes only is HADDR_UNDEF at any
+// width and decodes to the 64-bit undefined value, as H5F_addr_decode_len
+// does (H5Fint.c:3046-3050), so callers compare with a single sentinel.
+func DecodeAddress(data []byte, size int, endianness binary.ByteOrder) uint64 {
 	n := min(size, len(data))
 	allOnes := n > 0
 	for _, b := range data[:n] {

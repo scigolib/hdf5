@@ -73,8 +73,12 @@ func TestNewWritableFractalHeap(t *testing.T) {
 		t.Errorf("Expected max object size %d, got %d", DefaultMaxManagedObjectSize, heap.Header.MaxManagedObjectSize)
 	}
 
-	if heap.Header.FreeSpace != DefaultStartingBlockSize {
-		t.Errorf("Expected free space %d, got %d", DefaultStartingBlockSize, heap.Header.FreeSpace)
+	// The block prefix is not free space (H5HFdblock.c:347-366): signature,
+	// version, an 8-byte heap address, the block offset and the checksum
+	// (H5HF_MAN_ABS_DIRECT_OVERHEAD, H5HFpkg.h:102-109).
+	prefix := cDirectBlockPrefix(heap)
+	if heap.Header.FreeSpace != DefaultStartingBlockSize-prefix {
+		t.Errorf("Expected free space %d, got %d", DefaultStartingBlockSize-prefix, heap.Header.FreeSpace)
 	}
 
 	if heap.Header.NumManagedObjects != 0 {
@@ -90,9 +94,17 @@ func TestNewWritableFractalHeap(t *testing.T) {
 		t.Errorf("Expected block size %d, got %d", DefaultStartingBlockSize, heap.DirectBlock.Size)
 	}
 
-	if heap.DirectBlock.FreeOffset != 0 {
-		t.Errorf("Expected free offset 0, got %d", heap.DirectBlock.FreeOffset)
+	// The first object goes right after the prefix: C offsets count it
+	// (H5HFdblock.c:163, H5HFman.c:386-399).
+	if heap.DirectBlock.FreeOffset != prefix {
+		t.Errorf("Expected free offset %d, got %d", prefix, heap.DirectBlock.FreeOffset)
 	}
+}
+
+// cDirectBlockPrefix is H5HF_MAN_ABS_DIRECT_OVERHEAD (H5HFpkg.h:102-109) of
+// a checksummed heap in a file with 8-byte addresses.
+func cDirectBlockPrefix(heap *WritableFractalHeap) uint64 {
+	return 4 + 1 + 8 + uint64(heap.Header.HeapOffsetSize) + 4
 }
 
 //nolint:gocognit // Complex test with multiple scenarios and validation steps
@@ -160,7 +172,7 @@ func TestFractalHeapInsertObject(t *testing.T) {
 				t.Errorf("Expected 1 object, got %d", heap.Header.NumManagedObjects)
 			}
 
-			expectedFree := DefaultStartingBlockSize - uint64(len(tt.data))
+			expectedFree := DefaultStartingBlockSize - cDirectBlockPrefix(heap) - uint64(len(tt.data))
 			if heap.Header.FreeSpace != expectedFree {
 				t.Errorf("Expected free space %d, got %d", expectedFree, heap.Header.FreeSpace)
 			}
@@ -207,7 +219,7 @@ func TestFractalHeapMultipleInserts(t *testing.T) {
 		totalSize += len(name)
 	}
 
-	expectedFree := DefaultStartingBlockSize - uint64(totalSize)
+	expectedFree := DefaultStartingBlockSize - cDirectBlockPrefix(heap) - uint64(totalSize)
 	if heap.Header.FreeSpace != expectedFree {
 		t.Errorf("Expected free space %d, got %d", expectedFree, heap.Header.FreeSpace)
 	}
@@ -340,8 +352,10 @@ func TestFractalHeapRoundTrip(t *testing.T) {
 		heapIDs[name] = heapID
 	}
 
-	// Write to mock file
-	writer := NewMockWriter()
+	// Write to a flat file image: the core reader reads an object at its own
+	// position inside the block, which MockWriter (reads only at the start
+	// of a write) cannot serve.
+	writer := newFlatFile()
 	allocator := NewMockAllocator(0x1000)
 	sb := &core.Superblock{
 		OffsetSize: 8,
@@ -354,15 +368,15 @@ func TestFractalHeapRoundTrip(t *testing.T) {
 		t.Fatalf("Failed to write heap: %v", err)
 	}
 
-	// Read back using the existing read implementation
-	readHeap, err := OpenFractalHeap(writer, headerAddr, sb.LengthSize, sb.OffsetSize, sb.Endianness)
+	// Read back through the library's one fractal heap reader.
+	readHeap, err := core.OpenFractalHeap(writer, sb, headerAddr)
 	if err != nil {
 		t.Fatalf("Failed to open heap: %v", err)
 	}
 
 	// Verify all objects can be read back
 	for name, heapID := range heapIDs {
-		data, err := readHeap.ReadObject(heapID)
+		data, err := readHeap.Object(heapID)
 		if err != nil {
 			t.Errorf("Failed to read object %s: %v", name, err)
 			continue

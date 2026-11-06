@@ -36,8 +36,15 @@ func TestParseDataLayoutMessage(t *testing.T) {
 			errContains: "unsupported data layout version",
 		},
 		{
-			name:        "unsupported version 5",
-			data:        []byte{0x05, 0x01},
+			// Version 5 is HDF5 2.0's and is now decoded like version 4; a
+			// two-byte contiguous body is too short for its address.
+			name:    "version 5 truncated contiguous body",
+			data:    []byte{0x05, 0x01},
+			wantErr: true,
+		},
+		{
+			name:        "unsupported version 6",
+			data:        []byte{0x06, 0x01},
 			wantErr:     true,
 			errContains: "unsupported data layout version",
 		},

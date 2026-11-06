@@ -17,6 +17,13 @@ import "github.com/scigolib/hdf5/internal/utils"
 // error. Contiguous and compact datasets are bounded by the storage measured in
 // the file and are not affected.
 //
+// The same limit bounds, for the whole File, the metadata kept to resolve
+// shared messages: committed datatypes referred to by attributes and datasets
+// (their message bytes and an estimate of the decoded type) and the name heaps
+// of External File Lists. Each is read and charged once per File; a file whose
+// references need more fails with an error that wraps ErrLimit, and raising
+// the limit lets a later read resolve them.
+//
 // The default is 4 GiB. Passing 0 restores the default; passing math.MaxUint64
 // removes the limit, so the library allocates whatever the file's metadata
 // claims, as the C library would let a caller do. It is safe to call

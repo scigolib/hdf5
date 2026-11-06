@@ -339,6 +339,10 @@ func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr 
 	// Get parent group metadata.
 	var heapAddr, btreeAddr uint64
 	if parentPath == "" || parentPath == "/" {
+		if !fw.rootHasSymbolTable() {
+			// A root of the 1.8 format keeps its links in its object header.
+			return fw.linkMessageToGroup(fw.rootGroupAddr, childName, childAddr, softTarget)
+		}
 		heapAddr = fw.rootHeapAddr
 		btreeAddr = fw.rootBTreeAddr
 	} else {
@@ -570,7 +574,7 @@ func (fw *FileWriter) readGroupBTree(btreeAddr uint64) (*structures.BTreeNodeV1,
 
 		node.Keys = append(node.Keys, key)
 		node.ChildPointers = append(node.ChildPointers, child)
-		if child != 0 && child != 0xFFFFFFFFFFFFFFFF {
+		if child != 0 && child != undefinedAddress {
 			snodAddrs = append(snodAddrs, child)
 		}
 	}
@@ -583,21 +587,11 @@ func (fw *FileWriter) readGroupBTree(btreeAddr uint64) (*structures.BTreeNodeV1,
 	return node, snodAddrs, nil
 }
 
-// readAddrFromBuf reads a variable-sized address from a byte buffer.
+// readAddrFromBuf reads a file address of size bytes from a byte buffer; an
+// all-ones address is HADDR_UNDEF at any width (core.DecodeAddress,
+// H5Fint.c:3046-3050).
 func readAddrFromBuf(data []byte, size int, endianness binary.ByteOrder) uint64 {
-	if size > len(data) {
-		size = len(data)
-	}
-	switch size {
-	case 2:
-		return uint64(endianness.Uint16(data[:2]))
-	case 4:
-		return uint64(endianness.Uint32(data[:4]))
-	case 8:
-		return endianness.Uint64(data[:8])
-	default:
-		return uint64(data[0])
-	}
+	return core.DecodeAddress(data, size, endianness)
 }
 
 // updateGroupHeapAddr updates the heap address for a group.

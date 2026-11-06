@@ -29,17 +29,11 @@ const (
 //     which a version 2 or 3 superblock implies; a version 0 or 1 superblock
 //     is the earliest format, where version 2 stays (H5Ofill.c:150-158).
 func NewDatasetFillValue(dt *DatatypeMessage, layoutClass DataLayoutClass, superblockVersion uint8) *FillValueMessage {
-	f := &FillValueMessage{Version: fillVersion2, FillTime: FillTimeIfSet, Size: 0}
-	if superblockVersion >= Version2 {
-		f.Version = fillVersion3
-	}
-	switch layoutClass {
-	case LayoutCompact:
-		f.AllocTime = AllocTimeEarly
-	case LayoutChunked, LayoutVirtual:
-		f.AllocTime = AllocTimeIncr
-	default:
-		f.AllocTime = AllocTimeLate
+	f := &FillValueMessage{
+		Version:   FillValueVersionFor(superblockVersion),
+		AllocTime: defaultAllocTime(layoutClass),
+		FillTime:  FillTimeIfSet,
+		Size:      0,
 	}
 	if containsVarLen(dt) {
 		f.FillTime = FillTimeAlloc

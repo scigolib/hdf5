@@ -167,22 +167,19 @@ func readSuperblockAt(r io.ReaderAt, addr, size uint64, sizeKnown bool) (*Superb
 		return nil, err
 	}
 
-	// Helper function to read variable-sized values
+	// readValue decodes one of the superblock's address fields. Every field
+	// read here is an address (base, free-space or extension, EOF, root group
+	// and the root's cached B-tree and heap), so an all-ones value of the
+	// file's offset width is the undefined address (H5F_addr_decode,
+	// H5Fint.c:3046-3050).
 	readValue := func(offset int, size uint8) (uint64, error) {
 		if offset < 0 || offset+int(size) > len(buf) {
 			return 0, fmt.Errorf("buffer overflow: offset=%d, size=%d", offset, size)
 		}
 
-		data := buf[offset : offset+int(size)]
 		switch size {
-		case 1:
-			return uint64(data[0]), nil
-		case 2:
-			return uint64(endianness.Uint16(data)), nil
-		case 4:
-			return uint64(endianness.Uint32(data)), nil
-		case 8:
-			return endianness.Uint64(data), nil
+		case 1, 2, 4, 8:
+			return DecodeAddress(buf[offset:offset+int(size)], int(size), endianness), nil
 		default:
 			return 0, fmt.Errorf("unsupported size: %d", size)
 		}
