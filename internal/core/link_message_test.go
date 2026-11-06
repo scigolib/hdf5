@@ -120,19 +120,11 @@ func TestLinkMessageExternalLinkRoundTrip(t *testing.T) {
 	fileName := "external.h5"
 	objectPath := "/dataset"
 
-	linkValue := make([]byte, 2+len(fileName)+2+len(objectPath))
-	offset := 0
-
-	// File name length + file name
-	binary.LittleEndian.PutUint16(linkValue[offset:offset+2], uint16(len(fileName)))
-	offset += 2
-	copy(linkValue[offset:], fileName)
-	offset += len(fileName)
-
-	// Object path length + object path
-	binary.LittleEndian.PutUint16(linkValue[offset:offset+2], uint16(len(objectPath)))
-	offset += 2
-	copy(linkValue[offset:], objectPath)
+	// The C layout (H5L.c:644-656): length, version/flags byte, file\0, path\0.
+	linkValue, err := EncodeExternalLinkValue(fileName, objectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	original := &LinkMessage{
 		Version:   1,
@@ -451,15 +443,7 @@ func TestLinkMessageGetters(t *testing.T) {
 		fileName := "external.h5"
 		objectPath := "/dataset"
 
-		linkValue := make([]byte, 2+len(fileName)+2+len(objectPath))
-		offset := 0
-		binary.LittleEndian.PutUint16(linkValue[offset:], uint16(len(fileName)))
-		offset += 2
-		copy(linkValue[offset:], fileName)
-		offset += len(fileName)
-		binary.LittleEndian.PutUint16(linkValue[offset:], uint16(len(objectPath)))
-		offset += 2
-		copy(linkValue[offset:], objectPath)
+		linkValue := mustExternalLinkValue(t, fileName, objectPath)
 
 		lm := &LinkMessage{
 			Type:      LinkTypeExternal,

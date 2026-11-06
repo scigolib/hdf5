@@ -28,22 +28,23 @@ func (fw *FileWriter) registerGroup(path string, heapAddr, btreeAddr, headerAddr
 	}
 }
 
-// symbolTableAddrs returns the B-tree and local heap addresses of a root
-// group: btreeAddr and heapAddr when both are known (a version 0 superblock
-// caches them), otherwise those of the symbol table message of oh, which
-// holds two addresses of the file's offset size (H5O__stab_decode,
-// H5Ostab.c). Without such a message they are returned unchanged.
-func symbolTableAddrs(oh *core.ObjectHeader, sb *core.Superblock, btreeAddr, heapAddr uint64) (btree, heap uint64) {
-	if btreeAddr != 0 && heapAddr != 0 {
-		return btreeAddr, heapAddr
-	}
+// symbolTableAddrs returns the B-tree and local heap addresses of the root
+// group's symbol table: those of the symbol table message of its header oh,
+// or zero when the header has none (a group of the 1.8 format). As in
+// H5G_mkroot (H5Groot.c:213-222), the addresses a version 0 superblock
+// caches in the root entry do not decide: a cache that names a table the
+// root header no longer has, as after an external link converted the root,
+// is dropped. Deviation: C, opening for writing, checks the message against
+// the cache and repairs a broken message from it (H5G__stab_valid); the
+// message is taken as it is here.
+func symbolTableAddrs(oh *core.ObjectHeader, sb *core.Superblock) (btree, heap uint64) {
 	off := int(sb.OffsetSize)
 	for _, msg := range oh.Messages {
 		if msg.Type == core.MsgSymbolTable && len(msg.Data) >= 2*off {
 			return readAddressLE(msg.Data[:off]), readAddressLE(msg.Data[off : 2*off])
 		}
 	}
-	return btreeAddr, heapAddr
+	return 0, 0
 }
 
 // loadExistingGroups registers the groups an opened file already holds, so

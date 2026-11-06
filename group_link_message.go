@@ -109,12 +109,22 @@ func addressDefined(addr uint64, offsetSize uint8) bool {
 	return addr != undefinedAddress>>(64-8*uint(offsetSize))
 }
 
-// newLinkMessage builds the link message H5O__link_encode writes for a hard
-// link to childAddr, or a soft link to softTarget when it is not empty
-// (H5Olink.c:296-380): an ASCII name (the default link creation property
-// list), the narrowest name length field, the link type stored only for a
-// soft link, and the creation order when the group tracks it.
-func newLinkMessage(sb *core.Superblock, name string, childAddr uint64, softTarget string, corder int64, corderValid bool) (*core.LinkMessage, error) {
+// newLinkTarget is what a new link points at: the object at addr (a hard
+// link), the path soft (a soft link, when not empty), or the object extPath
+// in the file extFile (an external link, when extFile is not empty).
+type newLinkTarget struct {
+	addr             uint64
+	soft             string
+	extFile, extPath string
+}
+
+// newLinkMessage builds the link message H5O__link_encode writes for a hard,
+// soft or external link to t (H5Olink.c:296-391): an ASCII name (the default
+// link creation property list), the narrowest name length field, the link
+// type stored only for a soft or external link, and the creation order when
+// the group tracks it. The value of an external link is the user data
+// H5Lcreate_external builds (H5L.c:644-656) behind its 16-bit length.
+func newLinkMessage(sb *core.Superblock, name string, t newLinkTarget, corder int64, corderValid bool) (*core.LinkMessage, error) {
 	lm := &core.LinkMessage{Version: 1, Type: core.LinkTypeHard, Name: name}
 	switch n := uint64(len(name)); {
 	case n == 0:
@@ -130,18 +140,27 @@ func newLinkMessage(sb *core.Superblock, name string, childAddr uint64, softTarg
 		lm.Flags |= core.LinkFlagCreationOrderBit
 		lm.CreationOrder = uint64(corder) //nolint:gosec // G115: C stores the int64 creation order as 8 raw bytes (INT64ENCODE)
 	}
-	if softTarget == "" {
+	switch {
+	case t.extFile != "":
+		v, err := core.EncodeExternalLinkValue(t.extFile, t.extPath)
+		if err != nil {
+			return nil, err
+		}
+		lm.Type = core.LinkTypeExternal
+		lm.Flags |= core.LinkFlagLinkTypeFieldBit
+		lm.LinkValue = v
+	case t.soft != "":
+		if len(t.soft) > math.MaxUint16 {
+			return nil, fmt.Errorf("soft link target of %d bytes exceeds the 16-bit length field", len(t.soft))
+		}
+		lm.Type = core.LinkTypeSoft
+		lm.Flags |= core.LinkFlagLinkTypeFieldBit
+		lm.LinkValue = binary.LittleEndian.AppendUint16(nil, uint16(len(t.soft))) //nolint:gosec // G115: checked above
+		lm.LinkValue = append(lm.LinkValue, t.soft...)
+	default:
 		lm.LinkValue = make([]byte, sb.OffsetSize)
-		writeAddressLE(lm.LinkValue, childAddr)
-		return lm, nil
+		writeAddressLE(lm.LinkValue, t.addr)
 	}
-	if len(softTarget) > math.MaxUint16 {
-		return nil, fmt.Errorf("soft link target of %d bytes exceeds the 16-bit length field", len(softTarget))
-	}
-	lm.Type = core.LinkTypeSoft
-	lm.Flags |= core.LinkFlagLinkTypeFieldBit
-	lm.LinkValue = binary.LittleEndian.AppendUint16(nil, uint16(len(softTarget))) //nolint:gosec // G115: checked above
-	lm.LinkValue = append(lm.LinkValue, softTarget...)
 	return lm, nil
 }
 
@@ -267,9 +286,9 @@ func (g *linkGroup) compactLinks(sb *core.Superblock) ([]compactLink, error) {
 // newLink encodes the link message of a new link, with the next creation
 // order of the group when it tracks creation order; the link info message
 // then counts one more (H5Gobj.c:451-458).
-func (g *linkGroup) newLink(sb *core.Superblock, name string, childAddr uint64, softTarget string) ([]byte, error) {
+func (g *linkGroup) newLink(sb *core.Superblock, name string, t newLinkTarget) ([]byte, error) {
 	track := g.linfo.HasCreationOrderTracking()
-	lm, err := newLinkMessage(sb, name, childAddr, softTarget, g.linfo.MaxCreationOrder, track)
+	lm, err := newLinkMessage(sb, name, t, g.linfo.MaxCreationOrder, track)
 	if err != nil {
 		return nil, err
 	}
@@ -288,14 +307,19 @@ func (g *linkGroup) newLink(sb *core.Superblock, name string, childAddr uint64, 
 
 // encodeLinkInfo stores the link info message, changed in memory, in the
 // header's message list. Only its maximum creation order and its addresses
-// change, so its size stays the same.
+// change, so its size stays the same. A version 1 header keeps each message
+// padded to a multiple of eight bytes (H5O_ALIGN_OLD, H5Opkg.h), and the
+// message read from it carries the padding; the encoding is padded the same.
 func (g *linkGroup) encodeLinkInfo(sb *core.Superblock) ([]byte, error) {
 	data, err := core.EncodeLinkInfoMessage(g.linfo, sb)
 	if err != nil {
 		return nil, fmt.Errorf("encode link info message: %w", err)
 	}
-	if len(data) != len(g.linfoMsg.Data) {
-		return nil, fmt.Errorf("link info message re-encoded as %d bytes, was %d", len(data), len(g.linfoMsg.Data))
+	if old := len(g.linfoMsg.Data); len(data) != old {
+		if g.oh.Version != 1 || len(data) > old || (len(data)+7)&^7 != old {
+			return nil, fmt.Errorf("link info message re-encoded as %d bytes, was %d", len(data), old)
+		}
+		data = append(data, make([]byte, old-len(data))...)
 	}
 	return data, nil
 }
@@ -311,7 +335,9 @@ func (g *linkGroup) messageHeaderSize() uint64 {
 
 // rewriteWithLinks writes the group's header back with its link info message
 // re-encoded, without the link messages in drop and with the encoded link
-// messages of add appended (H5O_msg_remove, H5O_msg_append_oh).
+// messages of add appended (H5O_msg_remove, H5O_msg_append_oh). The messages
+// are appended to the list; rewriteObjectHeader lays them out for a version 1
+// or 2 header alike.
 func (fw *FileWriter) rewriteWithLinks(g *linkGroup, drop map[*core.HeaderMessage]bool, add [][]byte) error {
 	sb := fw.file.sb
 	linfoData, err := g.encodeLinkInfo(sb)
@@ -329,9 +355,7 @@ func (fw *FileWriter) rewriteWithLinks(g *linkGroup, drop map[*core.HeaderMessag
 	}
 	g.linfoMsg.Data = linfoData
 	for _, data := range add {
-		if err := core.AddMessageToObjectHeader(g.oh, core.MsgLinkMessage, data); err != nil {
-			return fmt.Errorf("add link message: %w", err)
-		}
+		g.oh.Messages = append(g.oh.Messages, &core.HeaderMessage{Type: core.MsgLinkMessage, Data: data})
 	}
 	return fw.rewriteObjectHeader(g.addr, g.oh)
 }
@@ -344,19 +368,25 @@ func groupLinkExistsError(addr uint64, name string) error {
 
 // insertGroupLink adds a link named name to the group of the 1.8 format whose
 // object header is at groupAddr: a hard link to childAddr, or a soft link to
-// softTarget when it is not empty. As H5G_obj_insert does
+// softTarget when it is not empty (insertLink).
+func (fw *FileWriter) insertGroupLink(groupAddr uint64, name string, childAddr uint64, softTarget string) error {
+	return fw.insertLink(groupAddr, name, newLinkTarget{addr: childAddr, soft: softTarget})
+}
+
+// insertLink adds a link named name to t to the group of the 1.8 format
+// whose object header is at groupAddr. As H5G_obj_insert does
 // (H5Gobj.c:422-580), the link goes to dense storage when the group has it,
 // into the header as a link message while the group holds fewer than
 // max_compact links, and otherwise the group's links move to new dense
 // storage first.
-func (fw *FileWriter) insertGroupLink(groupAddr uint64, name string, childAddr uint64, softTarget string) error {
+func (fw *FileWriter) insertLink(groupAddr uint64, name string, t newLinkTarget) error {
 	sb := fw.file.sb
 	g, err := fw.loadLinkGroup(groupAddr)
 	if err != nil {
 		return err
 	}
 	if g.dense() {
-		return fw.insertDenseLink(g, name, childAddr, softTarget)
+		return fw.insertDenseLink(g, name, t)
 	}
 
 	links, err := g.compactLinks(sb)
@@ -368,11 +398,13 @@ func (fw *FileWriter) insertGroupLink(groupAddr uint64, name string, childAddr u
 			return groupLinkExistsError(g.addr, name)
 		}
 	}
-	data, err := g.newLink(sb, name, childAddr, softTarget)
+	data, err := g.newLink(sb, name, t)
 	if err != nil {
 		return err
 	}
-	if len(links) < g.maxCompact && len(data) < maxHeaderMessageSize {
+	// The size limit counts the message header too, as C does
+	// (H5O_msg_size_oh, H5Gobj.c), and as removeDenseLink checks it.
+	if len(links) < g.maxCompact && uint64(len(data))+g.messageHeaderSize() < maxHeaderMessageSize {
 		// H5G__compact_insert (H5Gcompact.c:168-184): one more link message.
 		return fw.rewriteWithLinks(g, nil, [][]byte{data})
 	}
@@ -384,7 +416,7 @@ func (fw *FileWriter) insertGroupLink(groupAddr uint64, name string, childAddr u
 // and its heap ID into the name index. The link info message changes only
 // when the group tracks creation order; it keeps its size, so it is patched
 // in place.
-func (fw *FileWriter) insertDenseLink(g *linkGroup, name string, childAddr uint64, softTarget string) error {
+func (fw *FileWriter) insertDenseLink(g *linkGroup, name string, t newLinkTarget) error {
 	sb := fw.file.sb
 	st, err := fw.loadDenseLinkStorage(g.linfo)
 	if err != nil {
@@ -395,7 +427,7 @@ func (fw *FileWriter) insertDenseLink(g *linkGroup, name string, childAddr uint6
 	} else if found {
 		return groupLinkExistsError(g.addr, name)
 	}
-	data, err := g.newLink(sb, name, childAddr, softTarget)
+	data, err := g.newLink(sb, name, t)
 	if err != nil {
 		return err
 	}

@@ -313,7 +313,7 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 
 	// A v0.13.9 header keeps its checksum inside the chunk; its messages end
 	// four bytes earlier.
-	messages, name, err := parseV2ChunkMessages(r, current, verifyV2HeaderChunk(r, sb, headerAddr, end), flags, isBE)
+	messages, name, err := parseV2ChunkMessages(r, sb, current, verifyV2HeaderChunk(r, sb, headerAddr, end), flags, isBE)
 	if err != nil {
 		return nil, "", err
 	}
@@ -390,7 +390,7 @@ func parseV2ContinuationBlock(r io.ReaderAt, sb *Superblock, blockAddr, blockSiz
 	}
 
 	// Messages start after "OCHK" (4 bytes) and end before checksum (4 bytes).
-	messages, name, err := parseV2ChunkMessages(r, blockAddr+4, blockAddr+blockSize-4, flags, isBE)
+	messages, name, err := parseV2ChunkMessages(r, sb, blockAddr+4, blockAddr+blockSize-4, flags, isBE)
 	if err != nil {
 		return nil, "", err
 	}
@@ -475,6 +475,12 @@ func verifyV2ContinuationChunk(r io.ReaderAt, sb *Superblock, blockAddr, blockSi
 // (H5Ocache.c:1246-1522). A message header is 4 bytes, 6 when the header
 // tracks attribute creation order (H5O_SIZEOF_MSGHDR_VERS, H5Opkg.h:112-122).
 //
+// The chunk is read with one bounded read and decoded from memory, as C
+// decodes the chunk image it loaded (H5O__cache_chk_deserialize): two reads per
+// message made header parsing syscall-bound. Each message's Data is a slice of
+// that image capped at its own length, so appending to one message never
+// writes into the next.
+//
 // A tail shorter than a message header is the chunk's gap, which C skips
 // (H5Ocache.c:1507-1521): the writer leaves one when a message shrinks and
 // the remainder cannot hold a null message. C refuses a gap in a chunk that
@@ -483,15 +489,27 @@ func verifyV2ContinuationChunk(r io.ReaderAt, sb *Superblock, blockAddr, blockSi
 // read from the checksum or the bytes after the chunk.
 //
 // The gap length is not kept: callers get the messages only.
-func parseV2ChunkMessages(r io.ReaderAt, start, end uint64, flags uint8, isBE bool) ([]*HeaderMessage, string, error) {
+func parseV2ChunkMessages(r io.ReaderAt, sb *Superblock, start, end uint64, flags uint8, isBE bool) ([]*HeaderMessage, string, error) {
 	msgHeaderSize := V2MessageHeaderSize(flags)
 	tracked := flags&ohdrFlagAttrCrtTracked != 0
+	if end < start {
+		return nil, "", fmt.Errorf("%w: object header chunk at 0x%x ends before it starts", utils.ErrCorrupt, start)
+	}
+	image, err := ReadBlock(r, sb, start, end-start, utils.MaxChunkSize, "object header chunk")
+	if err != nil {
+		return nil, "", utils.WrapError("message header read failed", err)
+	}
+	order := binary.ByteOrder(binary.LittleEndian)
+	if isBE {
+		order = binary.BigEndian
+	}
 
 	var messages []*HeaderMessage
 	var name string
 	decoded, nulls := 0, 0
-	for current := start; current < end; {
-		if gap := end - current; gap < msgHeaderSize {
+	for pos := uint64(0); pos < uint64(len(image)); {
+		current := start + pos
+		if gap := uint64(len(image)) - pos; gap < msgHeaderSize {
 			if decoded == 0 || nulls != 0 {
 				return nil, "", fmt.Errorf("%w: object header chunk at 0x%x has a %d-byte gap after %d messages, %d of them null",
 					utils.ErrCorrupt, start, gap, decoded, nulls)
@@ -499,12 +517,12 @@ func parseV2ChunkMessages(r io.ReaderAt, start, end uint64, flags uint8, isBE bo
 			break
 		}
 
-		msgType, msgSize, msgFlags, crtIdx, err := readV2MessageHeader(r, current, isBE)
-		if err != nil {
-			return nil, "", utils.WrapError("message header read failed", err)
-		}
-		next := current + msgHeaderSize + uint64(msgSize)
-		if next > end {
+		hdr := image[pos:]
+		msgType := MessageType(hdr[0])
+		msgSize := order.Uint16(hdr[1:3])
+		msgFlags := hdr[3]
+		next := pos + msgHeaderSize + uint64(msgSize)
+		if next > uint64(len(image)) {
 			return nil, "", fmt.Errorf("%w: object header message at 0x%x (%d bytes) runs past its chunk's end 0x%x",
 				utils.ErrCorrupt, current, msgSize, end)
 		}
@@ -512,23 +530,15 @@ func parseV2ChunkMessages(r io.ReaderAt, start, end uint64, flags uint8, isBE bo
 		if msgType == MsgNil {
 			nulls++
 		}
-
 		if msgSize == 0 {
-			current = next
+			pos = next
 			continue
 		}
 
-		data := utils.GetBuffer(int(msgSize))
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		if _, err := r.ReadAt(data, int64(current+msgHeaderSize)); err != nil {
-			utils.ReleaseBuffer(data)
-			return nil, "", utils.WrapError("message data read failed", err)
-		}
-
+		data := image[pos+msgHeaderSize : next : next]
 		if msgType == MsgName && len(data) > 1 {
 			name = string(data[1:])
 		}
-
 		msg := &HeaderMessage{
 			Type:   msgType,
 			Offset: current,
@@ -536,10 +546,12 @@ func parseV2ChunkMessages(r io.ReaderAt, start, end uint64, flags uint8, isBE bo
 			Flags:  msgFlags,
 		}
 		if tracked {
-			msg.CreationIndex = crtIdx
+			// The creation index is always little-endian (UINT16DECODE,
+			// H5Ocache.c:1302).
+			msg.CreationIndex = binary.LittleEndian.Uint16(hdr[4:6])
 		}
 		messages = append(messages, msg)
-		current = next
+		pos = next
 	}
 
 	return messages, name, nil
@@ -580,27 +592,6 @@ func (oh *ObjectHeader) DecrementReferenceCount() uint32 {
 //   - >1: Object has multiple hard links
 func (oh *ObjectHeader) GetReferenceCount() uint32 {
 	return oh.ReferenceCount
-}
-
-// readV2MessageHeader reads the header of the version-2 object header message
-// at addr: type (1 byte), size (2 bytes) and flags (1 byte), followed by a
-// 2-byte creation index when the header tracks attribute creation order
-// (H5Ocache.c:1258-1304). Six bytes are read, enough for either header size;
-// the caller ignores the creation index of an untracked header.
-func readV2MessageHeader(r io.ReaderAt, addr uint64, isBE bool) (MessageType, uint16, uint8, uint16, error) {
-	headerBuf := utils.GetBuffer(6)
-	defer utils.ReleaseBuffer(headerBuf)
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	if _, err := r.ReadAt(headerBuf, int64(addr)); err != nil {
-		return 0, 0, 0, 0, err
-	}
-	order := binary.ByteOrder(binary.LittleEndian)
-	if isBE {
-		order = binary.BigEndian
-	}
-	// The creation index is always little-endian (UINT16DECODE,
-	// H5Ocache.c:1302).
-	return MessageType(headerBuf[0]), order.Uint16(headerBuf[1:3]), headerBuf[3], binary.LittleEndian.Uint16(headerBuf[4:6]), nil
 }
 
 // V2MessageHeaderSize is the size of a message header in a version 2 object

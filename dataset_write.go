@@ -2344,7 +2344,7 @@ func newFileWriterForExisting(f *File, fw *writer.FileWriter, filename string, c
 	if err != nil {
 		return nil, fmt.Errorf("failed to read root group object header: %w", err)
 	}
-	rootBTreeAddr, rootHeapAddr := symbolTableAddrs(rootOH, f.sb, f.sb.RootBTreeAddr, f.sb.RootHeapAddr)
+	rootBTreeAddr, rootHeapAddr := symbolTableAddrs(rootOH, f.sb)
 
 	fileWriter := &FileWriter{
 		file:          f,

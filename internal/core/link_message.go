@@ -265,34 +265,19 @@ func parseSoftLinkValue(data []byte, offset int, lm *LinkMessage) error {
 	return nil
 }
 
-// parseExternalLinkValue reads external link value (file name + object path).
+// parseExternalLinkValue reads an external link value, its 16-bit length
+// field included, in the C layout or the legacy hdf5-go one
+// (DecodeExternalLinkValue). LinkValue keeps the raw value, so the message
+// encodes back to the same bytes.
 func parseExternalLinkValue(data []byte, offset int, lm *LinkMessage) error {
-	startOffset := offset // Save start for copying entire value including length fields
-
-	if len(data) < offset+2 {
-		return errors.New("link message truncated (missing external link file name length)")
+	if offset > len(data) {
+		return errors.New("link message truncated (missing external link value)")
 	}
-	fileNameLength := binary.LittleEndian.Uint16(data[offset : offset+2])
-	offset += 2
-
-	if len(data) < offset+int(fileNameLength)+2 {
-		return errors.New("link message truncated (missing external link file name or path length)")
+	ext, err := DecodeExternalLinkValue(data[offset:])
+	if err != nil {
+		return err
 	}
-
-	// Calculate total length including both length fields
-	// Format: fileNameLength(2) + fileName + pathLength(2) + path
-	totalLength := 2 + int(fileNameLength) // File name length field + file name
-	pathLengthOffset := offset + int(fileNameLength)
-	pathLength := binary.LittleEndian.Uint16(data[pathLengthOffset : pathLengthOffset+2])
-	totalLength += 2 + int(pathLength) // Path length field + path
-
-	if len(data) < startOffset+totalLength {
-		return errors.New("link message truncated (missing external link data)")
-	}
-
-	// Copy entire external link value from start (including length fields)
-	lm.LinkValue = make([]byte, totalLength)
-	copy(lm.LinkValue, data[startOffset:startOffset+totalLength])
+	lm.LinkValue = append([]byte(nil), data[offset:offset+ext.Size]...)
 	return nil
 }
 
@@ -463,35 +448,9 @@ func (lm *LinkMessage) GetExternalLinkInfo() (string, string, error) {
 	if lm.Type != LinkTypeExternal {
 		return "", "", fmt.Errorf("not an external link (type=%s)", lm.Type)
 	}
-
-	if len(lm.LinkValue) < 4 { // Minimum: 2 bytes file name length + 2 bytes path length
-		return "", "", errors.New("external link value too short")
+	ext, err := DecodeExternalLinkValue(lm.LinkValue)
+	if err != nil {
+		return "", "", err
 	}
-
-	offset := 0
-
-	// Read file name length (2 bytes)
-	fileNameLength := binary.LittleEndian.Uint16(lm.LinkValue[offset : offset+2])
-	offset += 2
-
-	if len(lm.LinkValue) < offset+int(fileNameLength)+2 {
-		return "", "", errors.New("external link value truncated (missing file name or path length)")
-	}
-
-	// Read file name
-	fileName := string(lm.LinkValue[offset : offset+int(fileNameLength)])
-	offset += int(fileNameLength)
-
-	// Read path length (2 bytes)
-	pathLength := binary.LittleEndian.Uint16(lm.LinkValue[offset : offset+2])
-	offset += 2
-
-	if len(lm.LinkValue) < offset+int(pathLength) {
-		return "", "", errors.New("external link value truncated (missing object path)")
-	}
-
-	// Read object path
-	objectPath := string(lm.LinkValue[offset : offset+int(pathLength)])
-
-	return fileName, objectPath, nil
+	return ext.FileName, ext.ObjectPath, nil
 }

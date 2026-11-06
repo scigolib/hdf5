@@ -316,6 +316,7 @@ silently:
 | v0.13.9 | version 2 object header chunk size counts its checksum | `WarnHeaderChunkSize` | refused, `ErrNeedsRepack` |
 | v0.13.9 and earlier | integer and floating-point types in an early encoding | `WarnLegacyDatatype` | refused, `ErrNeedsRepack` |
 | v0.14.2 and earlier | dense attribute storage in a non-C layout | `WarnLegacyDenseLayout` | migrated on the first attribute change |
+| v0.14.2 and earlier | external links in a non-C layout, in an object header of their own | `WarnLegacyExternalLink` | refused, `ErrNeedsRepack` |
 
 `WarnHeaderChecksum` also appears for a file whose header was damaged after it was written;
 the library cannot tell the two apart, so it reports what it found.

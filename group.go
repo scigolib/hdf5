@@ -335,7 +335,8 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 				}
 
 				// Process based on link type.
-				if linkMsg.IsHardLink() {
+				switch {
+				case linkMsg.IsHardLink():
 					// Load the object that this link points to.
 					child, err := loadObject(file, linkMsg.ObjectAddress, linkMsg.Name)
 					if err != nil {
@@ -344,12 +345,19 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 						continue
 					}
 					group.children = append(group.children, child)
-				} else if linkMsg.IsSoftLink() {
+				case linkMsg.IsSoftLink():
 					// Soft link support deferred to v0.11.0-beta.
 					// Soft links are symbolic links within HDF5 file pointing to paths.
 					// Current implementation focuses on hard links (direct object references).
 					// Target version: v0.11.0-beta (write support phase)
 					continue
+				case linkMsg.Type == structures.LinkTypeExternal:
+					// Not followed, but its value is checked: the layout
+					// hdf5-go v0.14.2 and earlier wrote is recorded as
+					// WarnLegacyExternalLink, so OpenForWrite refuses it.
+					if _, err := core.ParseLinkMessageAt(msg.Data, sb, msg.Offset); err != nil {
+						return nil, utils.WrapError("external link message parse failed", err)
+					}
 				}
 			}
 		}

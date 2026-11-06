@@ -36,6 +36,9 @@ const (
 	// WarnSuppressed: the warning limit was reached; later findings are
 	// counted, not listed.
 	WarnSuppressed
+	// WarnLegacyExternalLink: an external link in the layout hdf5-go v0.14.2
+	// and earlier wrote (object header of its own, length-prefixed strings).
+	WarnLegacyExternalLink
 )
 
 // Warning is one finding recorded while a file was read.

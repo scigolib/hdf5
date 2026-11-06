@@ -39,6 +39,12 @@ const (
 	// WarnSuppressed: the warning limit was reached; the Message says how many
 	// further warnings were dropped.
 	WarnSuppressed = WarningCode(core.WarnSuppressed)
+	// WarnLegacyExternalLink: an external link as hdf5-go v0.14.2 and earlier
+	// wrote it, a link message with length-prefixed file and object names in an
+	// object header of its own, linked into the group like an object. It is
+	// read; the C library cannot read the file, and OpenForWrite refuses such a
+	// file with ErrNeedsRepack.
+	WarnLegacyExternalLink = WarningCode(core.WarnLegacyExternalLink)
 )
 
 var warningCodeNames = map[WarningCode]string{
@@ -49,6 +55,7 @@ var warningCodeNames = map[WarningCode]string{
 	WarnLegacyDenseLayout:        "legacy dense storage layout",
 	WarnLegacyDatatype:           "legacy datatype encoding",
 	WarnSuppressed:               "warnings suppressed",
+	WarnLegacyExternalLink:       "legacy external link",
 }
 
 // String returns a short name of the code.

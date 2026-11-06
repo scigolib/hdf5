@@ -118,8 +118,12 @@ func (fw *FileWriter) Delete(path string) error {
 		}
 	}
 
-	// Step 5: Remove from groups map if tracked.
+	// Step 5: Forget what was tracked for the freed object: its group entry,
+	// and its header allocation, which headerSpace trusts over the disk. A
+	// stale size would make a later, smaller header at the same address be
+	// rewritten past its allocation.
 	delete(fw.groups, path)
+	delete(fw.headerAllocs, objectAddr)
 
 	return nil
 }
@@ -341,13 +345,15 @@ func (fw *FileWriter) checkDeletable(addr uint64, sb *core.Superblock) (*core.Ob
 
 // writeRefCount rewrites the object header with an updated reference count.
 // For V2 headers, this adds/updates a RefCount message.
-// For V1 headers, the refcount is part of the header prefix (not rewritten in MVP).
+// For V1 headers, the refcount is the 4-byte field of the header prefix
+// (H5O__cache_serialize, H5Ocache.c), written in place.
 func (fw *FileWriter) writeRefCount(addr uint64, oh *core.ObjectHeader, sb *core.Superblock) error {
-	if oh.Version != 2 {
-		// V1: RefCount is in the header prefix. The ObjectHeaderWriter handles this.
-		// We don't support rewriting V1 headers at this time (they are legacy format).
-		// V1 headers default to refcount=1 and are only used for backward compatibility.
-		return nil
+	switch oh.Version {
+	case 1:
+		return writeV1RefCount(fw, addr, oh)
+	case 2:
+	default:
+		return fmt.Errorf("object header version %d at 0x%X: %w", oh.Version, addr, utils.ErrNotSupported)
 	}
 
 	// V2: Update or add RefCount message (type 0x0016).

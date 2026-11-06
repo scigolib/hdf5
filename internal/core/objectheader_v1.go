@@ -285,11 +285,12 @@ func parseV1MessagesInBlock(r io.ReaderAt, start, end uint64, maxMessages uint16
 			break
 		}
 
-		// Read message data.
-		data := utils.GetBuffer(int(msgSize))
+		// Read message data. The message keeps it, so it gets a buffer of its
+		// own size (a pooled buffer is never returned here; see
+		// parseV2ChunkMessages).
+		data := make([]byte, msgSize)
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(data, int64(current+8)); err != nil {
-			utils.ReleaseBuffer(data)
 			if err == io.EOF {
 				break
 			}
