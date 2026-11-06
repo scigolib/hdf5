@@ -141,7 +141,7 @@ func TestReadChunkedData_Synthetic(t *testing.T) {
 
 	// Call readChunkedData through a validated descriptor (no filter pipeline).
 	r := bytes.NewReader(buf)
-	desc, err := newDatasetDescriptor(r, sb, datatype, dataspace, layout, nil)
+	desc, err := newDatasetDescriptor(r, sb, datatype, dataspace, layout)
 	require.NoError(t, err)
 
 	rawData, err := readChunkedData(r, sb, desc, ResultFloat64, utils.DefaultReadLimit)
@@ -183,7 +183,7 @@ func TestReadChunkedData_ErrorMissingBTree(t *testing.T) {
 
 	// Small buffer that cannot contain valid B-tree.
 	r := bytes.NewReader(make([]byte, 100))
-	desc, err := newDatasetDescriptor(r, sb, datatype, dataspace, layout, nil)
+	desc, err := newDatasetDescriptor(r, sb, datatype, dataspace, layout)
 	require.NoError(t, err)
 
 	_, err = readChunkedData(r, sb, desc, ResultFloat64, utils.DefaultReadLimit)

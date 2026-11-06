@@ -64,6 +64,14 @@ func classifyFile(name string) fileClassification {
 		// H5D__chunk_set_sizes does (element-size dim 4 vs datatype size 65525).
 		class.expectErrorReason = "intentionally corrupt: datatype size contradicts the chunk element size (C's test_misc38 expects open to fail)"
 	}
+	if name == "memleak_H5O_dtype_decode_helper_H5Odtype.h5" {
+		class.expectError = true
+		// /image carries an attribute whose name runs past the end of its
+		// message; C refuses it in H5O__attr_decode (H5Oattr.c:196) and h5dump -A
+		// fails with "error getting attribute information". Before, the bad
+		// attribute was silently skipped.
+		class.expectErrorReason = "intentionally corrupt: /image's attribute name runs past its message (H5Oattr.c:196); h5dump also fails"
+	}
 
 	return class
 }

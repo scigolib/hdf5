@@ -57,15 +57,17 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 	return parseAttributeMessage(data, endianness, nil)
 }
 
-// sharedResolver returns the body of the message of type msgType that a
-// shared-message reference points at (resolveSharedMessage bound to a file).
-type sharedResolver func(ref []byte, msgType MessageType) ([]byte, error)
+// sharedResolver follows the shared-message references of an attribute in one
+// file (resolveSharedMessage and resolveSharedDatatype bound to it). A nil
+// *sharedResolver has no file: a shared field is reported as unresolved.
+type sharedResolver struct {
+	r  io.ReaderAt
+	sb *Superblock
+}
 
-// fileResolver binds resolveSharedMessage to the file r.
-func fileResolver(r io.ReaderAt, sb *Superblock) sharedResolver {
-	return func(ref []byte, msgType MessageType) ([]byte, error) {
-		return resolveSharedMessage(r, sb, ref, msgType)
-	}
+// fileResolver binds shared-message resolution to the file r.
+func fileResolver(r io.ReaderAt, sb *Superblock) *sharedResolver {
+	return &sharedResolver{r: r, sb: sb}
 }
 
 // parseAttributeMessage decodes an attribute message as H5O__attr_decode
@@ -74,9 +76,13 @@ func fileResolver(r io.ReaderAt, sb *Superblock) sharedResolver {
 // field holds a shared-message reference, which C decodes through the shared
 // wrapper (H5Oattr.c:218-221, :240-243); resolve follows it, and a nil resolve
 // reports the shared datatype as unresolved.
-func parseAttributeMessage(data []byte, endianness binary.ByteOrder, resolve sharedResolver) (*Attribute, error) {
+//
+// A shared datatype is decoded once per file and the decoded type is shared
+// by every attribute that refers to it (resolveSharedDatatype); callers must
+// not modify Attribute.Datatype.
+func parseAttributeMessage(data []byte, endianness binary.ByteOrder, resolve *sharedResolver) (*Attribute, error) {
 	if len(data) < 8 {
-		return nil, fmt.Errorf("attribute message too short: %d bytes", len(data))
+		return nil, fmt.Errorf("%w: attribute message too short: %d bytes", utils.ErrCorrupt, len(data))
 	}
 
 	attr := &Attribute{}
@@ -162,12 +168,10 @@ func parseAttributeMessage(data []byte, endianness binary.ByteOrder, resolve sha
 	datatypeData := data[offset : offset+int(datatypeSize)]
 	var err error
 	if typeShared {
-		if datatypeData, err = resolve(datatypeData, MsgDatatype); err != nil {
+		if attr.Datatype, err = resolveSharedDatatype(resolve.r, resolve.sb, datatypeData); err != nil {
 			return nil, fmt.Errorf("attribute datatype: %w", err)
 		}
-	}
-	attr.Datatype, err = ParseDatatypeMessage(datatypeData)
-	if err != nil {
+	} else if attr.Datatype, err = ParseDatatypeMessage(datatypeData); err != nil {
 		return nil, utils.WrapError("datatype parse failed", err)
 	}
 
@@ -184,7 +188,7 @@ func parseAttributeMessage(data []byte, endianness binary.ByteOrder, resolve sha
 
 	dataspaceData := data[offset : offset+int(dataspaceSize)]
 	if spaceShared {
-		if dataspaceData, err = resolve(dataspaceData, MsgDataspace); err != nil {
+		if dataspaceData, err = resolveSharedMessage(resolve.r, resolve.sb, dataspaceData, MsgDataspace); err != nil {
 			return nil, fmt.Errorf("attribute dataspace: %w", err)
 		}
 	}
@@ -470,21 +474,17 @@ func ParseAttributesFromMessages(r io.ReaderAt, messages []*HeaderMessage, sb *S
 		if msg.Type != MsgAttribute {
 			continue
 		}
-		// An attribute message is sharable itself (H5Oattr.c includes
-		// H5Oshared.h); C shares it only in the shared message heap.
-		body, err := messageBody(r, sb, msg)
-		if err != nil {
-			// Log error but continue with other attributes
+		attr, err := parseCompactAttribute(r, sb, msg)
+		if IsSOHMNotSupported(err) {
+			// Valid HDF5 the library cannot read yet: skip this attribute and
+			// keep the others, as the dense path does.
 			continue
 		}
-		attr, err := parseAttributeMessage(body, sb.Endianness, fileResolver(r, sb))
 		if err != nil {
-			// Log error but continue with other attributes
-			continue
+			// C fails the iteration when H5O__attr_decode fails
+			// (H5Oattr.c:113-300); a corrupt attribute is not skipped silently.
+			return nil, fmt.Errorf("attribute message at 0x%x: %w", msg.Offset, err)
 		}
-		// Set reader for variable-length type resolution
-		attr.reader = r
-		attr.offsetSize = int(sb.OffsetSize)
 		attributes = append(attributes, attr)
 	}
 
@@ -498,6 +498,27 @@ func ParseAttributesFromMessages(r io.ReaderAt, messages []*HeaderMessage, sb *S
 	}
 
 	return attributes, nil
+}
+
+// parseCompactAttribute decodes an attribute message stored in an object
+// header. The message is sharable itself (H5Oattr.c includes H5Oshared.h); C
+// shares it only in the shared message heap.
+func parseCompactAttribute(r io.ReaderAt, sb *Superblock, msg *HeaderMessage) (*Attribute, error) {
+	body, err := messageBody(r, sb, msg)
+	if err != nil {
+		return nil, err
+	}
+
+	attr, err := parseAttributeMessage(body, sb.Endianness, fileResolver(r, sb))
+	if err != nil {
+		return nil, err
+	}
+
+	// The reader resolves variable-length values in the global heap.
+	attr.reader = r
+	attr.offsetSize = int(sb.OffsetSize)
+
+	return attr, nil
 }
 
 // Helper functions for float conversion (copied from dataset_reader.go to avoid circular import).

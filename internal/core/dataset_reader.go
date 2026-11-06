@@ -36,12 +36,68 @@ func ReadFloat64(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, limit u
 		return nil, err
 	}
 
-	rawData, err := readRawData(r, sb, desc, ResultFloat64, limit)
+	resultElemSize, err := Float64ResultSize(desc.datatype)
 	if err != nil {
 		return nil, err
 	}
 
-	return convertToFloat64(rawData, desc.datatype, desc.nelmts)
+	rawData, err := readRawData(r, sb, desc, resultElemSize, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	return ConvertToFloat64(rawData, desc.datatype, desc.nelmts)
+}
+
+// flattenArray returns the type each value of a dataset element is decoded
+// from and how many values one element holds: the datatype itself and one, or
+// for an array (nested arrays included) the innermost base type and the
+// product of all array dimensions. C converts an array element as its nelem
+// base values in order (H5T__conv_array, H5Tconv_array.c:195-199), so the
+// values come out flattened in C order with the array dimensions innermost,
+// as h5dump prints them.
+//
+// The size of an array is always nelem × the base size: H5T__array_create sets
+// it (H5Tarray.c:162) and H5T_set_size refuses an array (H5T.c:3049). The
+// decoder takes the size from the file without that check, so a type whose
+// size disagrees is damaged and is refused here before any value is decoded.
+func flattenArray(dt *DatatypeMessage) (*DatatypeMessage, uint64, error) {
+	count := uint64(1)
+	for dt.Class == DatatypeArray {
+		if dt.Base == nil {
+			return nil, 0, fmt.Errorf("%w: array datatype without a base type", utils.ErrCorrupt)
+		}
+		n := uint64(1)
+		for _, d := range dt.ArrayDims {
+			var err error
+			if n, err = utils.SafeMultiply(n, uint64(d)); err != nil {
+				return nil, 0, fmt.Errorf("%w: array datatype element count: %w", utils.ErrCorrupt, err)
+			}
+		}
+		need, err := utils.SafeMultiply(n, uint64(dt.Base.Size))
+		if err != nil || need != uint64(dt.Size) {
+			return nil, 0, fmt.Errorf("%w: array datatype of %d %d-byte elements has size %d "+
+				"(H5Tarray.c:162 makes it the product)", utils.ErrCorrupt, n, dt.Base.Size, dt.Size)
+		}
+		// No overflow: count × n is at most the outermost size, a uint32.
+		count *= n
+		dt = dt.Base
+	}
+
+	return dt, count, nil
+}
+
+// Float64ResultSize returns the in-memory cost of one dataset element in a
+// float64 read, for ResultSize: one float64, or one per value of an array
+// element (flattenArray).
+func Float64ResultSize(datatype *DatatypeMessage) (uint64, error) {
+	_, count, err := flattenArray(datatype)
+	if err != nil {
+		return 0, err
+	}
+
+	// No overflow: count is at most the array's 32-bit size.
+	return ResultFloat64 * count, nil
 }
 
 // readRawData returns the stored bytes of every element of the dataset, for
@@ -77,8 +133,21 @@ func readRawData(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, resultE
 // datatype coverage as the whole-dataset Read() path (notably fixed-point
 // integers of every width/sign — int16, uint8, …), instead of maintaining
 // a second, narrower converter that silently rejected those types.
+//
+// An array element converts to its base values, flattened (flattenArray), so
+// the result holds numElements × the array's value count numbers.
 func ConvertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uint64) ([]float64, error) {
-	return convertToFloat64(rawData, datatype, numElements)
+	base, count, err := flattenArray(datatype)
+	if err != nil {
+		return nil, err
+	}
+
+	values, err := utils.SafeMultiply(numElements, count)
+	if err != nil {
+		return nil, fmt.Errorf("data size overflow (convert to float64): %w", err)
+	}
+
+	return convertToFloat64(rawData, base, values)
 }
 
 // convertToFloat64 converts raw bytes to float64 array based on datatype.
@@ -216,9 +285,14 @@ func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uin
 
 // CheckFloat64Convertible returns an error wrapping utils.ErrNotSupported when
 // the datatype has no float64 conversion, so a reader can refuse it before it
-// reads or fills any storage.
+// reads or fills any storage. An array is convertible when its base is; an
+// array whose size disagrees with its dimensions wraps utils.ErrCorrupt.
 func CheckFloat64Convertible(datatype *DatatypeMessage) error {
-	if !isFloat64Convertible(datatype) {
+	base, _, err := flattenArray(datatype)
+	if err != nil {
+		return err
+	}
+	if !isFloat64Convertible(base) {
 		return fmt.Errorf("unsupported datatype for conversion to float64: %s: %w", datatype, utils.ErrNotSupported)
 	}
 	return nil

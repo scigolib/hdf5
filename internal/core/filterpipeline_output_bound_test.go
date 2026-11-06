@@ -71,7 +71,7 @@ func TestLZFDecompress_OutputBound(t *testing.T) {
 // checksum, which the Fletcher32 step strips afterwards.
 func TestApplyFilters_OutputBoundAllowsFletcher(t *testing.T) {
 	chunk := bytes.Repeat([]byte{7}, 1024)
-	withSum := append(append([]byte(nil), chunk...), 0, 0, 0, 0)
+	withSum := withChecksum(chunk, fletcher32(chunk)) // A valid checksum: it is verified (TASK-073).
 
 	// Encoding order: Fletcher32, then deflate.
 	fp := &FilterPipelineMessage{Filters: []Filter{{ID: FilterFletcher}, {ID: FilterDeflate}}}

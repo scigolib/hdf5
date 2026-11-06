@@ -201,7 +201,9 @@ func TestFillUnallocated_LikeC(t *testing.T) {
 			buf := make([]byte, 12)
 			err := d.FillUnallocated(buf)
 			if tc.failed {
-				require.Error(t, err)
+				// H5E_READERROR "no data can be read" (H5Dio.c:256-260):
+				// a valid file without data, matchable as ErrNoData.
+				require.ErrorIs(t, err, utils.ErrNoData)
 				require.False(t, errors.Is(err, utils.ErrCorrupt), "a valid file: %v", err)
 				return
 			}

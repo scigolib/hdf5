@@ -1,9 +1,11 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/scigolib/hdf5/internal/utils"
 )
@@ -127,26 +129,132 @@ func decodeSharedMessage(data []byte, sb *Superblock) (*sharedMessage, error) {
 //     attribute whose datatype is the committed type it is attached to (valid
 //     HDF5, tnamed_dtype_attr.h5) does not start another resolution.
 //
-// Nothing is cached: each resolution reads one object header, bounded like
-// every other header read.
+// Each target is read once per file: the result is cached in the superblock
+// (sharedCache), as C keeps the target header in its metadata cache
+// (H5O_msg_read → H5O_protect). The returned body is shared; callers must not
+// modify it.
 func resolveSharedMessage(r io.ReaderAt, sb *Superblock, data []byte, msgType MessageType) ([]byte, error) {
-	if r == nil || sb == nil {
-		return nil, fmt.Errorf("shared message of type %d: no file to resolve it in", msgType)
-	}
-
-	sm, err := decodeSharedMessage(data, sb)
+	addr, err := committedTarget(r, sb, data, msgType)
 	if err != nil {
 		return nil, err
 	}
 
-	if sm.kind == shareTypeSOHM {
-		return nil, fmt.Errorf("message of type %d: %w", msgType, errSOHMNotSupported)
+	sb.shared.mu.Lock()
+	defer sb.shared.mu.Unlock()
+
+	return sb.shared.bodyLocked(r, sb, addr, msgType)
+}
+
+// resolveSharedDatatype returns the committed datatype a shared datatype
+// reference points at, decoded once per file and shared read-only by every
+// attribute and dataset that refers to it. Without the sharing, each 37-byte
+// attribute reference to a large compound type would decode its own copy of
+// the type (review-068 finding 2: ~640 KiB per attribute).
+func resolveSharedDatatype(r io.ReaderAt, sb *Superblock, data []byte) (*DatatypeMessage, error) {
+	addr, err := committedTarget(r, sb, data, MsgDatatype)
+	if err != nil {
+		return nil, err
 	}
 
-	header, err := readObjectHeader(r, sm.address, sb, false)
+	c := &sb.shared
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if dt, ok := c.datatypes[addr]; ok {
+		return dt, nil
+	}
+
+	body, err := c.bodyLocked(r, sb, addr, MsgDatatype)
 	if err != nil {
-		return nil, fmt.Errorf("%w: shared message of type %d refers to object header 0x%X: %w",
-			utils.ErrCorrupt, msgType, sm.address, err)
+		return nil, err
+	}
+
+	dt, err := ParseDatatypeMessage(body)
+	if err != nil {
+		return nil, fmt.Errorf("committed datatype in object header 0x%X: %w", addr, err)
+	}
+
+	if c.datatypes == nil {
+		c.datatypes = make(map[uint64]*DatatypeMessage)
+	}
+	c.datatypes[addr] = dt
+
+	return dt, nil
+}
+
+// committedTarget decodes a shared-message reference and returns the address
+// of the object header that holds the committed message.
+func committedTarget(r io.ReaderAt, sb *Superblock, data []byte, msgType MessageType) (uint64, error) {
+	if r == nil || sb == nil {
+		return 0, fmt.Errorf("shared message of type %d: no file to resolve it in", msgType)
+	}
+
+	sm, err := decodeSharedMessage(data, sb)
+	if err != nil {
+		return 0, err
+	}
+
+	if sm.kind == shareTypeSOHM {
+		return 0, fmt.Errorf("message of type %d: %w", msgType, errSOHMNotSupported)
+	}
+
+	return sm.address, nil
+}
+
+// sharedResolveBudget is the most object header bytes one file may read to
+// resolve shared messages. Every distinct target header is read once and
+// counted once, so a valid file stays far below it: a committed datatype's
+// header holds one message of at most H5O_MESG_MAX_SIZE (64 KiB,
+// H5Oprivate.h:67) and a few small ones, and 16 MiB covers hundreds of
+// thousands of committed datatypes. A crafted file can point thousands of
+// 30-byte headers at one large continuation chunk, or thousands of attributes
+// at distinct large types; without a budget each costs a full header parse and
+// a decoded type kept for the life of the File (review-068 finding 2). The
+// budget bounds the bytes parsed, the bodies cached and, through them, the
+// decoded datatypes. Exceeding it fails the read with utils.ErrLimit.
+//
+// Deviation: C has no such bound; its metadata cache evicts headers instead
+// (H5AC). A Go program cannot recover from a failed allocation (ADR-003).
+const sharedResolveBudget uint64 = 16 << 20
+
+// sharedKey names one committed message: its object header and message type.
+type sharedKey struct {
+	address uint64
+	msgType MessageType
+}
+
+// sharedCache holds the committed messages resolved in one file, keyed by
+// target header and message type, and the datatypes decoded from them. Entries
+// are immutable once stored and shared by every reader of the file. Its zero
+// value is ready to use; it is safe for concurrent use.
+//
+// The library never writes shared messages, so a write session cannot change
+// a cached target in place. A deleted committed datatype whose space the
+// allocator reuses would leave a stale entry, read only through a reference
+// that already dangles.
+type sharedCache struct {
+	mu        sync.Mutex
+	bodies    map[sharedKey][]byte
+	datatypes map[uint64]*DatatypeMessage
+	spent     uint64 // Target header bytes read so far, against budget.
+	budget    uint64 // 0 means sharedResolveBudget; tests lower it.
+}
+
+// bodyLocked returns the body of the first message of type msgType in the
+// object header at addr, reading the header on first use. c.mu must be held.
+func (c *sharedCache) bodyLocked(r io.ReaderAt, sb *Superblock, addr uint64, msgType MessageType) ([]byte, error) {
+	key := sharedKey{address: addr, msgType: msgType}
+	if body, ok := c.bodies[key]; ok {
+		return body, nil
+	}
+
+	header, err := readObjectHeader(r, addr, sb, false)
+	if err != nil {
+		return nil, sharedTargetError(msgType, addr, err)
+	}
+
+	if err := c.charge(header, addr); err != nil {
+		return nil, err
 	}
 
 	for _, msg := range header.Messages {
@@ -156,14 +264,61 @@ func resolveSharedMessage(r io.ReaderAt, sb *Superblock, data []byte, msgType Me
 
 		if msg.Flags&MsgFlagShared != 0 {
 			return nil, fmt.Errorf("%w: committed message of type %d in object header 0x%X is itself shared",
-				utils.ErrCorrupt, msgType, sm.address)
+				utils.ErrCorrupt, msgType, addr)
 		}
 
-		return msg.Data, nil
+		// A copy: msg.Data may share the buffer of the whole header chunk,
+		// which the cache must not keep alive.
+		body := bytes.Clone(msg.Data)
+		if c.bodies == nil {
+			c.bodies = make(map[sharedKey][]byte)
+		}
+		c.bodies[key] = body
+
+		return body, nil
 	}
 
 	return nil, fmt.Errorf("%w: object header 0x%X has no message of type %d for the shared message referring to it",
-		utils.ErrCorrupt, sm.address, msgType)
+		utils.ErrCorrupt, addr, msgType)
+}
+
+// charge counts the bytes of a target header just read against the file's
+// resolution budget: each message's body and its 8-byte message header.
+func (c *sharedCache) charge(header *ObjectHeader, addr uint64) error {
+	budget := c.budget
+	if budget == 0 {
+		budget = sharedResolveBudget
+	}
+
+	cost := uint64(0)
+	for _, msg := range header.Messages {
+		cost += uint64(len(msg.Data)) + sharedMsgHeaderCost
+	}
+
+	if cost > budget || c.spent > budget-cost {
+		return fmt.Errorf("%w: resolving the shared message in object header 0x%X would read %d bytes "+
+			"after %d already read for shared messages, more than the %d bytes allowed per file",
+			utils.ErrLimit, addr, cost, c.spent, budget)
+	}
+	c.spent += cost
+
+	return nil
+}
+
+// sharedMsgHeaderCost is the cost charged per message beyond its body: the
+// version 1 message header size (H5O_SIZEOF_MSGHDR_VERS, H5Opkg.h:112-117).
+const sharedMsgHeaderCost = 8
+
+// sharedTargetError classifies a failure to read the target header of a shared
+// message, as filterError does for filters: a limit or an unsupported feature
+// keeps its own sentinel, anything else is corruption of the reference.
+func sharedTargetError(msgType MessageType, addr uint64, err error) error {
+	if errors.Is(err, utils.ErrCorrupt) || errors.Is(err, utils.ErrLimit) || errors.Is(err, utils.ErrNotSupported) {
+		return fmt.Errorf("shared message of type %d refers to object header 0x%X: %w", msgType, addr, err)
+	}
+
+	return fmt.Errorf("%w: shared message of type %d refers to object header 0x%X: %w",
+		utils.ErrCorrupt, msgType, addr, err)
 }
 
 // messageBody returns the body of a header message, following a shared-message

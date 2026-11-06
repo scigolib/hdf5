@@ -26,6 +26,14 @@ var ErrLimit = errors.New("hdf5: read limit exceeded")
 // hdf5.ErrNotSupported.
 var ErrNotSupported = errors.New("hdf5: not supported")
 
+// ErrNoData marks a read of a dataset that has no stored data and no defined
+// fill value: its contiguous storage was never allocated and the fill value is
+// undefined while fill values would be written, so there is nothing the read
+// could return. The C library fails such a read with H5E_READERROR "dataset
+// doesn't exist, no data can be read" (H5Dio.c:256-260). The file is valid.
+// Re-exported as hdf5.ErrNoData.
+var ErrNoData = errors.New("hdf5: dataset has no stored data and no defined fill value")
+
 // H5Error represents a structured HDF5 error.
 type H5Error struct {
 	Context string

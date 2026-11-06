@@ -30,7 +30,7 @@ func TestReadChunkedData_RejectsRankMismatch(t *testing.T) {
 
 	sb := &Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian}
 
-	_, err := newDatasetDescriptor(bytes.NewReader(nil), sb, &DatatypeMessage{Size: 8}, dataspace, layout, nil)
+	_, err := newDatasetDescriptor(bytes.NewReader(nil), sb, &DatatypeMessage{Size: 8}, dataspace, layout)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, utils.ErrCorrupt), "want ErrCorrupt, got %v", err)
 	require.Contains(t, err.Error(), "chunked layout has 1 dimensions, the dataspace rank 2 needs 3")
@@ -59,7 +59,7 @@ func TestReadChunkedData_RejectsUnsupportedChunkIndex(t *testing.T) {
 		}
 
 		r := bytes.NewReader(nil)
-		desc, err := newDatasetDescriptor(r, sb, &DatatypeMessage{Size: 8}, dataspace, layout, nil)
+		desc, err := newDatasetDescriptor(r, sb, &DatatypeMessage{Size: 8}, dataspace, layout)
 		require.NoError(t, err, "index type %d", idx)
 
 		_, err = readChunkedData(r, sb, desc, ResultFloat64, utils.DefaultReadLimit)

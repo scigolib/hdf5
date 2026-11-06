@@ -29,7 +29,7 @@ func TestParseFilterPipelineMessage_V1PaddedNameOverflow(t *testing.T) {
 }
 
 // TestParseFilterPipelineMessage_V1PaddedNameValid keeps the ordinary padded
-// name path working: a two-byte name pads to 8 bytes and the filter parses.
+// name path working: "a" and its NUL padded to the stored length of 8 parse.
 func TestParseFilterPipelineMessage_V1PaddedNameValid(t *testing.T) {
 	name := []byte{'a', 0, 0, 0, 0, 0, 0, 0} // "a" padded to 8 bytes
 	data := append([]byte{
@@ -37,7 +37,7 @@ func TestParseFilterPipelineMessage_V1PaddedNameValid(t *testing.T) {
 		1,                // number of filters
 		0, 0, 0, 0, 0, 0, // v1 reserved
 		1, 0, // filter ID (deflate)
-		2, 0, // filter name length (including the null terminator)
+		8, 0, // filter name length: the padded length, a multiple of 8 (H5Opline.c:175-176)
 		0, 0, // flags
 		0, 0, // number of client data values
 	}, name...)

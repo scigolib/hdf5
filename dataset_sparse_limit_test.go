@@ -87,18 +87,20 @@ func TestReadLimit_SparseConvertedResult(t *testing.T) {
 // h5ls reports "0 allocated bytes", its address is undefined. C accepts it at
 // open (H5Dcontig.c:399 checks the region only for a defined address) and reads
 // the fill value, which this library now does too (TestRead_FillUnallocated*).
-// What still refuses this one is the array datatype, which has no float64
-// conversion: the read is refused as not supported, before the 128 MiB element
-// is allocated, and it is not reported as corruption. (It used to be refused
-// as "not allocated".)
+// Array datatypes read since TASK-071, so the read limit is what bounds it:
+// the element would cost 128 MiB stored and 128 MiB as float64, and under a
+// 1 MiB limit the read is refused before anything is allocated, as a limit
+// and not as corruption. (It used to be refused as "not allocated", then as
+// an unsupported array datatype.)
 func TestRead_UnallocatedContiguous(t *testing.T) {
 	f := openOfficial(t, "h5diff_dset1.h5")
 	ds := findDatasetPath(t, f, "/g1/arrayd")
+	f.SetReadLimit(1 << 20)
 
 	var err error
 	allocated := allocatedBy(func() { _, err = ds.ReadSlice([]uint64{0}, []uint64{1}) })
 	require.Error(t, err)
-	require.ErrorIs(t, err, utils.ErrNotSupported) // hdf5.ErrNotSupported once main re-exports it.
+	require.ErrorIs(t, err, utils.ErrLimit)
 	require.False(t, errors.Is(err, ErrCorrupt))
 	require.Less(t, allocated, uint64(allocBudget))
 }

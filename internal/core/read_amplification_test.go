@@ -22,7 +22,7 @@ import (
 func TestResultSize_PlatformAddressSpace(t *testing.T) {
 	int8Type := &DatatypeMessage{Class: DatatypeFixed, Size: 1}
 	desc, err := newDatasetDescriptor(bytes.NewReader(nil), descTestSB(), int8Type,
-		simpleSpace(300_000_000), chunkedLayout(1024, 1), nil)
+		simpleSpace(300_000_000), chunkedLayout(1024, 1))
 	require.NoError(t, err)
 
 	size, err := desc.ResultSize(desc.NumElements(), ResultFloat64, math.MaxUint64)

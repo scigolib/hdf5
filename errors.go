@@ -18,3 +18,9 @@ var ErrLimit = utils.ErrLimit
 // stored in the shared-message heap, a datatype it cannot represent. The file
 // is not corrupt; the C library may read it. Match it with errors.Is.
 var ErrNotSupported = utils.ErrNotSupported
+
+// ErrNoData is wrapped by errors that refuse to read a dataset with no stored
+// data and no defined fill value: its contiguous storage was never written and
+// its fill value is undefined, so there is nothing to return (the C library
+// fails the same read). The file is not corrupt. Match it with errors.Is.
+var ErrNoData = utils.ErrNoData

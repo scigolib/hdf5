@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // ---------------------------------------------------------------------------
@@ -1207,7 +1209,12 @@ func TestParseAttributesFromMessages_CompactOnly(t *testing.T) {
 	require.Equal(t, "myattr", attrs[0].Name)
 }
 
-func TestParseAttributesFromMessages_SkipBadAttribute(t *testing.T) {
+// TestParseAttributesFromMessages_ReportsBadAttribute: a corrupt compact
+// attribute is an error, as in C, where H5O__attr_decode fails and so does
+// the attribute access (H5Oattr.c:113-300). It used to be skipped silently,
+// which hid the corruption and returned a short attribute list
+// (review-068 finding 5).
+func TestParseAttributesFromMessages_ReportsBadAttribute(t *testing.T) {
 	sb := &Superblock{
 		OffsetSize: 8,
 		LengthSize: 8,
@@ -1230,10 +1237,8 @@ func TestParseAttributesFromMessages_SkipBadAttribute(t *testing.T) {
 	reader := bytes.NewReader(make([]byte, 1024))
 
 	attrs, err := ParseAttributesFromMessages(reader, messages, sb)
-	require.NoError(t, err)
-	// Should skip bad attribute and return the good one.
-	require.Len(t, attrs, 1)
-	require.Equal(t, "good", attrs[0].Name)
+	require.ErrorIs(t, err, utils.ErrCorrupt)
+	require.Nil(t, attrs)
 }
 
 func TestParseAttributesFromMessages_IgnoresNonAttributeMessages(t *testing.T) {

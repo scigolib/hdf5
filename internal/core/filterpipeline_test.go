@@ -164,13 +164,13 @@ func TestApplyFletcher32(t *testing.T) {
 	}{
 		{
 			name:    "valid data with checksum",
-			data:    []byte{0x01, 0x02, 0x03, 0x04, 0xAA, 0xBB, 0xCC, 0xDD},
+			data:    []byte{0x01, 0x02, 0x03, 0x04, 0x06, 0x04, 0x08, 0x05}, // H5_checksum_fletcher32: 0x05080406, stored LE.
 			want:    []byte{0x01, 0x02, 0x03, 0x04},
 			wantErr: false,
 		},
 		{
 			name:    "minimum size (4 bytes)",
-			data:    []byte{0xAA, 0xBB, 0xCC, 0xDD},
+			data:    []byte{0, 0, 0, 0}, // The checksum of no data is 0.
 			want:    []byte{},
 			wantErr: false,
 		},
@@ -234,7 +234,7 @@ func TestApplyFilter(t *testing.T) {
 			filter: Filter{
 				ID: FilterFletcher,
 			},
-			data:    []byte{0x01, 0x02, 0x03, 0x04, 0xAA, 0xBB, 0xCC, 0xDD},
+			data:    []byte{0x01, 0x02, 0x03, 0x04, 0x06, 0x04, 0x08, 0x05}, // Valid checksum (see TestApplyFletcher32).
 			want:    []byte{0x01, 0x02, 0x03, 0x04},
 			wantErr: false,
 		},

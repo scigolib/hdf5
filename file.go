@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 
 	"github.com/scigolib/hdf5/internal/core"
@@ -23,6 +24,12 @@ type File struct {
 	visitedBTrees  map[uint64]bool // Track visited B-tree addresses to prevent cycles
 	loadingObjects map[uint64]bool // Objects currently on the load path, to break cycles
 	readLimit      atomic.Uint64   // Bytes a chunked read may allocate; 0 = utils.DefaultReadLimit (read_limit.go).
+
+	// externalDir is the directory external raw data files are opened in
+	// (SetExternalFilePrefix); nil or empty refuses them.
+	externalDir atomic.Pointer[string]
+	// externalDefault is the HDF5 file's own directory, the default.
+	externalDefault string
 }
 
 // Open opens an HDF5 file for reading and returns a File handle.
@@ -74,6 +81,14 @@ func Open(filename string) (*File, error) {
 		visitedBTrees: make(map[uint64]bool),
 	}
 
+	// External raw data files are looked up next to the HDF5 file by default.
+	// The directory is made absolute now, so a later change of the working
+	// directory does not move it. Without it, external files are refused.
+	if abs, absErr := filepath.Abs(filename); absErr == nil {
+		file.externalDefault = filepath.Dir(abs)
+	}
+	sb.ExternalFiles = file.openExternal
+
 	// Validate the root group address. It is relative to the base address, so
 	// the check compares the absolute position with the file size.
 	//nolint:gosec // G115: os.FileInfo.Size is non-negative for a regular file
@@ -118,6 +133,81 @@ func (f *File) Close() error {
 	err := f.osFile.Close()
 	f.osFile = nil // Prevent double close.
 	return err
+}
+
+// SetExternalFilePrefix sets the directory in which the raw data files of
+// datasets with external storage (an External File List, written by C's
+// H5Pset_external) are opened. By default it is the directory of the HDF5
+// file, as with C's H5Pset_efile_prefix("${ORIGIN}"). An empty dir restores
+// that default. A relative dir is made absolute now, against the current
+// working directory.
+//
+// The names come from the file, so they are untrusted. Only a name that stays
+// inside the directory is opened: an absolute name, a name with a volume or
+// UNC prefix, a name that climbs out with "..", and a symbolic link that
+// leads outside are all refused with an error that wraps ErrNotSupported and
+// quotes the name. The C library would open such names as given (relative
+// ones against the process's working directory unless a prefix is set);
+// reading arbitrary files named by a file from an untrusted source is the
+// risk this policy removes. Files are opened read-only and closed after each
+// read; bytes past the end of an external file read as zeros, as in C.
+//
+// It is safe to call concurrently with reads; a read uses the directory in
+// effect when it opens each file.
+func (f *File) SetExternalFilePrefix(dir string) error {
+	if dir == "" {
+		f.externalDir.Store(nil)
+		return nil
+	}
+
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("external file prefix %q: %w", dir, err)
+	}
+	f.externalDir.Store(&abs)
+
+	return nil
+}
+
+// ExternalFilePrefix returns the directory external raw data files are opened
+// in (see SetExternalFilePrefix); empty when there is none, as for a file not
+// opened by name.
+func (f *File) ExternalFilePrefix() string {
+	if dir := f.externalDir.Load(); dir != nil {
+		return *dir
+	}
+
+	return f.externalDefault
+}
+
+// openExternal opens an external raw data file named by an External File
+// List, under the policy of SetExternalFilePrefix. os.Root confines the open
+// to the directory, symbolic links included.
+func (f *File) openExternal(name string) (core.ExternalFile, error) {
+	dir := f.ExternalFilePrefix()
+	if dir == "" {
+		return nil, fmt.Errorf("no directory for external files; set one with (*hdf5.File).SetExternalFilePrefix: %w",
+			ErrNotSupported)
+	}
+	if !filepath.IsLocal(name) {
+		return nil, fmt.Errorf("external file name %q is absolute or leaves the directory %q; it is not opened: %w",
+			name, dir, ErrNotSupported)
+	}
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, fmt.Errorf("external file directory %q: %w", dir, err)
+	}
+	// Best effort: the root is a read-only directory handle, so closing it
+	// cannot lose data; files opened through it stay open after it closes.
+	defer func() { _ = root.Close() }()
+
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("unable to open external raw data file in %q: %w", dir, err)
+	}
+
+	return file, nil
 }
 
 // Root returns the root group of the HDF5 file.
