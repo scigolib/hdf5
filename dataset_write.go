@@ -10,6 +10,7 @@ import (
 
 	"github.com/scigolib/hdf5/internal/core"
 	"github.com/scigolib/hdf5/internal/structures"
+	"github.com/scigolib/hdf5/internal/utils"
 	"github.com/scigolib/hdf5/internal/writer"
 )
 
@@ -851,13 +852,57 @@ func validateDimensions(dims []uint64) error {
 	return nil
 }
 
-// calculateTotalElements calculates total number of elements from dimensions.
-func calculateTotalElements(dims []uint64) uint64 {
-	totalElements := uint64(1)
-	for _, dim := range dims {
-		totalElements *= dim
+// validateMaxDims checks the maximum dimensions of config, if any: one per
+// dimension, none smaller than the dimension, and chunked layout, which an
+// extendible dataset needs (H5Dcontig.c:457).
+func validateMaxDims(dims []uint64, config *datasetConfig) error {
+	if len(config.maxDims) == 0 {
+		return nil
 	}
-	return totalElements
+	if len(config.maxDims) != len(dims) {
+		return fmt.Errorf("maxDims length (%d) must match dims length (%d)",
+			len(config.maxDims), len(dims))
+	}
+	for i, maxDim := range config.maxDims {
+		if maxDim != Unlimited && maxDim < dims[i] {
+			return fmt.Errorf("maxDims[%d] (%d) must be >= dims[%d] (%d)",
+				i, maxDim, i, dims[i])
+		}
+	}
+	if len(config.chunkDims) == 0 {
+		return fmt.Errorf("resizable datasets (with maxDims) require chunked layout (use WithChunkDims)")
+	}
+	return nil
+}
+
+// calculateTotalElements returns the number of elements of a dataset with
+// dimensions dims, refusing a count that does not fit in uint64.
+func calculateTotalElements(dims []uint64) (uint64, error) {
+	total := uint64(1)
+	for _, dim := range dims {
+		next, err := utils.SafeMultiply(total, dim)
+		if err != nil {
+			return 0, fmt.Errorf("dataset dimensions %v: element count exceeds 2^64: %w", dims, err)
+		}
+		total = next
+	}
+	return total, nil
+}
+
+// datasetByteSize returns the size in bytes of a dataset with dimensions dims
+// whose elements are elemSize bytes each. A size that does not fit in uint64
+// is refused: wrapped, it would give a layout that does not match the
+// dataspace, which the C library rejects.
+func datasetByteSize(dims []uint64, elemSize uint32) (uint64, error) {
+	n, err := calculateTotalElements(dims)
+	if err != nil {
+		return 0, err
+	}
+	size, err := utils.SafeMultiply(n, uint64(elemSize))
+	if err != nil {
+		return 0, fmt.Errorf("dataset of %d elements of %d bytes: size exceeds 2^64 bytes: %w", n, elemSize, err)
+	}
+	return size, nil
 }
 
 // CreateDataset creates a new dataset in the HDF5 file.
@@ -892,7 +937,7 @@ func calculateTotalElements(dims []uint64) uint64 {
 //   - Dataset must be in root group (no nested groups yet)
 //   - Resizable datasets require chunked layout (use WithMaxDims with WithChunkDims)
 //
-//nolint:gocyclo,cyclop,gocognit,funlen // Complex by nature: dataset creation handles multiple layout types and options
+//nolint:gocyclo,cyclop // Complex by nature: dataset creation handles multiple layout types and options
 func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, opts ...DatasetOption) (*DatasetWriter, error) {
 	// Validate inputs
 	if err := validateDatasetName(name); err != nil {
@@ -908,27 +953,8 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 		opt(config)
 	}
 
-	// Validate maxDims if specified
-	if len(config.maxDims) > 0 {
-		if len(config.maxDims) != len(dims) {
-			return nil, fmt.Errorf("maxDims length (%d) must match dims length (%d)",
-				len(config.maxDims), len(dims))
-		}
-
-		// Validate each maxDim >= dim.
-		for i := 0; i < len(config.maxDims) && i < len(dims); i++ {
-			maxDim := config.maxDims[i]
-			dim := dims[i]
-			if maxDim != Unlimited && maxDim < dim {
-				return nil, fmt.Errorf("maxDims[%d] (%d) must be >= dims[%d] (%d)",
-					i, maxDim, i, dim)
-			}
-		}
-
-		// Require chunked layout for resizable datasets
-		if len(config.chunkDims) == 0 {
-			return nil, fmt.Errorf("resizable datasets (with maxDims) require chunked layout (use WithChunkDims)")
-		}
+	if err := validateMaxDims(dims, config); err != nil {
+		return nil, err
 	}
 
 	// Check if chunked layout requested
@@ -943,8 +969,10 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 	}
 
 	// Calculate total data size
-	totalElements := calculateTotalElements(dims)
-	dataSize := totalElements * uint64(dtInfo.size)
+	dataSize, err := datasetByteSize(dims, dtInfo.size)
+	if err != nil {
+		return nil, err
+	}
 
 	// Allocate space for dataset data
 	dataAddress, err := fw.writer.Allocate(dataSize)
@@ -1047,6 +1075,7 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 		address:     headerAddress,
 		dataAddress: dataAddress,
 		dataSize:    dataSize,
+		elementSize: dtInfo.size,
 		dtype:       dsMsgForWriter,
 		dims:        dims,
 	}
@@ -1054,84 +1083,65 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 	return dsw, nil
 }
 
-// CreateCompoundDataset creates a dataset with a compound (struct-like) datatype.
-// This is an advanced method for creating datasets with complex structured data.
+// CreateCompoundDataset creates a dataset with a compound (struct-like)
+// datatype given in the library's internal representation. It takes the same
+// options as [FileWriter.CreateCompound] and writes the same datatype message
+// for the same layout.
 //
-// Parameters:
-//   - name: Dataset path (e.g., "/data" or "/group/dataset")
-//   - compoundType: Pre-configured compound datatype (use core.CreateCompoundTypeFromFields)
-//   - dims: Dataset dimensions (e.g., []uint64{10} for 1D, []uint64{3, 4} for 2D)
-//   - opts: Optional configuration (chunking, compression, etc.)
-//
-// Returns:
-//   - *DatasetWriter: Dataset writer for writing data with WriteRaw()
-//   - error: If creation fails
-//
-// Example:
-//
-//	// Define compound type: struct { int32 id; float32 value }
-//	int32Type, _ := core.CreateBasicDatatypeMessage(core.DatatypeFixed, 4)
-//	float32Type, _ := core.CreateBasicDatatypeMessage(core.DatatypeFloat, 4)
-//	fields := []core.CompoundFieldDef{
-//	    {Name: "id", Offset: 0, Type: int32Type},
-//	    {Name: "value", Offset: 4, Type: float32Type},
-//	}
-//	compoundType, _ := core.CreateCompoundTypeFromFields(fields)
-//
-//	// Create dataset
-//	fw, _ := hdf5.CreateForWrite("file.h5", hdf5.CreateTruncate)
-//	ds, _ := fw.CreateCompoundDataset("/data", compoundType, []uint64{100})
-//
-//	// Write raw struct data
-//	data := []byte{/* encoded structs */}
-//	ds.WriteRaw(data)
-//
-// Reference: H5Dcreate2.c - H5D__create(), H5Tcompound.c - compound datatype handling.
-//
-//nolint:gocyclo,cyclop // Dataset creation requires validation and setup (complexity justified for public API)
+// Deprecated: the argument type cannot be built outside this module. Use
+// [NewCompoundType] or [NewPackedCompoundType] with [FileWriter.CreateCompound].
 func (fw *FileWriter) CreateCompoundDataset(name string, compoundType *core.DatatypeMessage, dims []uint64, opts ...DatasetOption) (*DatasetWriter, error) {
-	// Validate inputs
-	if err := validateDatasetName(name); err != nil {
-		return nil, err
-	}
-	if err := validateDimensions(dims); err != nil {
-		return nil, err
-	}
 	if compoundType == nil {
 		return nil, fmt.Errorf("compound datatype cannot be nil")
 	}
 	if compoundType.Class != core.DatatypeCompound {
 		return nil, fmt.Errorf("datatype must be compound (class=%d), got class=%d", core.DatatypeCompound, compoundType.Class)
 	}
-
-	// Apply options
-	config := &datasetConfig{}
-	for _, opt := range opts {
-		opt(config)
+	dt, err := normalizeCompoundDatatype(compoundType)
+	if err != nil {
+		return nil, err
 	}
+	return fw.createCompoundDataset(name, dt, dims, opts)
+}
 
-	// Check if chunked layout requested
-	if len(config.chunkDims) > 0 {
-		// Chunked compound dataset
-		return nil, fmt.Errorf("chunked compound datasets not yet implemented (MVP: contiguous only)")
+// normalizeCompoundDatatype returns dt in the decoded form of the datatype
+// codec: a message assembled from a header and Properties gets its Members,
+// and the result is what the decoder reads back from the encoded message, so
+// it holds exactly what the file will hold.
+func normalizeCompoundDatatype(dt *core.DatatypeMessage) (*core.DatatypeMessage, error) {
+	if dt.Members == nil {
+		ct, err := core.ParseCompoundType(dt)
+		if err != nil {
+			return nil, fmt.Errorf("invalid compound datatype: %w", err)
+		}
+		withMembers := *dt
+		withMembers.Members = ct.Members
+		dt = &withMembers
 	}
+	enc, err := core.EncodeDatatypeMessage(dt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode compound datatype: %w", err)
+	}
+	out, _, err := core.DecodeDatatype(enc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode compound datatype: %w", err)
+	}
+	return out, nil
+}
 
-	// Calculate total data size
-	// For compound types: totalElements * compoundSize
-	totalElements := calculateTotalElements(dims)
-	dataSize := totalElements * uint64(compoundType.Size)
+// createContiguousCompound creates a contiguous dataset of compound datatype
+// compoundType, whose encoded message is datatypeData.
+func (fw *FileWriter) createContiguousCompound(name string, compoundType *core.DatatypeMessage, datatypeData []byte, dims []uint64) (*DatasetWriter, error) {
+	// Calculate total data size: element count × compound size.
+	dataSize, err := datasetByteSize(dims, compoundType.Size)
+	if err != nil {
+		return nil, err
+	}
 
 	// Allocate space for dataset data
 	dataAddress, err := fw.writer.Allocate(dataSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate space for data: %w", err)
-	}
-
-	// Encode datatype message (compound type is already encoded in DatatypeMessage)
-	// We need to re-encode it as a message (header + properties)
-	datatypeData, err := core.EncodeDatatypeMessage(compoundType)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode compound datatype: %w", err)
 	}
 
 	// Create dataspace message
@@ -1203,6 +1213,7 @@ func (fw *FileWriter) CreateCompoundDataset(name string, compoundType *core.Data
 		address:     headerAddress,
 		dataAddress: dataAddress,
 		dataSize:    dataSize,
+		elementSize: compoundType.Size,
 		dtype:       compoundType,
 		dims:        dims,
 		isChunked:   false,
@@ -1230,6 +1241,7 @@ type DatasetWriter struct {
 	address          uint64 // Object header address
 	dataAddress      uint64 // Data storage address (contiguous) or B-tree address (chunked)
 	dataSize         uint64 // Total data size in bytes
+	elementSize      uint32 // On-disk element size (data, chunks, B-tree keys); whole array element, unlike dtype
 	dtype            *core.DatatypeMessage
 	dims             []uint64
 	maxDims          []uint64                 // Maximum dimensions (for resize support)
@@ -1261,6 +1273,9 @@ type DatasetWriter struct {
 //   - []uint8, []uint16, []uint32, []uint64
 //   - []float32, []float64
 //   - []string (for fixed-length string datasets)
+//   - []map[string]any (for compound datasets: one map per element, from
+//     member name to value; see [FileWriter.CreateCompound] for the values
+//     each member type takes)
 //
 // For multi-dimensional datasets, data should be flattened in row-major order.
 //
@@ -1300,6 +1315,8 @@ func (dw *DatasetWriter) Write(data interface{}) error {
 	case core.DatatypeOpaque:
 		// Opaque data is raw bytes
 		buf, err = encodeOpaqueData(data, dw.dataSize)
+	case core.DatatypeCompound:
+		buf, err = encodeCompoundData(data, dw.dtype, dw.dataSize)
 	default:
 		return fmt.Errorf("unsupported datatype class for writing: %d", dw.dtype.Class)
 	}
@@ -1560,6 +1577,30 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 	return nil
 }
 
+// resizeDataSize checks that the dataset can be resized to newDims (chunked,
+// with maximum dimensions, same rank, within the maximum) and returns the
+// new data size, from the on-disk element size: the whole array element for
+// an array type.
+func (dw *DatasetWriter) resizeDataSize(newDims []uint64) (uint64, error) {
+	if !dw.isChunked {
+		return 0, fmt.Errorf("resize requires chunked layout")
+	}
+	if len(dw.maxDims) == 0 {
+		return 0, fmt.Errorf("dataset not resizable (maxDims not set)")
+	}
+	if len(newDims) != len(dw.dims) {
+		return 0, fmt.Errorf("dimension count mismatch: got %d, expected %d",
+			len(newDims), len(dw.dims))
+	}
+	for i, newDim := range newDims {
+		if dw.maxDims[i] != Unlimited && newDim > dw.maxDims[i] {
+			return 0, fmt.Errorf("dimension %d (%d) exceeds maxDims[%d] (%d)",
+				i, newDim, i, dw.maxDims[i])
+		}
+	}
+	return datasetByteSize(newDims, dw.elementSize)
+}
+
 // Resize changes the dimensions of a dataset.
 // The dataset must have been created with maxDims (using WithMaxDims option).
 // Requires chunked layout.
@@ -1574,32 +1615,14 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 //	    hdf5.WithChunkDims([]uint64{5}),
 //	    hdf5.WithMaxDims([]uint64{hdf5.Unlimited}))
 //	ds.Resize([]uint64{20})  // Extend to 20 elements
-//
-//nolint:gocyclo,cyclop // Complex by nature: resize involves validation, header update, and state management
 func (dw *DatasetWriter) Resize(newDims []uint64) error {
 	if dw.dtype == nil {
 		return errCommittedDatatypeData
 	}
-	// 1. Validate input.
-	if !dw.isChunked {
-		return fmt.Errorf("resize requires chunked layout")
-	}
-
-	if len(dw.maxDims) == 0 {
-		return fmt.Errorf("dataset not resizable (maxDims not set)")
-	}
-
-	if len(newDims) != len(dw.dims) {
-		return fmt.Errorf("dimension count mismatch: got %d, expected %d",
-			len(newDims), len(dw.dims))
-	}
-
-	// 2. Check maxDims constraints.
-	for i, newDim := range newDims {
-		if dw.maxDims[i] != Unlimited && newDim > dw.maxDims[i] {
-			return fmt.Errorf("dimension %d (%d) exceeds maxDims[%d] (%d)",
-				i, newDim, i, dw.maxDims[i])
-		}
+	// 1-2. Validate input and compute the new data size.
+	newDataSize, err := dw.resizeDataSize(newDims)
+	if err != nil {
+		return err
 	}
 
 	// 3. Read object header from file if not already loaded.
@@ -1658,8 +1681,7 @@ func (dw *DatasetWriter) Resize(newDims []uint64) error {
 	dw.dims = newDims
 
 	// 10. Update dataSize based on new dimensions.
-	totalElements := calculateTotalElements(newDims)
-	dw.dataSize = totalElements * uint64(dw.dtype.Size)
+	dw.dataSize = newDataSize
 
 	// 11. Update chunk coordinator with new dimensions.
 	// ChunkCoordinator needs to know about new dataset shape for future writes.
@@ -1955,6 +1977,11 @@ func WithArrayDims(dims []uint64) DatasetOption {
 //
 // Enum datatypes map integer values to symbolic names.
 // Both names and values slices must have the same length.
+//
+// For EnumUint64, values hold the two's-complement bit pattern of the
+// unsigned value: a value u of 2^63 or more is given as int64(u), and
+// uint64(values[i]) recovers it. [EnumType] and [EnumMemberInfo].Value use
+// the same convention.
 //
 // Example:
 //
@@ -2353,13 +2380,14 @@ func (fw *FileWriter) OpenDataset(path string) (*DatasetWriter, error) {
 	}
 
 	// Step 4: Calculate data size (unknown for a committed datatype)
-	totalElements := uint64(1)
-	for _, dim := range dataspaceMsg.Dimensions {
-		totalElements *= dim
-	}
 	var dataSize uint64
+	var elementSize uint32
 	if datatypeMsg != nil {
-		dataSize = totalElements * uint64(datatypeMsg.Size)
+		elementSize = datatypeMsg.Size
+		dataSize, err = datasetByteSize(dataspaceMsg.Dimensions, elementSize)
+		if err != nil {
+			return nil, fmt.Errorf("dataset %q: %w", path, err)
+		}
 	}
 
 	// Step 5: Create DatasetWriter
@@ -2369,6 +2397,7 @@ func (fw *FileWriter) OpenDataset(path string) (*DatasetWriter, error) {
 		address:       foundDataset.Address(),
 		dataAddress:   layoutMsg.DataAddress, // Data address from layout message
 		dataSize:      dataSize,
+		elementSize:   elementSize,
 		dtype:         datatypeMsg,
 		dims:          dataspaceMsg.Dimensions,
 		objectHeader:  oh,          // Store object header for attribute operations
