@@ -225,6 +225,16 @@ func h5debugValue(t *testing.T, h5debug, file string, addr uint64, label string)
 	return v
 }
 
+// leUint decodes a little-endian unsigned field of len(b) bytes (a "length"
+// or "offset" field of the file's size).
+func leUint(b []byte) uint64 {
+	var v uint64
+	for i := len(b) - 1; i >= 0; i-- {
+		v = v<<8 | uint64(b[i])
+	}
+	return v
+}
+
 // TestCInterop_DeleteFreesLegacyDenseAttributes: the dense attribute storage
 // this library wrote up to v0.14.2 (attribute info message ID 0x000F, a name
 // index of type 5, a heap with 0 for its huge-object and free-space
@@ -273,12 +283,20 @@ func TestCInterop_DeleteFreesLegacyDenseAttributes(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, f.Close())
 
-			require.Equal(t, "Direct", regexp.MustCompile(`Heap is:\s+(\w+)`).
-				FindStringSubmatch(runH5(t, h5debug, file, strconv.FormatUint(ainfo.FractalHeapAddr, 10)))[1])
-			require.Zero(t, h5debugValue(t, h5debug, file, ainfo.FractalHeapAddr, "Current # of rows in root indirect block"))
-			require.Zero(t, h5debugValue(t, h5debug, file, ainfo.BTreeNameIndexAddr, "Depth"))
-			heap := 26 + 12*l + 3*o + h5debugValue(t, h5debug, file, ainfo.FractalHeapAddr, "Starting block size")
-			index := 22 + o + l + h5debugValue(t, h5debug, file, ainfo.BTreeNameIndexAddr, "Size of node")
+			// The legacy heap and B-tree are this library's old layout, which the C
+			// tools need not read (h5debug 1.10 refuses the heap header). Their
+			// sizes come from the header fields at the offsets the format
+			// specification gives, read from the file's bytes.
+			heapHdr := raw[ainfo.FractalHeapAddr:]
+			startBlock := 16 + 10*l + 2*o // "Starting Block Size" (fractal heap header)
+			curRows := 20 + 12*l + 3*o    // "Current # of Rows in Root Indirect Block"
+			require.Equal(t, "FRHP", string(heapHdr[:4]))
+			require.Zero(t, binary.LittleEndian.Uint16(heapHdr[curRows:]), "root is a direct block")
+			bt2Hdr := raw[ainfo.BTreeNameIndexAddr:]
+			require.Equal(t, "BTHD", string(bt2Hdr[:4]))
+			require.Zero(t, binary.LittleEndian.Uint16(bt2Hdr[12:]), "depth 0")  // "Depth"
+			heap := 26 + 12*l + 3*o + leUint(heapHdr[startBlock:startBlock+l])   // header + root direct block
+			index := 22 + o + l + uint64(binary.LittleEndian.Uint32(bt2Hdr[6:])) // header + one leaf of "Node Size"
 			symbolNode := 8 + 2*k*(l+o+24)
 			s := h5statSpace(t, h5stat, file)
 
