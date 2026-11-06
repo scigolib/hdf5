@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"github.com/scigolib/hdf5/internal/structures"
+	"github.com/scigolib/hdf5/internal/utils/clocktest"
 )
 
 // TestMetricsCollector_NewMetricsCollector verifies initialization.
 func TestMetricsCollector_NewMetricsCollector(t *testing.T) {
+	before := time.Now()
 	mc := NewMetricsCollector()
 
 	if mc == nil {
@@ -23,6 +25,7 @@ func TestMetricsCollector_NewMetricsCollector(t *testing.T) {
 
 	// Verify initial state
 	snapshot := mc.Snapshot()
+	after := time.Now()
 
 	if snapshot.TotalEvaluations != 0 {
 		t.Errorf("Expected 0 evaluations, got %d", snapshot.TotalEvaluations)
@@ -40,9 +43,43 @@ func TestMetricsCollector_NewMetricsCollector(t *testing.T) {
 		t.Errorf("Expected 0 errors, got %d", snapshot.TotalErrors)
 	}
 
-	// Verify start time is recent (within last second)
-	if time.Since(snapshot.SnapshotTime) > time.Second {
-		t.Error("Start time is not recent")
+	// The default clock is the system clock: the snapshot was taken between
+	// the two readings around it. Bracketing (monotonic readings) replaces a
+	// "within the last second" threshold that a loaded machine could break.
+	if snapshot.SnapshotTime.Before(before) || snapshot.SnapshotTime.After(after) {
+		t.Errorf("SnapshotTime %v not within [%v, %v]", snapshot.SnapshotTime, before, after)
+	}
+	if snapshot.Uptime < 0 || snapshot.Uptime > after.Sub(before) {
+		t.Errorf("Uptime %v not within [0, %v]", snapshot.Uptime, after.Sub(before))
+	}
+}
+
+// TestMetricsCollector_WithMetricsClock checks that every timestamp of the
+// collector comes from the injected clock.
+func TestMetricsCollector_WithMetricsClock(t *testing.T) {
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock := clocktest.NewMockClock(start)
+	mc := NewMetricsCollector(WithMetricsClock(clock))
+
+	snapshot := mc.Snapshot()
+	if !snapshot.SnapshotTime.Equal(start) || snapshot.Uptime != 0 {
+		t.Errorf("fresh collector: SnapshotTime %v, Uptime %v; want %v, 0", snapshot.SnapshotTime, snapshot.Uptime, start)
+	}
+
+	clock.Advance(90 * time.Second)
+	mc.Reset()
+	clock.Advance(30 * time.Second)
+	snapshot = mc.Snapshot()
+	if want := start.Add(2 * time.Minute); !snapshot.SnapshotTime.Equal(want) {
+		t.Errorf("SnapshotTime = %v, want %v", snapshot.SnapshotTime, want)
+	}
+	if snapshot.Uptime != 30*time.Second {
+		t.Errorf("Uptime after Reset = %v, want 30s (Reset restarts it from the clock)", snapshot.Uptime)
+	}
+
+	// A nil clock keeps the default instead of leaving the collector without one.
+	if NewMetricsCollector(WithMetricsClock(nil)).Snapshot().SnapshotTime.IsZero() {
+		t.Error("WithMetricsClock(nil) left the collector without a clock")
 	}
 }
 
@@ -229,28 +266,28 @@ func TestMetricsCollector_RecordOperation(t *testing.T) {
 	}
 }
 
-// TestMetricsCollector_RecordOperation_OperationsPerSecond verifies ops/sec calculation.
+// TestMetricsCollector_RecordOperation_OperationsPerSecond verifies ops/sec
+// calculation: operations divided by uptime, both exact under the mock clock.
 func TestMetricsCollector_RecordOperation_OperationsPerSecond(t *testing.T) {
-	mc := NewMetricsCollector()
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	mc := NewMetricsCollector(WithMetricsClock(clock))
 
-	// Wait a bit to have measurable uptime
-	time.Sleep(100 * time.Millisecond)
+	// No uptime yet: the rate is defined as zero, not a division by zero.
+	mc.RecordOperation(OpWrite)
+	if rate := mc.Snapshot().OperationsPerSecond; rate != 0 {
+		t.Errorf("rate at zero uptime = %v, want 0", rate)
+	}
 
-	// Record operations
-	for i := 0; i < 10; i++ {
+	clock.Advance(2 * time.Second)
+	for i := 0; i < 9; i++ {
 		mc.RecordOperation(OpWrite)
 	}
 
 	snapshot := mc.Snapshot()
 
-	// Verify operations per second is calculated
-	if snapshot.OperationsPerSecond == 0 {
-		t.Error("Expected non-zero operations per second")
-	}
-
-	// Rough check: should be less than 1000 ops/sec (we recorded 10 in 100ms)
-	if snapshot.OperationsPerSecond > 1000 {
-		t.Errorf("Operations per second too high: %.2f", snapshot.OperationsPerSecond)
+	// 10 operations in 2 seconds.
+	if snapshot.OperationsPerSecond != 5 {
+		t.Errorf("OperationsPerSecond = %v, want 5", snapshot.OperationsPerSecond)
 	}
 }
 
@@ -757,23 +794,23 @@ func TestMetricsCollector_Integration_SmartRebalancer(t *testing.T) {
 	}
 }
 
-// TestMetricsCollector_Uptime verifies uptime calculation.
+// TestMetricsCollector_Uptime verifies uptime calculation: the time from the
+// collector's start to the snapshot, exact under the mock clock.
 func TestMetricsCollector_Uptime(t *testing.T) {
-	mc := NewMetricsCollector()
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	mc := NewMetricsCollector(WithMetricsClock(clock))
 
-	// Wait a known amount of time
-	time.Sleep(100 * time.Millisecond)
+	clock.Advance(100 * time.Millisecond)
 
-	snapshot := mc.Snapshot()
-
-	// Uptime should be at least 100ms
-	if snapshot.Uptime < 100*time.Millisecond {
-		t.Errorf("Uptime too short: %v (expected >= 100ms)", snapshot.Uptime)
+	if got := mc.Snapshot().Uptime; got != 100*time.Millisecond {
+		t.Errorf("Uptime = %v, want 100ms", got)
 	}
 
-	// Uptime should be less than 200ms (allowing some overhead)
-	if snapshot.Uptime > 200*time.Millisecond {
-		t.Errorf("Uptime too long: %v (expected < 200ms)", snapshot.Uptime)
+	// Recording does not move the start.
+	mc.RecordOperation(OpRead)
+	clock.Advance(time.Hour)
+	if got := mc.Snapshot().Uptime; got != time.Hour+100*time.Millisecond {
+		t.Errorf("Uptime = %v, want 1h0m0.1s", got)
 	}
 }
 

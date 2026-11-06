@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // Observability & Metrics System for Smart Rebalancing API.
@@ -101,10 +103,26 @@ type MetricsCollector struct {
 	totalEvalTime        time.Duration
 	minEvalTime          time.Duration
 	maxEvalTime          time.Duration
+	clock                utils.Clock // source of every timestamp; set once at construction
 	startTime            time.Time
 	lastUpdateTime       time.Time
 	lastDecisionMode     Mode
 	lastDecisionWorkload WorkloadType
+}
+
+// MetricsOption is a functional option for configuring MetricsCollector.
+type MetricsOption func(*MetricsCollector)
+
+// WithMetricsClock sets the clock the collector reads its timestamps from
+// (start time, last update, snapshot time, uptime). The default is utils.RealClock;
+// tests inject a mock so uptime and rates do not depend on wall-clock speed.
+// A nil clock keeps the default.
+func WithMetricsClock(clock utils.Clock) MetricsOption {
+	return func(mc *MetricsCollector) {
+		if clock != nil {
+			mc.clock = clock
+		}
+	}
 }
 
 // NewMetricsCollector creates a new metrics collector.
@@ -117,16 +135,23 @@ type MetricsCollector struct {
 //	defer func() {
 //	    fmt.Printf("Final metrics:\n%s\n", collector.String())
 //	}()
-func NewMetricsCollector() *MetricsCollector {
+func NewMetricsCollector(options ...MetricsOption) *MetricsCollector {
 	mc := &MetricsCollector{
 		decisionsByMode:     make(map[Mode]int64),
 		decisionsByWorkload: make(map[WorkloadType]int64),
 		operationsByType:    make(map[OperationType]int64),
-		startTime:           time.Now(),
-		lastUpdateTime:      time.Now(),
+		clock:               utils.RealClock{},
 		confidenceMin:       1.0, // Start at max, will decrease
 		confidenceMax:       0.0, // Start at min, will increase
 	}
+
+	for _, opt := range options {
+		opt(mc)
+	}
+
+	now := mc.clock.Now()
+	mc.startTime = now
+	mc.lastUpdateTime = now
 
 	return mc
 }
@@ -167,7 +192,7 @@ func (mc *MetricsCollector) RecordEvaluation(decision Decision, evalTime time.Du
 	// Extract workload from decision factors (if available)
 	// For now, track the last decision's characteristics
 	mc.lastDecisionMode = decision.Mode
-	mc.lastUpdateTime = time.Now()
+	mc.lastUpdateTime = mc.clock.Now()
 
 	// Confidence metrics
 	mc.confidenceSum += decision.Confidence
@@ -216,7 +241,7 @@ func (mc *MetricsCollector) RecordModeChange(from, to Mode) {
 
 		// Update last update time
 		mc.mu.Lock()
-		mc.lastUpdateTime = time.Now()
+		mc.lastUpdateTime = mc.clock.Now()
 		mc.mu.Unlock()
 	}
 }
@@ -244,7 +269,7 @@ func (mc *MetricsCollector) RecordOperation(op OperationType) {
 	// Update operation type histogram (requires mutex)
 	mc.mu.Lock()
 	mc.operationsByType[op]++
-	mc.lastUpdateTime = time.Now()
+	mc.lastUpdateTime = mc.clock.Now()
 	mc.mu.Unlock()
 }
 
@@ -280,7 +305,7 @@ func (mc *MetricsCollector) RecordError(errorType string) {
 
 	// Update last update time
 	mc.mu.Lock()
-	mc.lastUpdateTime = time.Now()
+	mc.lastUpdateTime = mc.clock.Now()
 	mc.mu.Unlock()
 }
 
@@ -314,7 +339,7 @@ func (mc *MetricsCollector) RecordFileSize(size uint64) {
 	}
 
 	mc.fileSizeHistogram[bucket]++
-	mc.lastUpdateTime = time.Now()
+	mc.lastUpdateTime = mc.clock.Now()
 }
 
 // RecordWorkloadType records workload type for histogram.
@@ -339,7 +364,7 @@ func (mc *MetricsCollector) RecordWorkloadType(workloadType WorkloadType) {
 
 	mc.decisionsByWorkload[workloadType]++
 	mc.lastDecisionWorkload = workloadType
-	mc.lastUpdateTime = time.Now()
+	mc.lastUpdateTime = mc.clock.Now()
 }
 
 // MetricsSnapshot is an immutable snapshot of metrics at a point in time.
@@ -418,7 +443,7 @@ func (mc *MetricsCollector) Snapshot() MetricsSnapshot {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
 
-	now := time.Now()
+	now := mc.clock.Now()
 
 	// Load atomic counters (lock-free)
 	totalEvals := mc.totalEvaluations.Load()
@@ -556,8 +581,9 @@ func (mc *MetricsCollector) Reset() {
 	mc.totalEvalTime = 0
 	mc.minEvalTime = 0
 	mc.maxEvalTime = 0
-	mc.startTime = time.Now()
-	mc.lastUpdateTime = time.Now()
+	now := mc.clock.Now()
+	mc.startTime = now
+	mc.lastUpdateTime = now
 }
 
 // String returns a human-readable formatted metrics summary.

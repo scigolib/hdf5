@@ -371,8 +371,8 @@ func rootLinkNames(t *testing.T, file string) []string {
 // 1.8 format keeps the root group's links as link messages in its object
 // header (H5Gcompact.c), with no symbol table. Creating a dataset or a soft
 // link there adds a link message as H5G_obj_insert does (H5Gobj.c:422-580)
-// while the group holds fewer than max_compact links; the switch to dense
-// storage is not implemented and is refused with ErrNotSupported.
+// while the group holds fewer than max_compact links; the link that reaches
+// max_compact moves every link to dense storage (H5Gobj.c:474-509).
 func TestLinkMessageGroup_CreateInCompactRoot(t *testing.T) {
 	file := copyFixture(t, filepath.Join("testdata", "reference", "h5fc_ext1_f.h5"))
 	before := rootLinkNames(t, file)
@@ -384,12 +384,17 @@ func TestLinkMessageGroup_CreateInCompactRoot(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, ds.Write([]int32{1, -2, 3, -4}))
 	require.NoError(t, fw.CreateSoftLink("/soft_added", "/added"))
-	// The group now holds max_compact (8) links: one more needs dense storage.
-	_, err = fw.CreateDataset("/third", Int32, []uint64{1})
-	require.ErrorIs(t, err, ErrNotSupported)
+	// The group now holds max_compact (8) links: the 9th turns it dense.
+	third, err := fw.CreateDataset("/third", Int32, []uint64{1})
+	require.NoError(t, err)
+	require.NoError(t, third.Write([]int32{7}))
+	_, dense := linkGroupState(t, fw, fw.rootGroupAddr)
+	require.True(t, dense, "root group in dense link storage")
 	require.NoError(t, fw.Close())
 
-	require.ElementsMatch(t, append(before, "added", "soft_added"), rootLinkNames(t, file))
+	// The conversion moves every link message out of the header
+	// (H5Gobj.c:476-509).
+	require.Empty(t, rootLinkNames(t, file))
 
 	f, err := Open(file)
 	require.NoError(t, err)
@@ -399,11 +404,14 @@ func TestLinkMessageGroup_CreateInCompactRoot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []float64{1, -2, 3, -4}, got)
 	require.NotNil(t, findDataset(f, "/DSET_CONTIGUOUS"), "existing links kept")
+	require.NotNil(t, findDataset(f, "/third"), "the 9th link read from dense storage")
 	require.NoError(t, f.Close())
+	requireLinkGroupFile(t, h5tool(t, "h5ls"), file, "", append(before, "added", "soft_added", "third"))
 
 	out := requireH5dumpClean(t, file)
 	if out != "" {
 		require.Contains(t, out, `DATASET "added"`)
 		require.Contains(t, out, `LINKTARGET "/added"`)
+		require.Contains(t, out, `DATASET "third"`)
 	}
 }

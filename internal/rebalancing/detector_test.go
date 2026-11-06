@@ -8,29 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/scigolib/hdf5/internal/utils/clocktest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// MockClock is a controllable clock for testing.
-type MockClock struct {
-	current time.Time
-}
-
-// Now returns the current mock time.
-func (m *MockClock) Now() time.Time {
-	return m.current
-}
-
-// Advance advances the mock time by the given duration.
-func (m *MockClock) Advance(d time.Duration) {
-	m.current = m.current.Add(d)
-}
-
-// NewMockClock creates a new mock clock starting at the given time.
-func NewMockClock(start time.Time) *MockClock {
-	return &MockClock{current: start}
-}
 
 // TestNewWorkloadDetector tests detector creation with various options.
 func TestNewWorkloadDetector(t *testing.T) {
@@ -107,7 +88,7 @@ func TestNewWorkloadDetector(t *testing.T) {
 func TestRecordOperation(t *testing.T) {
 	ctx := context.Background()
 	startTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	clock := NewMockClock(startTime)
+	clock := clocktest.NewMockClock(startTime)
 
 	detector := NewWorkloadDetector(
 		WithClock(clock),
@@ -175,7 +156,7 @@ func TestRecordOperation_Closed(t *testing.T) {
 func TestRingBuffer(t *testing.T) {
 	ctx := context.Background()
 	startTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	clock := NewMockClock(startTime)
+	clock := clocktest.NewMockClock(startTime)
 
 	detector := NewWorkloadDetector(
 		WithClock(clock),
@@ -203,7 +184,7 @@ func TestRingBuffer(t *testing.T) {
 func TestExtractFeatures(t *testing.T) {
 	ctx := context.Background()
 	startTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	clock := NewMockClock(startTime)
+	clock := clocktest.NewMockClock(startTime)
 
 	detector := NewWorkloadDetector(
 		WithClock(clock),
@@ -241,7 +222,7 @@ func TestExtractFeatures(t *testing.T) {
 func TestExtractFeatures_TimeWindow(t *testing.T) {
 	ctx := context.Background()
 	startTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	clock := NewMockClock(startTime)
+	clock := clocktest.NewMockClock(startTime)
 
 	detector := NewWorkloadDetector(
 		WithClock(clock),
@@ -323,7 +304,7 @@ func TestDetectWorkloadType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			startTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-			clock := NewMockClock(startTime)
+			clock := clocktest.NewMockClock(startTime)
 
 			detector := NewWorkloadDetector(
 				WithClock(clock),
@@ -357,7 +338,7 @@ func TestDetectWorkloadType(t *testing.T) {
 func TestGetStats(t *testing.T) {
 	ctx := context.Background()
 	startTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	clock := NewMockClock(startTime)
+	clock := clocktest.NewMockClock(startTime)
 
 	detector := NewWorkloadDetector(
 		WithClock(clock),

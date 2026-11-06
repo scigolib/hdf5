@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/scigolib/hdf5/internal/structures"
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // Config Selector - Decision engine for optimal rebalancing strategy selection.
@@ -222,7 +223,7 @@ type ConfigSelector struct {
 	lastMode         Mode
 
 	// Clock for testing
-	clock Clock
+	clock utils.Clock
 }
 
 // SelectionStrategy is an interface for pluggable selection strategies.
@@ -273,7 +274,7 @@ func WithStrategy(strategy SelectionStrategy) SelectorOption {
 }
 
 // WithSelectorClock sets a custom clock (for testing).
-func WithSelectorClock(clock Clock) SelectorOption {
+func WithSelectorClock(clock utils.Clock) SelectorOption {
 	return func(s *ConfigSelector) {
 		if clock != nil {
 			s.clock = clock
@@ -286,7 +287,7 @@ func WithSelectorClock(clock Clock) SelectorOption {
 // Default configuration:
 //   - Safety constraints: DefaultSafetyConstraints()
 //   - Strategy: RuleBasedStrategy (default)
-//   - Clock: RealClock (system time)
+//   - Clock: utils.RealClock (system time)
 //
 // Example:
 //
@@ -296,7 +297,7 @@ func WithSelectorClock(clock Clock) SelectorOption {
 func NewConfigSelector(options ...SelectorOption) *ConfigSelector {
 	s := &ConfigSelector{
 		constraints: DefaultSafetyConstraints(),
-		clock:       RealClock{},
+		clock:       utils.RealClock{},
 	}
 
 	// Apply options
@@ -429,7 +430,7 @@ func (s *ConfigSelector) SelectConfig(features WorkloadFeatures, workloadType Wo
 //   - Medium: 100MB - 500MB (incremental starts to help)
 //   - Large: > 500MB (incremental strongly recommended)
 type RuleBasedStrategy struct {
-	clock Clock
+	clock utils.Clock
 }
 
 // File size thresholds (bytes).
@@ -658,9 +659,13 @@ func (r *RuleBasedStrategy) normalizeOperationRate(rate float64) float64 {
 	}
 }
 
-// createLazyConfig creates a default lazy rebalancing config.
+// createLazyConfig creates a default lazy rebalancing config. It carries the
+// strategy's clock, so a tree switched to lazy mode by the smart rebalancer
+// reads time from the same clock as the rebalancer itself (and, through the
+// lazy state, so does an incremental rebalancer started on that tree).
 func (r *RuleBasedStrategy) createLazyConfig() *structures.LazyRebalancingConfig {
 	config := structures.DefaultLazyConfig()
+	config.Clock = r.clock
 	return &config
 }
 

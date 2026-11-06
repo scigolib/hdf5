@@ -200,11 +200,10 @@ func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 	// Parse path into parent and name
 	parent, name := parsePath(path)
 
-	// Validate parent exists (if not root)
-	if parent != "" && parent != "/" {
-		if _, exists := fw.groups[parent]; !exists {
-			return nil, fmt.Errorf("parent group %q does not exist (create it first)", parent)
-		}
+	// The parent must exist and must not hold the name yet; both are
+	// checked before anything is allocated (link_create.go).
+	if err := fw.checkLinkNameFree(parent, name); err != nil {
+		return nil, err
 	}
 
 	// Create group structures (heap, symbol table, B-tree)
@@ -245,13 +244,14 @@ func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 		return nil, fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
 	}
 
+	// Link to parent group; a group that could not be linked is deleted
+	// again and never registered.
+	if err := fw.linkToParent(parent, name, headerAddr); err != nil {
+		return nil, fw.discardUnlinkedObject(headerAddr, fmt.Errorf("failed to link to parent: %w", err))
+	}
+
 	// Store group metadata for nested dataset linking
 	fw.registerGroup(path, heapAddr, btreeAddr, headerAddr, headerSize)
-
-	// Link to parent group
-	if err := fw.linkToParent(parent, name, headerAddr); err != nil {
-		return nil, fmt.Errorf("failed to link to parent: %w", err)
-	}
 
 	// Return GroupWriter handle
 	return &GroupWriter{
@@ -307,13 +307,15 @@ func (fw *FileWriter) linkToParent(parentPath, childName string, childAddr uint6
 // type 2 with an undefined object address (H5G_CACHED_SLINK) — soft links
 // are not objects and have no object header.
 func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr uint64, softTarget string) error {
+	// A group of the 1.8 format keeps its links as link messages in its
+	// header or in dense link storage (H5G_obj_insert, H5Gobj.c:441-560).
+	if addr, ok := fw.linkMessageGroup(parentPath); ok {
+		return fw.insertGroupLink(addr, childName, childAddr, softTarget)
+	}
+
 	// Get parent group metadata.
 	var heapAddr, btreeAddr uint64
 	if parentPath == "" || parentPath == "/" {
-		if !fw.rootHasSymbolTable() {
-			// A root of the 1.8 format keeps its links in its object header.
-			return fw.linkMessageToGroup(fw.rootGroupAddr, childName, childAddr, softTarget)
-		}
 		heapAddr = fw.rootHeapAddr
 		btreeAddr = fw.rootBTreeAddr
 	} else {
@@ -325,13 +327,21 @@ func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr 
 		btreeAddr = meta.btreeAddr
 	}
 
-	// Step 1: Read existing local heap.
+	// Step 1: Refuse a name the group holds before the heap changes: adding
+	// the name first may move a full heap (expandHeapAndAdd), and a refused
+	// insert would then leave the group on the freed heap. C finds the
+	// duplicate before H5G__link_to_ent touches the heap (H5Gnode.c:583-594).
+	if err := fw.checkSymbolTableNameFree(heapAddr, btreeAddr, parentPath, childName); err != nil {
+		return err
+	}
+
+	// Step 2: Read existing local heap.
 	heap, err := fw.readLocalHeap(heapAddr)
 	if err != nil {
 		return fmt.Errorf("read local heap: %w", err)
 	}
 
-	// Step 2: Add child name to heap. If full, expand.
+	// Step 3: Add child name to heap. If full, expand.
 	nameOffset, err := heap.AddString(childName)
 	if err != nil {
 		heap, heapAddr, nameOffset, err = fw.expandHeapAndAdd(heap, heapAddr, parentPath, childName)
@@ -451,6 +461,13 @@ func (fw *FileWriter) CreateDenseGroup(name string, links map[string]string) err
 		return fmt.Errorf("group name must start with /: %s", name)
 	}
 
+	// The parent must exist and must not hold the name yet, checked before
+	// anything is allocated (link_create.go).
+	parent, childName := parsePath(name)
+	if err := fw.checkLinkNameFree(parent, childName); err != nil {
+		return err
+	}
+
 	// Create DenseGroupWriter
 	dgw := writer.NewDenseGroupWriter(name)
 
@@ -474,18 +491,8 @@ func (fw *FileWriter) CreateDenseGroup(name string, links map[string]string) err
 		return fmt.Errorf("failed to write dense group: %w", err)
 	}
 
-	// Link to parent
-	parent, childName := parsePath(name)
-
-	// Validate parent exists (if not root)
-	if parent != "" && parent != "/" {
-		if _, exists := fw.groups[parent]; !exists {
-			return fmt.Errorf("parent group %q does not exist (create it first)", parent)
-		}
-	}
-
 	if err := fw.linkToParent(parent, childName, ohAddr); err != nil {
-		return fmt.Errorf("failed to link to parent: %w", err)
+		return fw.discardUnlinkedObject(ohAddr, fmt.Errorf("failed to link to parent: %w", err))
 	}
 
 	return nil
@@ -509,6 +516,18 @@ func (fw *FileWriter) resolveObjectAddress(path string) (uint64, error) {
 	}
 
 	parent, name := parsePath(path)
+
+	// A group of the 1.8 format (H5G__obj_lookup, H5Gobj.c:1056-1100).
+	if addr, ok := fw.linkMessageGroup(parent); ok {
+		target, err := fw.lookupGroupLink(addr, name)
+		if errors.Is(err, errGroupEntryNotFound) {
+			return 0, fmt.Errorf("object not found: %s: %w", path, err)
+		}
+		if err != nil {
+			return 0, fmt.Errorf("look up %s: %w", path, err)
+		}
+		return target, nil
+	}
 
 	// Get parent B-tree and heap addresses.
 	var btreeAddr, heapAddr uint64
@@ -556,7 +575,19 @@ func (fw *FileWriter) resolveObjectAddress(path string) (uint64, error) {
 //
 // Reference: H5Gobj.c - H5G_obj_remove(), H5Gnode.c - H5G__node_remove().
 func (fw *FileWriter) unlinkFromParent(parentPath, childName string) (uint64, error) {
-	// Get parent group metadata (same as linkToParent lines 308-319).
+	// A group of the 1.8 format (H5G_obj_remove, H5Gobj.c:925-975).
+	if addr, ok := fw.linkMessageGroup(parentPath); ok {
+		removed, err := fw.removeGroupLink(addr, childName)
+		if errors.Is(err, errGroupEntryNotFound) {
+			return 0, fmt.Errorf("child %q not found in parent group: %w", childName, err)
+		}
+		if err != nil {
+			return 0, fmt.Errorf("remove %q from group %q: %w", childName, parentPath, err)
+		}
+		return removed, nil
+	}
+
+	// Get parent group metadata (symbol-table groups).
 	var heapAddr, btreeAddr uint64
 	if parentPath == "" || parentPath == "/" {
 		heapAddr = fw.rootHeapAddr

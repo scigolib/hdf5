@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"sync"
 
 	"github.com/scigolib/hdf5/internal/core"
 	"github.com/scigolib/hdf5/internal/utils"
@@ -206,7 +207,14 @@ type WritableBTreeV2 struct {
 	loadedHeaderAddress uint64
 	loadedLeafAddress   uint64
 
-	// Lazy rebalancing state (nil if disabled)
+	// lazyMu guards lazyState (the pointer and everything it points to). The
+	// rest of the tree belongs to the caller's goroutine, as everywhere in
+	// this package; the lazy state alone is shared with the incremental
+	// rebalancer's goroutine, which drains its underflow queue in the
+	// background. Lock order: lazyMu before IncrementalRebalancer.mu.
+	lazyMu sync.Mutex
+
+	// Lazy rebalancing state (nil if disabled). Guarded by lazyMu.
 	lazyState *LazyRebalancingState
 
 	// Incremental rebalancing state (nil if disabled)

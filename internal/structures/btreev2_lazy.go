@@ -6,6 +6,8 @@ package structures
 import (
 	"fmt"
 	"time"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // Lazy B-tree v2 rebalancing - Performance optimization for scientific data.
@@ -53,6 +55,12 @@ type LazyRebalancingConfig struct {
 	// Larger batches = more work per rebalancing, but fewer total rebalancing operations.
 	// Default: 100 nodes
 	BatchSize int
+
+	// Clock is the time source for the MaxDelay trigger, the LastRebalance
+	// timestamp and the incremental rebalancer started on this tree (its
+	// session ticker and time budget). Nil means utils.RealClock; tests
+	// inject clocktest.MockClock so no result depends on machine speed.
+	Clock utils.Clock
 }
 
 // DefaultLazyConfig returns the recommended lazy rebalancing configuration.
@@ -98,6 +106,22 @@ type LazyRebalancingState struct {
 	UnderflowNodes []uint64
 }
 
+// clock returns the state's time source: Config.Clock, or the system clock
+// for a state built without one (EnableLazyRebalancing always sets it).
+func (s *LazyRebalancingState) clock() utils.Clock {
+	if s.Config.Clock == nil {
+		return utils.RealClock{}
+	}
+	return s.Config.Clock
+}
+
+// sinceLastRebalance is time.Since(LastRebalance) read from the state's
+// clock. With utils.RealClock both readings carry the monotonic clock, so it
+// is exactly time.Since.
+func (s *LazyRebalancingState) sinceLastRebalance() time.Duration {
+	return s.clock().Now().Sub(s.LastRebalance)
+}
+
 // EnableLazyRebalancing enables lazy rebalancing mode on a B-tree.
 //
 // This adds lazy rebalancing state to the B-tree structure.
@@ -128,13 +152,18 @@ func (bt *WritableBTreeV2) EnableLazyRebalancing(config LazyRebalancingConfig) {
 	if config.BatchSize <= 0 {
 		config.BatchSize = 100 // Default 100 nodes
 	}
+	if config.Clock == nil {
+		config.Clock = utils.RealClock{}
+	}
 
 	// Initialize lazy rebalancing state
+	bt.lazyMu.Lock()
+	defer bt.lazyMu.Unlock()
 	bt.lazyState = &LazyRebalancingState{
 		Config:         config,
 		UnderflowCount: 0,
 		TotalNodes:     1, // MVP: Single leaf
-		LastRebalance:  time.Now(),
+		LastRebalance:  config.Clock.Now(),
 		PendingDeletes: 0,
 		UnderflowNodes: nil,
 	}
@@ -148,12 +177,14 @@ func (bt *WritableBTreeV2) EnableLazyRebalancing(config LazyRebalancingConfig) {
 // Returns:
 //   - error: if final rebalancing fails
 func (bt *WritableBTreeV2) DisableLazyRebalancing() error {
+	bt.lazyMu.Lock()
+	defer bt.lazyMu.Unlock()
 	if bt.lazyState == nil {
 		return nil // Already disabled
 	}
 
 	// Trigger final rebalancing
-	if err := bt.BatchRebalance(); err != nil {
+	if err := bt.batchRebalanceLocked(); err != nil {
 		return fmt.Errorf("final rebalancing failed: %w", err)
 	}
 
@@ -165,7 +196,26 @@ func (bt *WritableBTreeV2) DisableLazyRebalancing() error {
 
 // IsLazyRebalancingEnabled checks if lazy rebalancing is active.
 func (bt *WritableBTreeV2) IsLazyRebalancingEnabled() bool {
+	bt.lazyMu.Lock()
+	defer bt.lazyMu.Unlock()
+	return bt.lazyEnabledLocked()
+}
+
+// lazyEnabledLocked is IsLazyRebalancingEnabled for a caller that holds
+// bt.lazyMu.
+func (bt *WritableBTreeV2) lazyEnabledLocked() bool {
 	return bt.lazyState != nil && bt.lazyState.Config.Enabled
+}
+
+// lazyClock returns the lazy state's clock, or the system clock when lazy
+// rebalancing is off.
+func (bt *WritableBTreeV2) lazyClock() utils.Clock {
+	bt.lazyMu.Lock()
+	defer bt.lazyMu.Unlock()
+	if bt.lazyState == nil {
+		return utils.RealClock{}
+	}
+	return bt.lazyState.clock()
 }
 
 // DeleteRecordLazy deletes a record WITHOUT immediate rebalancing.
@@ -196,8 +246,12 @@ func (bt *WritableBTreeV2) IsLazyRebalancingEnabled() bool {
 //	}
 //	// Automatic batch rebalancing happens at threshold (5% underflow)
 func (bt *WritableBTreeV2) DeleteRecordLazy(name string) error {
+	// The lazy state is shared with the incremental rebalancer's goroutine.
+	bt.lazyMu.Lock()
+	defer bt.lazyMu.Unlock()
+
 	// Check if lazy rebalancing enabled
-	if !bt.IsLazyRebalancingEnabled() {
+	if !bt.lazyEnabledLocked() {
 		return fmt.Errorf("lazy rebalancing not enabled, use EnableLazyRebalancing() first")
 	}
 
@@ -234,7 +288,7 @@ func (bt *WritableBTreeV2) DeleteRecordLazy(name string) error {
 
 	// Phase 4: Check if batch rebalancing needed
 	if bt.shouldTriggerBatchRebalancing() {
-		return bt.BatchRebalance()
+		return bt.batchRebalanceLocked()
 	}
 
 	// Fast path: No rebalancing, just return
@@ -249,6 +303,8 @@ func (bt *WritableBTreeV2) DeleteRecordLazy(name string) error {
 //
 // Returns:
 //   - bool: true if should trigger batch rebalancing
+//
+// The caller holds bt.lazyMu.
 func (bt *WritableBTreeV2) shouldTriggerBatchRebalancing() bool {
 	if bt.lazyState == nil {
 		return false
@@ -262,7 +318,7 @@ func (bt *WritableBTreeV2) shouldTriggerBatchRebalancing() bool {
 	}
 
 	// Condition 2: Max delay exceeded
-	maxDelayExceeded := time.Since(bt.lazyState.LastRebalance) >= bt.lazyState.Config.MaxDelay
+	maxDelayExceeded := bt.lazyState.sinceLastRebalance() >= bt.lazyState.Config.MaxDelay
 
 	return thresholdReached || maxDelayExceeded
 }
@@ -284,6 +340,13 @@ func (bt *WritableBTreeV2) shouldTriggerBatchRebalancing() bool {
 // Returns:
 //   - error: if rebalancing fails
 func (bt *WritableBTreeV2) BatchRebalance() error {
+	bt.lazyMu.Lock()
+	defer bt.lazyMu.Unlock()
+	return bt.batchRebalanceLocked()
+}
+
+// batchRebalanceLocked is BatchRebalance for a caller that holds bt.lazyMu.
+func (bt *WritableBTreeV2) batchRebalanceLocked() error {
 	if bt.lazyState == nil {
 		return nil // No lazy state, nothing to rebalance
 	}
@@ -301,7 +364,7 @@ func (bt *WritableBTreeV2) BatchRebalance() error {
 
 	// Reset lazy state
 	bt.lazyState.UnderflowCount = 0
-	bt.lazyState.LastRebalance = time.Now()
+	bt.lazyState.LastRebalance = bt.lazyState.clock().Now()
 	bt.lazyState.PendingDeletes = 0
 	bt.lazyState.UnderflowNodes = nil
 
@@ -317,13 +380,15 @@ func (bt *WritableBTreeV2) BatchRebalance() error {
 //   - pendingDeletes: number of deletions since last rebalancing
 //   - timeSinceRebalance: duration since last rebalancing
 func (bt *WritableBTreeV2) GetLazyRebalancingStats() (underflowCount, pendingDeletes int, timeSinceRebalance time.Duration) {
+	bt.lazyMu.Lock()
+	defer bt.lazyMu.Unlock()
 	if bt.lazyState == nil {
 		return 0, 0, 0
 	}
 
 	return bt.lazyState.UnderflowCount,
 		bt.lazyState.PendingDeletes,
-		time.Since(bt.lazyState.LastRebalance)
+		bt.lazyState.sinceLastRebalance()
 }
 
 // ForceBatchRebalance manually triggers batch rebalancing, ignoring threshold/delay.
@@ -342,9 +407,11 @@ func (bt *WritableBTreeV2) GetLazyRebalancingStats() (underflowCount, pendingDel
 //	btree.ForceBatchRebalance()
 //	// Now tree is optimally balanced for reads
 func (bt *WritableBTreeV2) ForceBatchRebalance() error {
+	bt.lazyMu.Lock()
+	defer bt.lazyMu.Unlock()
 	if bt.lazyState == nil {
 		return fmt.Errorf("lazy rebalancing not enabled")
 	}
 
-	return bt.BatchRebalance()
+	return bt.batchRebalanceLocked()
 }

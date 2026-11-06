@@ -1,6 +1,7 @@
 package hdf5
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -66,6 +67,13 @@ func (fw *FileWriter) CreateHardLink(linkPath, targetPath string) error {
 		return fmt.Errorf("failed to resolve target %q: %w", targetPath, err)
 	}
 
+	// The parent must exist and must not hold the name yet, checked before
+	// the target's reference count changes (link_create.go).
+	parent, linkName := parsePath(linkPath)
+	if err := fw.checkLinkNameFree(parent, linkName); err != nil {
+		return err
+	}
+
 	// Read target object header to increment reference count
 	targetHeader, err := core.ReadObjectHeader(fw.writer, targetAddr, fw.file.sb)
 	if err != nil {
@@ -80,22 +88,15 @@ func (fw *FileWriter) CreateHardLink(linkPath, targetPath string) error {
 		return fmt.Errorf("failed to update reference count: %w", err)
 	}
 
-	// Parse link path to find parent and link name
-	parent, linkName := parsePath(linkPath)
-
-	// Validate parent exists
-	if parent != "" && parent != "/" {
-		if _, exists := fw.groups[parent]; !exists {
-			return fmt.Errorf("parent group %q does not exist (create it first)", parent)
-		}
-	}
-
 	// Create link in parent group
 	if err := fw.linkToParent(parent, linkName, targetAddr); err != nil {
-		// Rollback: decrement reference count
+		// Rollback: decrement reference count.
+		linkErr := fmt.Errorf("failed to create link in parent group: %w", err)
 		targetHeader.DecrementReferenceCount()
-		_ = writeObjectHeaderWithRefCount(fw, targetAddr, targetHeader)
-		return fmt.Errorf("failed to create link in parent group: %w", err)
+		if rbErr := writeObjectHeaderWithRefCount(fw, targetAddr, targetHeader); rbErr != nil {
+			return errors.Join(linkErr, fmt.Errorf("restore the reference count of %q: %w", targetPath, rbErr))
+		}
+		return linkErr
 	}
 
 	// Success
@@ -265,11 +266,9 @@ func (fw *FileWriter) CreateSoftLink(linkPath, targetPath string) error {
 	// Parse link path to find parent and link name
 	parent, linkName := parsePath(linkPath)
 
-	// Validate parent exists
-	if parent != "" && parent != "/" {
-		if _, exists := fw.groups[parent]; !exists {
-			return fmt.Errorf("parent group %q does not exist (create it first)", parent)
-		}
+	// The parent must exist and must not hold the name yet (link_create.go).
+	if err := fw.checkLinkNameFree(parent, linkName); err != nil {
+		return err
 	}
 
 	// In the symbol-table group format a soft link is NOT an object: it is a
@@ -379,11 +378,10 @@ func (fw *FileWriter) CreateExternalLink(linkPath, fileName, objectPath string) 
 	// Parse link path to find parent and link name
 	parent, linkName := parsePath(linkPath)
 
-	// Validate parent exists
-	if parent != "" && parent != "/" {
-		if _, exists := fw.groups[parent]; !exists {
-			return fmt.Errorf("parent group %q does not exist (create it first)", parent)
-		}
+	// The parent must exist and must not hold the name yet, checked before
+	// anything is allocated (link_create.go).
+	if err := fw.checkLinkNameFree(parent, linkName); err != nil {
+		return err
 	}
 
 	// Create external link message
@@ -470,7 +468,7 @@ func (fw *FileWriter) CreateExternalLink(linkPath, fileName, objectPath string) 
 
 	// Add link to parent group's symbol table
 	if err := fw.linkToParent(parent, linkName, linkAddr); err != nil {
-		return fmt.Errorf("failed to add external link to parent group: %w", err)
+		return fw.discardUnlinkedObject(linkAddr, fmt.Errorf("failed to add external link to parent group: %w", err))
 	}
 
 	return nil

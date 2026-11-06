@@ -15,6 +15,8 @@ const (
 	bt2InternalSig = "BTIN"
 	bt2LeafSig     = "BTLF"
 
+	bt2TypeHugeIndirect   = 1         // H5B2_FHEAP_HUGE_INDIR_ID.
+	bt2TypeHugeDirect     = 3         // H5B2_FHEAP_HUGE_DIR_ID.
 	bt2TypeGroupName      = 5         // H5B2_GRP_DENSE_NAME_ID.
 	bt2TypeGroupCorder    = 6         // H5B2_GRP_DENSE_CORDER_ID.
 	bt2TypeAttrName       = 8         // H5B2_ATTR_DENSE_NAME_ID.

@@ -21,14 +21,24 @@ const undefinedAddress = uint64(0xFFFFFFFFFFFFFFFF)
 //  2. Decrements the object's reference count (hard link count)
 //  3. If refcount reaches 0, frees the object's storage: the object header
 //     and its continuation chunks, contiguous data, every chunk and every
-//     block of the chunk index, and an empty group's structures
+//     block of the chunk index, dense attribute storage, and an empty
+//     group's structures (a symbol table's B-tree and local heap, or the
+//     fractal heap and indexes of dense link storage)
 //
 // Constraints:
 //   - Cannot delete the root group "/"
-//   - Cannot delete non-empty groups (delete children first); the refusal
-//     comes before anything is written, so the file is left unchanged
+//   - Cannot delete a group that still has links, in any of the three forms
+//     a group stores them (a symbol table, link messages in its header, or
+//     dense link storage): delete its children first
+//   - Cannot delete the last link of an object that holds a reference into
+//     the file's shared object header message heap (a message, an attribute
+//     or an attribute's datatype or dataspace stored there): the error wraps
+//     ErrNotSupported
 //   - Path must start with "/"
 //   - Object must exist
+//
+// Every refusal comes before anything is written, so the file is left
+// unchanged.
 //
 // Parameters:
 //   - path: Absolute path to the object (e.g., "/dataset1", "/group1/data")
@@ -147,13 +157,23 @@ func (fw *FileWriter) prepareDelete(objectAddr uint64, sb *core.Superblock) (*co
 // the allocator without changing it (writer.Allocator.CheckFree): every range
 // lies in the file and overlaps neither free space nor another range.
 //
+// Dense attribute storage (H5O__ainfo_delete → H5A__dense_delete,
+// H5Oainfo.c:327-342) and dense link storage (H5O__linfo_delete →
+// H5G__dense_delete, H5Olinfo.c:331-344) are collected by
+// core.DenseAttributeStorageBlocks and core.DenseLinkStorageBlocks: their v2
+// B-trees, the fractal heap's blocks, free-space manager and huge objects.
+// An object holding a reference into the shared object header message heap
+// is refused (core.CheckNoSOHMReferences): C would decrement it there
+// (H5SM_delete), which this library cannot do.
+//
 // It only reads, so Delete runs it before its first write: a structure that
 // cannot be read or a range that fails the check refuses the delete with the
 // file unchanged.
-//
-// Not collected, as before: the fractal heaps and v2 B-trees of dense
-// attribute and link storage, which stay allocated.
 func (fw *FileWriter) deleteRanges(objectAddr uint64, oh *core.ObjectHeader, sb *core.Superblock) ([]writer.FreeBlock, error) {
+	if err := core.CheckNoSOHMReferences(sb, oh.Messages); err != nil {
+		return nil, err
+	}
+
 	limit := fw.file.ReadLimit()
 	var ranges []writer.FreeBlock
 	add := func(addr, size uint64) error {
@@ -175,26 +195,10 @@ func (fw *FileWriter) deleteRanges(objectAddr uint64, oh *core.ObjectHeader, sb 
 		return nil, err
 	}
 
+	ainfo := attributeInfoMessage(oh)
 	for _, msg := range oh.Messages {
-		switch msg.Type {
-		case core.MsgContinuation:
-			addr, length, err := continuationMessage(msg.Data, sb)
-			if err != nil {
-				return nil, err
-			}
-			if err := add(addr, length); err != nil {
-				return nil, err
-			}
-
-		case core.MsgDataLayout:
-			if err := fw.layoutRanges(oh, msg.Data, sb, limit, add); err != nil {
-				return nil, err
-			}
-
-		case core.MsgSymbolTable:
-			if err := fw.groupStructureRanges(msg.Data, sb, add); err != nil {
-				return nil, err
-			}
+		if err := fw.messageRanges(oh, msg, msg == ainfo, sb, limit, add); err != nil {
+			return nil, err
 		}
 	}
 
@@ -202,6 +206,75 @@ func (fw *FileWriter) deleteRanges(objectAddr uint64, oh *core.ObjectHeader, sb 
 		return nil, fmt.Errorf("%w: %w", utils.ErrCorrupt, err)
 	}
 	return ranges, nil
+}
+
+// messageRanges collects the blocks one message of oh refers to
+// (deleteRanges); isAinfo marks the object's attribute info message.
+func (fw *FileWriter) messageRanges(oh *core.ObjectHeader, msg *core.HeaderMessage, isAinfo bool, sb *core.Superblock,
+	limit uint64, add func(addr, size uint64) error,
+) error {
+	switch msg.Type {
+	case core.MsgContinuation:
+		addr, length, err := continuationMessage(msg.Data, sb)
+		if err != nil {
+			return err
+		}
+		return add(addr, length)
+
+	case core.MsgDataLayout:
+		return fw.layoutRanges(oh, msg.Data, sb, limit, add)
+
+	case core.MsgSymbolTable:
+		return fw.groupStructureRanges(msg.Data, sb, add)
+
+	case core.MsgLinkInfo:
+		return fw.denseLinkRanges(msg.Data, sb, add)
+
+	default:
+		if isAinfo {
+			return fw.denseAttributeRanges(msg.Data, sb, add)
+		}
+		return nil
+	}
+}
+
+// denseAttributeRanges collects the dense attribute storage an attribute
+// info message names (H5O__ainfo_delete, H5Oainfo.c:327-342), nothing while
+// the attributes are compact (an undefined heap address).
+func (fw *FileWriter) denseAttributeRanges(data []byte, sb *core.Superblock, add func(addr, size uint64) error) error {
+	ainfo, err := core.ParseAttributeInfoMessage(data, sb)
+	if err != nil {
+		return fmt.Errorf("%w: attribute info message: %w", utils.ErrCorrupt, err)
+	}
+	if !ainfo.HasDenseStorage(sb.OffsetSize) {
+		return nil
+	}
+	if _, err := core.DenseAttributeStorageBlocks(fw.writer.Reader(), sb, ainfo, add); err != nil {
+		return fmt.Errorf("dense attribute storage: %w", err)
+	}
+	return nil
+}
+
+// denseLinkRanges collects the dense link storage a link info message names
+// (H5O__linfo_delete, H5Olinfo.c:331-344), nothing for a group whose links
+// are compact. Like groupStructureRanges it refuses a group that still has
+// links; Delete checks that first (checkGroupEmpty).
+func (fw *FileWriter) denseLinkRanges(data []byte, sb *core.Superblock, add func(addr, size uint64) error) error {
+	linfo, err := core.ParseLinkInfoMessage(data, sb)
+	if err != nil {
+		return fmt.Errorf("%w: link info message: %w", utils.ErrCorrupt, err)
+	}
+	if !linfo.HasFractalHeap() {
+		return nil
+	}
+	dense, err := core.DenseLinkStorageBlocks(fw.writer.Reader(), sb, linfo, add)
+	if err != nil {
+		return fmt.Errorf("dense link storage: %w", err)
+	}
+	if dense.Records > 0 {
+		return nonEmptyGroupError(dense.Records)
+	}
+	return nil
 }
 
 // continuationMessage decodes a continuation message: the chunk's address
@@ -355,27 +428,73 @@ func (fw *FileWriter) groupStructureRanges(symTableData []byte, sb *core.Superbl
 	return add(heap.DataSegmentAddress, heap.DataSegmentSize)
 }
 
-// checkGroupEmpty refuses an object whose symbol table still holds entries.
-// It only reads, so Delete runs it before it writes anything.
+// checkGroupEmpty refuses a group that still has links, in each form a group
+// keeps them: symbol table entries (H5G__stab_delete), link messages in its
+// header (H5G__compact_*) and dense link storage (H5G__dense_*), read through
+// the readers the group listing uses. The C library deletes the children with
+// the group (H5O__linfo_delete with adj_link, H5Gdense.c:1581; H5Gstab.c);
+// this library refuses, so no child is orphaned. It only reads, so Delete
+// runs it before it writes anything.
 func (fw *FileWriter) checkGroupEmpty(oh *core.ObjectHeader, sb *core.Superblock) error {
+	var links uint64
 	for _, msg := range oh.Messages {
-		if msg.Type != core.MsgSymbolTable {
-			continue
-		}
-		btreeAddr, _, err := symbolTableMessageAddrs(msg.Data, sb)
-		if err != nil {
-			return err
-		}
-		g := fw.groupSymbolTable(nil)
-		_, snods, err := g.groupNodes(btreeAddr)
-		if err != nil {
-			return fmt.Errorf("read group B-tree: %w", err)
-		}
-		if err := g.requireNoEntries(snods); err != nil {
-			return err
+		switch msg.Type {
+		case core.MsgSymbolTable:
+			if err := fw.requireEmptySymbolTable(msg.Data, sb); err != nil {
+				return err
+			}
+
+		case core.MsgLinkMessage:
+			links++
+
+		case core.MsgLinkInfo:
+			n, err := fw.denseLinkCount(msg.Data, sb)
+			if err != nil {
+				return err
+			}
+			links += n
 		}
 	}
+	if links > 0 {
+		return nonEmptyGroupError(links)
+	}
 	return nil
+}
+
+// requireEmptySymbolTable refuses a symbol table group with entries.
+func (fw *FileWriter) requireEmptySymbolTable(data []byte, sb *core.Superblock) error {
+	btreeAddr, _, err := symbolTableMessageAddrs(data, sb)
+	if err != nil {
+		return err
+	}
+	g := fw.groupSymbolTable(nil)
+	_, snods, err := g.groupNodes(btreeAddr)
+	if err != nil {
+		return fmt.Errorf("read group B-tree: %w", err)
+	}
+	return g.requireNoEntries(snods)
+}
+
+// denseLinkCount returns the number of links in the dense link storage a
+// link info message points at, 0 when it has none.
+func (fw *FileWriter) denseLinkCount(data []byte, sb *core.Superblock) (uint64, error) {
+	linfo, err := core.ParseLinkInfoMessage(data, sb)
+	if err != nil {
+		return 0, fmt.Errorf("%w: link info message: %w", utils.ErrCorrupt, err)
+	}
+	if !linfo.HasFractalHeap() || !linfo.HasNameBTree() {
+		return 0, nil
+	}
+	objects, err := core.ReadDenseHeapObjects(fw.writer.Reader(), linfo.NameBTreeAddress, linfo.FractalHeapAddress, sb)
+	if err != nil {
+		return 0, fmt.Errorf("read dense links: %w", err)
+	}
+	return uint64(len(objects)), nil
+}
+
+// nonEmptyGroupError is the refusal of a group that still has children.
+func nonEmptyGroupError[T int | uint64](children T) error {
+	return fmt.Errorf("cannot delete non-empty group (has %d children); delete children first", children)
 }
 
 // requireNoEntries refuses a group whose symbol table nodes hold entries.
@@ -389,7 +508,7 @@ func (g *groupSymbolTable) requireNoEntries(snods []uint64) error {
 		children += len(sn.Entries)
 	}
 	if children > 0 {
-		return fmt.Errorf("cannot delete non-empty group (has %d children); delete children first", children)
+		return nonEmptyGroupError(children)
 	}
 	return nil
 }

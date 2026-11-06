@@ -385,8 +385,10 @@ func TestShouldTriggerBatchRebalancing(t *testing.T) {
 			BatchSize: 100,
 		})
 
-		// Wait for delay to exceed.
-		time.Sleep(5 * time.Millisecond)
+		// Put the last rebalance an hour back instead of sleeping past
+		// MaxDelay: the trigger reads time.Since(LastRebalance), so this
+		// exercises the same path with no wait.
+		bt.lazyState.LastRebalance = time.Now().Add(-time.Hour)
 
 		if !bt.shouldTriggerBatchRebalancing() {
 			t.Error("should trigger after MaxDelay exceeded")

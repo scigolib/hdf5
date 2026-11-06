@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // Workload Detection System for HDF5 B-tree Rebalancing Optimization.
@@ -171,19 +173,6 @@ func (f WorkloadFeatures) String() string {
 		f.OperationRate, f.BurstDetected, f.FileSize, f.SampleSize)
 }
 
-// Clock is an interface for time operations (allows mocking in tests).
-type Clock interface {
-	Now() time.Time
-}
-
-// RealClock implements Clock using actual system time.
-type RealClock struct{}
-
-// Now returns the current time.
-func (RealClock) Now() time.Time {
-	return time.Now()
-}
-
 // WorkloadDetector analyzes operation patterns in a sliding time window.
 //
 // This is the main component of the workload detection system.
@@ -218,7 +207,7 @@ type WorkloadDetector struct {
 	lastFlush time.Time        // Last time old events were flushed
 
 	// Dependencies
-	clock Clock // Time source (mockable for tests)
+	clock utils.Clock // Time source (mockable for tests)
 }
 
 // DetectorOption is a functional option for configuring WorkloadDetector.
@@ -269,7 +258,7 @@ func WithCapacity(capacity int) DetectorOption {
 }
 
 // WithClock sets a custom clock (for testing).
-func WithClock(clock Clock) DetectorOption {
+func WithClock(clock utils.Clock) DetectorOption {
 	return func(d *WorkloadDetector) {
 		if clock != nil {
 			d.clock = clock
@@ -299,7 +288,7 @@ func NewWorkloadDetector(options ...DetectorOption) *WorkloadDetector {
 		windowSize:    5 * time.Minute,
 		minSampleSize: 10,
 		capacity:      10000,
-		clock:         RealClock{},
+		clock:         utils.RealClock{},
 	}
 
 	// Apply options

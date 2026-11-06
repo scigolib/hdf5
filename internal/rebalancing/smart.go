@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/scigolib/hdf5/internal/structures"
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // Smart Rebalancer - Orchestrates intelligent B-tree rebalancing.
@@ -143,7 +144,7 @@ type SmartRebalancer struct {
 	wg     sync.WaitGroup
 
 	// Clock for testing
-	clock Clock
+	clock utils.Clock
 }
 
 // RebalancerStats tracks Smart Rebalancer statistics.
@@ -239,7 +240,11 @@ func WithReevalInterval(interval time.Duration) SmartRebalancerOption {
 }
 
 // WithRebalancerClock sets a custom clock (for testing).
-func WithRebalancerClock(clock Clock) SmartRebalancerOption {
+//
+// The clock drives the re-evaluation ticker, the evaluation timestamps and the
+// metrics collector, and it is passed on to the default detector and selector
+// (the ones created when WithDetector or WithSelector is not given).
+func WithRebalancerClock(clock utils.Clock) SmartRebalancerOption {
 	return func(sr *SmartRebalancer) {
 		if clock != nil {
 			sr.clock = clock
@@ -274,7 +279,7 @@ func NewSmartRebalancer(btree BTreeV2, options ...SmartRebalancerOption) *SmartR
 		btree:          btree,
 		currentMode:    ModeNone,
 		reevalInterval: 5 * time.Minute,
-		clock:          RealClock{},
+		clock:          utils.RealClock{},
 	}
 
 	// Apply options
@@ -298,7 +303,7 @@ func NewSmartRebalancer(btree BTreeV2, options ...SmartRebalancerOption) *SmartR
 
 	// Create default metrics collector if not provided
 	if sr.metrics == nil {
-		sr.metrics = NewMetricsCollector()
+		sr.metrics = NewMetricsCollector(WithMetricsClock(sr.clock))
 	}
 
 	return sr
@@ -648,12 +653,14 @@ func (sr *SmartRebalancer) monitorLoop() {
 		}
 	}()
 
-	ticker := time.NewTicker(sr.reevalInterval)
+	// The ticker comes from the injected clock: with utils.RealClock it is a
+	// time.Ticker, in tests it fires only when the test advances the clock.
+	ticker := sr.clock.NewTicker(sr.reevalInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ticker.C:
+		case <-ticker.C():
 			// Re-evaluate workload
 			decision, err := sr.Evaluate()
 			if err != nil {
