@@ -30,6 +30,8 @@ type compoundCase struct {
 	dump   []string             // substrings h5dump must print
 }
 
+// basicType returns a little-endian member type; an integer is unsigned
+// (CreateBasicDatatypeMessage), so ReadCompound returns it as uint32/uint64.
 func basicType(t *testing.T, class core.DatatypeClass, size uint32) *core.DatatypeMessage {
 	t.Helper()
 	dt, err := core.CreateBasicDatatypeMessage(class, size)
@@ -52,8 +54,8 @@ func compoundCases() []compoundCase {
 		},
 		n: 2,
 		want: []core.CompoundValue{
-			{"id": int32(1), "value": 0.5},
-			{"id": int32(2), "value": 1.5},
+			{"id": uint32(1), "value": 0.5},
+			{"id": uint32(2), "value": 1.5},
 		},
 		dump: []string{"H5T_COMPOUND", `"id"`, `"value"`, "0.5", "1.5"},
 	}
@@ -96,8 +98,8 @@ func compoundCases() []compoundCase {
 		},
 		n: 2,
 		want: []core.CompoundValue{
-			{"label": "row0", "count": int32(10)},
-			{"label": "row1", "count": int32(11)},
+			{"label": "row0", "count": uint32(10)},
+			{"label": "row1", "count": uint32(11)},
 		},
 		dump: []string{"H5T_COMPOUND", `"label"`, `"count"`, `"row1"`, "11"},
 	}
@@ -123,8 +125,8 @@ func compoundCases() []compoundCase {
 		},
 		n: 2,
 		want: []core.CompoundValue{
-			{"id": int32(1), "pos": core.CompoundValue{"x": 1.25, "y": 2.25}},
-			{"id": int32(2), "pos": core.CompoundValue{"x": 3.25, "y": 4.25}},
+			{"id": uint32(1), "pos": core.CompoundValue{"x": 1.25, "y": 2.25}},
+			{"id": uint32(2), "pos": core.CompoundValue{"x": 3.25, "y": 4.25}},
 		},
 		dump: []string{"H5T_COMPOUND", `"pos"`, `"x"`, `"y"`, "1.25", "4.25"},
 	}

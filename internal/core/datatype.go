@@ -4,6 +4,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // DatatypeClass represents HDF5 datatype class.
@@ -104,10 +107,15 @@ const MsgFlagShared uint8 = 0x02
 // attribute message flag that marks its datatype as shared.
 const attrFlagTypeShared = 0x01
 
+// attrFlagSpaceShared is H5O_ATTR_FLAG_SPACE_SHARED (H5Oattr.c:89): the
+// attribute's dataspace field is a shared-message reference.
+const attrFlagSpaceShared = 0x02
+
 // errSharedDatatype reports a datatype message that refers to a committed
 // datatype. Such files are valid HDF5; the library does not resolve the
-// reference yet, so this is deliberately not utils.ErrCorrupt.
-var errSharedDatatype = errors.New("committed (shared) datatype not supported yet")
+// reference on this path (no file to read), so it wraps utils.ErrNotSupported,
+// deliberately not utils.ErrCorrupt.
+var errSharedDatatype = fmt.Errorf("committed (shared) datatype not supported yet: %w", utils.ErrNotSupported)
 
 // ParseDatatypeHeaderMessage decodes the datatype message msg of an object
 // header. A shared message (a committed datatype) is reported with an error
@@ -121,6 +129,27 @@ func ParseDatatypeHeaderMessage(msg *HeaderMessage) (*DatatypeMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("datatype message at 0x%x: %w", msg.Offset, err)
 	}
+	return dt, nil
+}
+
+// ResolveDatatypeHeaderMessage decodes the datatype message msg of an object
+// header in the file r. A shared message (a committed datatype) is followed to
+// the committed datatype's object header and its datatype message is decoded
+// there (H5O__shared_decode, H5Oshared.c:289; H5O__shared_read,
+// H5Oshared.c:95), so the caller gets a plain datatype. Errors on invalid bytes
+// wrap utils.ErrCorrupt; a datatype in the shared message heap is reported
+// with an error IsSOHMNotSupported recognizes.
+func ResolveDatatypeHeaderMessage(r io.ReaderAt, sb *Superblock, msg *HeaderMessage) (*DatatypeMessage, error) {
+	body, err := messageBody(r, sb, msg)
+	if err != nil {
+		return nil, fmt.Errorf("datatype message: %w", err)
+	}
+
+	dt, err := ParseDatatypeMessage(body)
+	if err != nil {
+		return nil, fmt.Errorf("datatype message at 0x%x: %w", msg.Offset, err)
+	}
+
 	return dt, nil
 }
 

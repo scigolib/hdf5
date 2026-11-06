@@ -69,8 +69,8 @@ const (
 	MsgDataspace      MessageType = 1
 	MsgLinkInfo       MessageType = 2
 	MsgDatatype       MessageType = 3
-	MsgFillValueOld   MessageType = 4
-	MsgFillValue      MessageType = 5  // Alias for FillValueOld
+	MsgFillValueOld   MessageType = 4  // Old fill value message (H5O_FILL_ID, H5Oprivate.h:211)
+	MsgFillValue      MessageType = 5  // Fill value message (H5O_FILL_NEW_ID, H5Oprivate.h:212)
 	MsgDataLayout     MessageType = 8  // Corrected: Data Layout is 0x0008
 	MsgFilterPipeline MessageType = 11 // Filter Pipeline (compression, etc)
 	MsgAttribute      MessageType = 12
@@ -85,6 +85,15 @@ const (
 // ReadObjectHeader reads and parses an HDF5 object header from the specified address.
 // It supports both version 1 and version 2 object header formats.
 func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHeader, error) {
+	return readObjectHeader(r, address, sb, true)
+}
+
+// readObjectHeader reads the object header at address. withAttributes parses
+// the attribute messages into ObjectHeader.Attributes; resolving a shared
+// message reads its target header without them (resolveSharedMessage), so an
+// attribute typed by the committed datatype it is attached to cannot start a
+// resolution loop.
+func readObjectHeader(r io.ReaderAt, address uint64, sb *Superblock, withAttributes bool) (*ObjectHeader, error) {
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	offset := int64(address)
 	if offset < 0 {
@@ -165,6 +174,10 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 				break
 			}
 		}
+	}
+
+	if !withAttributes {
+		return header, nil
 	}
 
 	// Parse attributes from messages (both compact and dense)

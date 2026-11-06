@@ -19,6 +19,13 @@ var ErrCorrupt = errors.New("hdf5: corrupt file")
 // limit lets the read proceed. Re-exported as hdf5.ErrLimit.
 var ErrLimit = errors.New("hdf5: read limit exceeded")
 
+// ErrNotSupported marks valid HDF5 that this library does not read or write
+// yet: a filter without a decoder (N-bit, SZIP, a third-party plugin), a
+// message shared through the file-wide SOHM heap. Unlike ErrCorrupt the file
+// is fine; unlike ErrLimit no setting changes the outcome. Re-exported as
+// hdf5.ErrNotSupported.
+var ErrNotSupported = errors.New("hdf5: not supported")
+
 // H5Error represents a structured HDF5 error.
 type H5Error struct {
 	Context string

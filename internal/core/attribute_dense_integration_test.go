@@ -14,8 +14,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestReadValue_Int8(t *testing.T) {
-	// Int8 is not directly supported by ReadValue (only size 4 and 8 for Fixed).
-	// Expect an "unsupported" error for size=1.
+	// 1-byte integers read as int8 (TASK-068; they were "unsupported" before).
 	attr := &Attribute{
 		Name: "int8_attr",
 		Datatype: &DatatypeMessage{
@@ -30,14 +29,13 @@ func TestReadValue_Int8(t *testing.T) {
 		Data: []byte{0x01, 0x02, 0x03},
 	}
 
-	_, err := attr.ReadValue()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported datatype class")
+	v, err := attr.ReadValue()
+	require.NoError(t, err)
+	require.Equal(t, []int8{1, 2, 3}, v)
 }
 
 func TestReadValue_Int16(t *testing.T) {
-	// Int16 is not directly supported by ReadValue (only size 4 and 8 for Fixed).
-	// Expect an "unsupported" error for size=2.
+	// 2-byte integers read as int16 (TASK-068; they were "unsupported" before).
 	attr := &Attribute{
 		Name: "int16_attr",
 		Datatype: &DatatypeMessage{
@@ -52,9 +50,9 @@ func TestReadValue_Int16(t *testing.T) {
 		Data: []byte{0x01, 0x00, 0x02, 0x00},
 	}
 
-	_, err := attr.ReadValue()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported datatype class")
+	v, err := attr.ReadValue()
+	require.NoError(t, err)
+	require.Equal(t, []int16{1, 2}, v)
 }
 
 func TestReadValue_Uint32(t *testing.T) {

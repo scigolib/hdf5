@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // ObjectHeaderWriter provides functionality for writing HDF5 object headers.
@@ -393,7 +395,7 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 		// Tracked attribute creation order adds a 2-byte creation index to
 		// every message header (H5Ocache.c:1283-1289); rewriting such a
 		// header is not supported, refuse instead of corrupting it.
-		return 0, fmt.Errorf("object header at %d tracks attribute creation order (flags 0x%02x): rewriting it is not supported", address, ohw.Flags)
+		return 0, fmt.Errorf("object header at %d tracks attribute creation order (flags 0x%02x): rewriting it: %w", address, ohw.Flags, utils.ErrNotSupported)
 	}
 	flags := ohw.v2PrefixFlags() | flagsBits // keep the optional-field flags whose fields are present
 

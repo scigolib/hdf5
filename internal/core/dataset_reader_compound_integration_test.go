@@ -188,7 +188,7 @@ func TestParseMemberValue_AllTypes(t *testing.T) {
 			datatype: &DatatypeMessage{
 				Class:         DatatypeFixed,
 				Size:          4,
-				ClassBitField: 0,
+				ClassBitField: 0x08, // Signed (bit 3).
 			},
 			want:    int32(42),
 			wantErr: false,
@@ -199,7 +199,7 @@ func TestParseMemberValue_AllTypes(t *testing.T) {
 			datatype: &DatatypeMessage{
 				Class:         DatatypeFixed,
 				Size:          8,
-				ClassBitField: 0,
+				ClassBitField: 0x08, // Signed (bit 3).
 			},
 			want:    int64(100),
 			wantErr: false,

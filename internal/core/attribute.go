@@ -49,7 +49,32 @@ type AttributeInfoMessage struct {
 // - Datatype message data.
 // - Dataspace message data.
 // - Data (variable).
+//
+// The message is decoded without the file, so a shared (committed) datatype
+// cannot be resolved and is reported with an error IsSharedDatatype
+// recognizes; ParseAttributesFromMessages resolves it.
 func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute, error) {
+	return parseAttributeMessage(data, endianness, nil)
+}
+
+// sharedResolver returns the body of the message of type msgType that a
+// shared-message reference points at (resolveSharedMessage bound to a file).
+type sharedResolver func(ref []byte, msgType MessageType) ([]byte, error)
+
+// fileResolver binds resolveSharedMessage to the file r.
+func fileResolver(r io.ReaderAt, sb *Superblock) sharedResolver {
+	return func(ref []byte, msgType MessageType) ([]byte, error) {
+		return resolveSharedMessage(r, sb, ref, msgType)
+	}
+}
+
+// parseAttributeMessage decodes an attribute message as H5O__attr_decode
+// (H5Oattr.c:113-300). With H5O_ATTR_FLAG_TYPE_SHARED or
+// H5O_ATTR_FLAG_SPACE_SHARED set (H5Oattr.c:88-89) the datatype or dataspace
+// field holds a shared-message reference, which C decodes through the shared
+// wrapper (H5Oattr.c:218-221, :240-243); resolve follows it, and a nil resolve
+// reports the shared datatype as unresolved.
+func parseAttributeMessage(data []byte, endianness binary.ByteOrder, resolve sharedResolver) (*Attribute, error) {
 	if len(data) < 8 {
 		return nil, fmt.Errorf("attribute message too short: %d bytes", len(data))
 	}
@@ -63,10 +88,24 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 
 	// Flags: bit 0 marks a shared (committed) datatype, H5O_ATTR_FLAG_TYPE_SHARED
 	// (H5Oattr.c:88, decoded at H5Oattr.c:219). Its datatype field is then a
-	// shared-message reference: valid HDF5 the library does not resolve yet,
-	// so it is reported as such, not as corruption.
-	if data[offset]&attrFlagTypeShared != 0 {
+	// shared-message reference: valid HDF5, not corruption. Without a file to
+	// resolve it in, it is reported as unresolved.
+	// The byte is unused before version 2 (H5Oattr.c:153-161), and a version
+	// 2+ flag outside H5O_ATTR_FLAG_ALL is rejected ("unknown flag").
+	var flags uint8
+	if version >= 2 {
+		flags = data[offset]
+		if flags&^(attrFlagTypeShared|attrFlagSpaceShared) != 0 {
+			return nil, fmt.Errorf("%w: unknown flag 0x%02x for attribute message (H5Oattr.c:158)", utils.ErrCorrupt, flags)
+		}
+	}
+	typeShared := flags&attrFlagTypeShared != 0
+	spaceShared := flags&attrFlagSpaceShared != 0
+	if typeShared && resolve == nil {
 		return nil, fmt.Errorf("attribute datatype: %w", errSharedDatatype)
+	}
+	if spaceShared && resolve == nil {
+		return nil, fmt.Errorf("attribute dataspace is a shared message: %w", errSharedDatatype)
 	}
 	offset++
 
@@ -99,18 +138,19 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 		attr.Name = string(data[offset : offset+int(nameSize)-1])
 	}
 
-	// For version 1 and 2, name/datatype/dataspace are padded to 8-byte boundaries.
-	// For version 3+, no padding (sizes are exact).
-	// Reference: H5Oattr.c - H5O_ALIGN_OLD macro: (8 * (((X) + 7) / 8))
+	// Version 1 pads the name, datatype and dataspace to 8-byte boundaries;
+	// from version 2 on the sizes are exact: H5O__attr_decode applies
+	// H5O_ALIGN_OLD only when version < H5O_ATTR_VERSION_2 (H5Oattr.c:207-208,
+	// :224-225, :257-258). The sum is done in int so 0xFFFF cannot wrap.
 	alignTo8 := func(size uint16) int {
-		return int((size + 7) & ^uint16(7))
+		return (int(size) + 7) &^ 7
 	}
 
-	if version < 3 {
-		// V1/V2: Pad to 8-byte boundaries
+	if version < 2 {
+		// Version 1: pad to 8-byte boundaries.
 		offset += alignTo8(nameSize)
 	} else {
-		// V3+: Exact sizes
+		// Version 2+: exact sizes.
 		offset += int(nameSize)
 	}
 
@@ -121,12 +161,17 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 
 	datatypeData := data[offset : offset+int(datatypeSize)]
 	var err error
+	if typeShared {
+		if datatypeData, err = resolve(datatypeData, MsgDatatype); err != nil {
+			return nil, fmt.Errorf("attribute datatype: %w", err)
+		}
+	}
 	attr.Datatype, err = ParseDatatypeMessage(datatypeData)
 	if err != nil {
 		return nil, utils.WrapError("datatype parse failed", err)
 	}
 
-	if version < 3 {
+	if version < 2 {
 		offset += alignTo8(datatypeSize)
 	} else {
 		offset += int(datatypeSize)
@@ -138,12 +183,17 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 	}
 
 	dataspaceData := data[offset : offset+int(dataspaceSize)]
+	if spaceShared {
+		if dataspaceData, err = resolve(dataspaceData, MsgDataspace); err != nil {
+			return nil, fmt.Errorf("attribute dataspace: %w", err)
+		}
+	}
 	attr.Dataspace, err = ParseDataspaceMessage(dataspaceData)
 	if err != nil {
 		return nil, utils.WrapError("dataspace parse failed", err)
 	}
 
-	if version < 3 {
+	if version < 2 {
 		offset += alignTo8(dataspaceSize)
 	} else {
 		offset += int(dataspaceSize)
@@ -167,8 +217,6 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 }
 
 // ReadValue reads the attribute value as the appropriate Go type.
-//
-//nolint:maintidx // Complexity inherent in handling multiple HDF5 datatype classes
 func (a *Attribute) ReadValue() (interface{}, error) {
 	if a.Datatype == nil || a.Dataspace == nil {
 		return nil, fmt.Errorf("attribute missing datatype or dataspace")
@@ -186,52 +234,24 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 
 	switch a.Datatype.Class {
 	case DatatypeFixed:
-		switch a.Datatype.Size {
-		case 4:
-			// CVE-2025-6269 fix: Check for multiplication overflow before processing.
-			totalBytes, err := utils.SafeMultiply(totalElements, 4)
-			if err != nil {
-				return nil, fmt.Errorf("attribute size overflow (int32): %w", err)
-			}
-
-			if totalBytes > uint64(len(a.Data)) {
-				return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
-					totalBytes, len(a.Data))
-			}
-
-			values := make([]int32, totalElements)
-			for i := uint64(0); i < totalElements; i++ {
-				offset := i * 4
-				//nolint:gosec // G115: HDF5 binary format requires uint32 to int32 conversion
-				values[i] = int32(binary.LittleEndian.Uint32(a.Data[offset : offset+4]))
-			}
-			if isScalar {
-				return values[0], nil
-			}
-			return values, nil
-		case 8:
-			// CVE-2025-6269 fix: Check for multiplication overflow before processing.
-			totalBytes, err := utils.SafeMultiply(totalElements, 8)
-			if err != nil {
-				return nil, fmt.Errorf("attribute size overflow (int64): %w", err)
-			}
-
-			if totalBytes > uint64(len(a.Data)) {
-				return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
-					totalBytes, len(a.Data))
-			}
-
-			values := make([]int64, totalElements)
-			for i := uint64(0); i < totalElements; i++ {
-				offset := i * 8
-				//nolint:gosec // G115: HDF5 binary format requires uint64 to int64 conversion
-				values[i] = int64(binary.LittleEndian.Uint64(a.Data[offset : offset+8]))
-			}
-			if isScalar {
-				return values[0], nil
-			}
-			return values, nil
+		size := a.Datatype.Size
+		if !isGoIntegerWidth(size) {
+			break
 		}
+		// CVE-2025-6269 fix: Check for multiplication overflow before processing.
+		totalBytes, err := utils.SafeMultiply(totalElements, uint64(size))
+		if err != nil {
+			return nil, fmt.Errorf("attribute size overflow (%d-byte integer): %w", size, err)
+		}
+		if totalBytes > uint64(len(a.Data)) {
+			return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
+				totalBytes, len(a.Data))
+		}
+		// 1- and 2-byte integers read with their sign. 4- and 8-byte integers
+		// keep the int32/int64 values attributes have always returned, also
+		// when the type is unsigned; every width reads in its stored byte order.
+		signed := a.Datatype.IsSignedFixedPoint() || size >= 4
+		return fixedArray(a.Data, totalElements, size, signed, a.Datatype.GetByteOrder(), isScalar), nil
 
 	case DatatypeFloat:
 		switch a.Datatype.Size {
@@ -250,7 +270,7 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 			values := make([]float32, totalElements)
 			for i := uint64(0); i < totalElements; i++ {
 				offset := i * 4
-				bits := binary.LittleEndian.Uint32(a.Data[offset : offset+4])
+				bits := a.Datatype.GetByteOrder().Uint32(a.Data[offset : offset+4])
 				values[i] = float32frombits(bits)
 			}
 			if isScalar {
@@ -272,7 +292,7 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 			values := make([]float64, totalElements)
 			for i := uint64(0); i < totalElements; i++ {
 				offset := i * 8
-				bits := binary.LittleEndian.Uint64(a.Data[offset : offset+8])
+				bits := a.Datatype.GetByteOrder().Uint64(a.Data[offset : offset+8])
 				values[i] = float64frombits(bits)
 			}
 			if isScalar {
@@ -367,7 +387,7 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 		return values, nil
 	}
 
-	return nil, fmt.Errorf("unsupported datatype class %d or size %d", a.Datatype.Class, a.Datatype.Size)
+	return nil, fmt.Errorf("unsupported datatype class %d or size %d: %w", a.Datatype.Class, a.Datatype.Size, utils.ErrNotSupported)
 }
 
 // readVariableLengthString reads a variable-length string from the Global Heap.
@@ -450,7 +470,14 @@ func ParseAttributesFromMessages(r io.ReaderAt, messages []*HeaderMessage, sb *S
 		if msg.Type != MsgAttribute {
 			continue
 		}
-		attr, err := ParseAttributeMessage(msg.Data, sb.Endianness)
+		// An attribute message is sharable itself (H5Oattr.c includes
+		// H5Oshared.h); C shares it only in the shared message heap.
+		body, err := messageBody(r, sb, msg)
+		if err != nil {
+			// Log error but continue with other attributes
+			continue
+		}
+		attr, err := parseAttributeMessage(body, sb.Endianness, fileResolver(r, sb))
 		if err != nil {
 			// Log error but continue with other attributes
 			continue
@@ -543,10 +570,11 @@ func readDenseAttributes(r io.ReaderAt, attrInfo *AttributeInfoMessage, sb *Supe
 		}
 
 		// Parse as attribute message (version 3 for dense attributes)
-		attr, err := ParseAttributeMessage(objectData, sb.Endianness)
-		if IsSharedDatatype(err) {
-			// A committed-type attribute is valid HDF5 the library cannot
-			// read yet: skip it as the compact path does, keep the others.
+		attr, err := parseAttributeMessage(objectData, sb.Endianness, fileResolver(r, sb))
+		if IsSOHMNotSupported(err) {
+			// An attribute typed by a message in the shared message heap is
+			// valid HDF5 the library cannot read yet: skip it as the compact
+			// path does, keep the others.
 			continue
 		}
 		if err != nil {
@@ -858,7 +886,12 @@ func parseHeapID(heapID [7]byte, header *fractalHeapHeaderRaw) (offset, length u
 	// Check type (bits 4-5 of byte 0, per HDF5 format spec)
 	heapType := (heapID[0] & 0x30) >> 4
 	if heapType != 0 {
-		return 0, 0, fmt.Errorf("unsupported heap ID type: %d (only managed objects supported)", heapType)
+		// Huge (1) and tiny (2) objects are valid, read only by C so far; 3 is
+		// reserved (H5HFpkg.h:141-144).
+		if heapType == 3 {
+			return 0, 0, fmt.Errorf("unsupported heap ID type: %d (reserved): %w", heapType, utils.ErrCorrupt)
+		}
+		return 0, 0, fmt.Errorf("unsupported heap ID type: %d (only managed objects supported): %w", heapType, utils.ErrNotSupported)
 	}
 
 	idx := 1

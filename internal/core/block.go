@@ -150,13 +150,22 @@ func contigDataSize(r io.ReaderAt, sb *Superblock, addr, nelmts, elemSize uint64
 // readContiguousDatasetData reads the whole storage of a contiguous dataset.
 // The descriptor validated the size and region against the file
 // (contigDataSize, H5D__contig_check); ResultSize sizes the read and ReadBlock
-// performs it, rejecting an unallocated (undefined) address. Keeping the steps
+// performs it. Unallocated storage (an undefined address) has no bytes to read
+// and reads as the fill value, as H5D__read does (H5Dio.c:239-279). Keeping the steps
 // here is what stops the next reader from copying the unchecked make+ReadAt
 // pattern that ADR-003 had to remove from four places.
 func readContiguousDatasetData(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, resultElemSize, limit uint64) ([]byte, error) {
 	dataSize, err := desc.ResultSize(desc.nelmts, resultElemSize, limit)
 	if err != nil {
 		return nil, err
+	}
+
+	if !desc.ContiguousAllocated() {
+		data := make([]byte, dataSize)
+		if err := desc.FillUnallocated(data); err != nil {
+			return nil, err
+		}
+		return data, nil
 	}
 
 	//nolint:gosec // G115: ResultSize returns a non-negative int.

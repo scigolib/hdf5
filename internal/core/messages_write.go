@@ -327,7 +327,7 @@ func EncodeAttributeMessage(name string, datatype *DatatypeMessage, dataspace *D
 		return nil, fmt.Errorf("encode datatype: %w", err)
 	}
 
-	dataspaceBytes, err := EncodeDataspaceMessage(dataspace.Dimensions, dataspace.MaxDims)
+	dataspaceBytes, err := encodeDataspaceOf(dataspace)
 	if err != nil {
 		return nil, fmt.Errorf("encode dataspace: %w", err)
 	}
@@ -390,6 +390,23 @@ func EncodeAttributeMessage(name string, datatype *DatatypeMessage, dataspace *D
 	}
 
 	return buf, nil
+}
+
+// encodeDataspaceOf encodes a dataspace that may have been read from a file.
+// A null dataspace and a rank-0 (scalar) one are encoded as H5O__sdspace_encode
+// writes them (H5Osdspace.c:249-297): no dimensions, a null one in version 2
+// because version 1 cannot express it. Messages the writer builds always
+// carry dimensions (a scalar as [1]) and keep the simple encoding; their Type
+// is left at its zero value, so the class alone cannot tell them apart.
+func encodeDataspaceOf(ds *DataspaceMessage) ([]byte, error) {
+	switch {
+	case ds.Type == DataspaceNull:
+		return []byte{2, 0, 0, byte(DataspaceNull)}, nil
+	case len(ds.Dimensions) == 0:
+		return []byte{1, 0, 0, 0, 0, 0, 0, 0}, nil
+	default:
+		return EncodeDataspaceMessage(ds.Dimensions, ds.MaxDims)
+	}
 }
 
 // writeUint64 writes a uint64 value to buffer using variable-sized encoding.

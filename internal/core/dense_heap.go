@@ -3,6 +3,8 @@ package core
 import (
 	"fmt"
 	"io"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // ReadDenseHeapObjects walks a v2 B-tree whose leaf records reference managed
@@ -28,7 +30,7 @@ func ReadDenseHeapObjects(r io.ReaderAt, btreeAddr, heapAddr uint64, sb *Superbl
 		return nil, fmt.Errorf("btree v2 header: %w", err)
 	}
 	if btreeHeader.Depth != 0 {
-		return nil, fmt.Errorf("btree v2 depth %d unsupported (only depth=0 leaf-root)", btreeHeader.Depth)
+		return nil, fmt.Errorf("btree v2 depth %d unsupported (only depth=0 leaf-root): %w", btreeHeader.Depth, utils.ErrNotSupported)
 	}
 
 	heapIDs, err := readBTreeV2LeafRecords(r, btreeHeader.RootNodeAddr, btreeHeader.NumRecordsRoot, sb)

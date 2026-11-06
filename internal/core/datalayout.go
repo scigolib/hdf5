@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // DataLayoutClass represents the storage layout type.
@@ -70,9 +72,13 @@ func ParseDataLayoutMessage(data []byte, sb *Superblock) (*DataLayoutMessage, er
 
 	version := data[0]
 
-	// Version 3 and 4 are most common (HDF5 1.8+).
-	if version < 3 || version > 4 {
-		return nil, fmt.Errorf("unsupported data layout version: %d", version)
+	// Versions 1-4 are defined (H5O_LAYOUT_VERSION_1..4); C rejects any other
+	// (H5Olayout.c:103-104). Version 5 is HDF5 2.0's, not supported here.
+	if version == 5 {
+		return nil, fmt.Errorf("unsupported data layout version: %d: %w", version, utils.ErrNotSupported)
+	}
+	if version < 1 || version > 5 {
+		return nil, fmt.Errorf("unsupported data layout version: %d: %w", version, utils.ErrCorrupt)
 	}
 
 	msg := &DataLayoutMessage{
@@ -81,6 +87,8 @@ func ParseDataLayoutMessage(data []byte, sb *Superblock) (*DataLayoutMessage, er
 	}
 
 	switch version {
+	case 1, 2:
+		return parseLayoutV1V2(data, sb, msg)
 	case 3:
 		return parseLayoutV3(data, sb, msg)
 	case 4:
@@ -88,6 +96,108 @@ func ParseDataLayoutMessage(data []byte, sb *Superblock) (*DataLayoutMessage, er
 	}
 
 	return nil, fmt.Errorf("layout version %d not implemented", version)
+}
+
+// parseLayoutV1V2 parses a version 1 or 2 data layout message as
+// H5O__layout_decode does (H5Olayout.c:106-216):
+//
+//	version(1) ndims(1) class(1) reserved(5)
+//	address(sizeof_addr)            contiguous and chunked only
+//	dims[ndims] × uint32            chunk dims (chunked); skipped otherwise
+//	size(4) data[size]              compact only
+//
+// ndims is 1..H5O_LAYOUT_NDIMS, a chunked message needs ndims ≥ 2 (the last
+// dimension is the element size) and every chunk dimension is positive. The
+// stored contiguous dimensions are skipped as C skips them: the storage size
+// is computed from the dataspace and datatype, which the descriptor does
+// (H5Olayout.c:165-170). DataSize stays 0 for a contiguous layout. Only the
+// version 1 B-tree chunk index exists in these versions (H5Olayout.c:150-155).
+// Errors wrap utils.ErrCorrupt.
+func parseLayoutV1V2(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLayoutMessage, error) {
+	const fixedPart = 8 // Version, ndims, class and 5 reserved bytes.
+
+	if len(data) < fixedPart {
+		return nil, fmt.Errorf("%w: version %d layout message of %d bytes is too short", utils.ErrCorrupt, msg.Version, len(data))
+	}
+
+	ndims := int(data[1])
+	if ndims == 0 || ndims > maxChunkLayoutDims {
+		return nil, fmt.Errorf("%w: layout dimensionality %d is out of range (H5Olayout.c:114-115)", utils.ErrCorrupt, ndims)
+	}
+
+	msg.Class = DataLayoutClass(data[2])
+	if msg.Class != LayoutContiguous && msg.Class != LayoutChunked && msg.Class != LayoutCompact {
+		return nil, fmt.Errorf("%w: bad layout type %d for layout message (H5Olayout.c:122-123)", utils.ErrCorrupt, msg.Class)
+	}
+
+	offset := fixedPart
+	addrSize := int(sb.OffsetSize)
+	if msg.Class != LayoutCompact {
+		if len(data) < offset+addrSize {
+			return nil, fmt.Errorf("%w: layout message address runs off the end of the message", utils.ErrCorrupt)
+		}
+		msg.DataAddress = readLayoutAddress(data[offset:offset+addrSize], addrSize, sb.Endianness)
+		offset += addrSize
+	}
+
+	dimsSize := ndims * 4
+	if len(data) < offset+dimsSize {
+		return nil, fmt.Errorf("%w: layout message dimensions run off the end of the message", utils.ErrCorrupt)
+	}
+
+	if msg.Class == LayoutChunked {
+		chunks, err := parseLayoutV1V2ChunkDims(data[offset:offset+dimsSize], ndims)
+		if err != nil {
+			return nil, err
+		}
+		msg.ChunkIndexType = ChunkIndexBTREE
+		msg.ChunkSize = chunks
+	}
+	offset += dimsSize
+
+	if msg.Class == LayoutCompact {
+		compact, err := parseLayoutV1V2Compact(data[offset:])
+		if err != nil {
+			return nil, err
+		}
+		msg.CompactData = compact
+		msg.DataSize = uint64(len(compact))
+	}
+
+	return msg, nil
+}
+
+// parseLayoutV1V2ChunkDims decodes the chunk dimensions of a version 1/2
+// layout: at least two (the last is the element size), none of them zero
+// (H5Olayout.c:176-191).
+func parseLayoutV1V2ChunkDims(dims []byte, ndims int) ([]uint64, error) {
+	if ndims < 2 {
+		return nil, fmt.Errorf("%w: bad dimensions for chunked storage (H5Olayout.c:176-177)", utils.ErrCorrupt)
+	}
+	chunks := make([]uint64, ndims)
+	for i := range chunks {
+		dim := binary.LittleEndian.Uint32(dims[4*i:])
+		if dim == 0 {
+			return nil, fmt.Errorf("%w: chunk dimension %d is zero (H5Olayout.c:188-191)", utils.ErrCorrupt, i)
+		}
+		chunks[i] = uint64(dim)
+	}
+	return chunks, nil
+}
+
+// parseLayoutV1V2Compact returns the raw data of a version 1/2 compact
+// layout: a 4-byte size and that many bytes (H5Olayout.c:207-208).
+func parseLayoutV1V2Compact(rest []byte) ([]byte, error) {
+	if len(rest) < 4 {
+		return nil, fmt.Errorf("%w: compact layout size runs off the end of the message", utils.ErrCorrupt)
+	}
+	size := binary.LittleEndian.Uint32(rest)
+	rest = rest[4:]
+	if uint64(len(rest)) < uint64(size) {
+		return nil, fmt.Errorf("%w: compact layout data of %d bytes runs off the end of the message (H5Olayout.c:207-208)",
+			utils.ErrCorrupt, size)
+	}
+	return rest[:size], nil
 }
 
 // determineChunkKeySize determines the chunk key size based on file format version.

@@ -202,12 +202,13 @@ func TestReadCompound_Simple(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, compounds, 3)
 
-	// Verify field values (compound reader returns numeric types)
-	assert.Equal(t, int32(10), compounds[0]["id"])
+	// Verify field values. CreateBasicDatatypeMessage makes unsigned integers
+	// (NewIntegerDatatype(size, false)), so "id" reads as uint32.
+	assert.Equal(t, uint32(10), compounds[0]["id"])
 	assert.InDelta(t, float32(1.5), compounds[0]["value"], 1e-6)
-	assert.Equal(t, int32(20), compounds[1]["id"])
+	assert.Equal(t, uint32(20), compounds[1]["id"])
 	assert.InDelta(t, float32(2.5), compounds[1]["value"], 1e-6)
-	assert.Equal(t, int32(30), compounds[2]["id"])
+	assert.Equal(t, uint32(30), compounds[2]["id"])
 	assert.InDelta(t, float32(3.5), compounds[2]["value"], 1e-6)
 }
 
@@ -274,13 +275,13 @@ func TestReadCompound_MixedTypes(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, compounds, 2)
 
-	assert.Equal(t, int32(42), compounds[0]["count"])
+	assert.Equal(t, uint32(42), compounds[0]["count"])
 	assert.InDelta(t, 3.14, compounds[0]["weight"], 1e-10)
-	assert.Equal(t, int64(1), compounds[0]["flag"])
+	assert.Equal(t, uint64(1), compounds[0]["flag"])
 
-	assert.Equal(t, int32(99), compounds[1]["count"])
+	assert.Equal(t, uint32(99), compounds[1]["count"])
 	assert.InDelta(t, 2.718, compounds[1]["weight"], 1e-10)
-	assert.Equal(t, int64(7), compounds[1]["flag"])
+	assert.Equal(t, uint64(7), compounds[1]["flag"])
 }
 
 // ---------------------------------------------------------------------------

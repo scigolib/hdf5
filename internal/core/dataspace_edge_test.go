@@ -26,7 +26,7 @@ func TestParseDataspaceMessage_MaxDimensions(t *testing.T) {
 		2, // version
 		2, // dimensionality (2D)
 		1, // flags: bit 0 = max dimensions present
-		0, // type (simple)
+		1, // type: H5S_SIMPLE (H5Spublic.h:88); 0 is scalar, which C refuses with a rank
 		// Dimensions (2 * 8 bytes)
 		10, 0, 0, 0, 0, 0, 0, 0, // dim 1 = 10
 		20, 0, 0, 0, 0, 0, 0, 0, // dim 2 = 20
