@@ -508,63 +508,6 @@ func AddMessageToObjectHeader(oh *ObjectHeader, msgType MessageType, msgData []b
 	return nil
 }
 
-// WriteObjectHeader writes an object header back to disk at a given address.
-// This is used when modifying object headers (e.g., adding attributes).
-//
-// For MVP (v0.11.1-beta):
-//   - Only object header v2 supported
-//   - No continuation blocks
-//   - Overwrites existing header at the same address
-//
-// Parameters:
-//   - w: Writer with WriteAt capability
-//   - addr: File address where header is located
-//   - oh: Object header to write
-//   - sb: Superblock for encoding parameters
-//
-// Returns:
-//   - error: Non-nil if write fails
-//
-// Reference: H5O.c - H5O_flush().
-func WriteObjectHeader(w io.WriterAt, addr uint64, oh *ObjectHeader, sb *Superblock) error {
-	_ = sb // Reserved for future use (v1 headers or encoding parameters)
-
-	if oh == nil {
-		return fmt.Errorf("object header is nil")
-	}
-
-	if oh.Version != 2 {
-		return fmt.Errorf("only object header version 2 is supported for writing, got version %d", oh.Version)
-	}
-
-	// Build object header writer from the object header
-	ohw := &ObjectHeaderWriter{
-		Version:         oh.Version,
-		Flags:           oh.Flags,
-		Times:           oh.Times,
-		AttrPhaseChange: oh.AttrPhaseChange,
-		Messages:        make([]MessageWriter, len(oh.Messages)),
-	}
-
-	// Convert messages
-	for i, msg := range oh.Messages {
-		ohw.Messages[i] = MessageWriter{
-			Type:          msg.Type,
-			Flags:         msg.Flags,
-			Data:          msg.Data,
-			CreationIndex: msg.CreationIndex,
-		}
-	}
-
-	// Write the header
-	_, err := ohw.WriteTo(w, addr)
-	if err != nil {
-		return fmt.Errorf("failed to write object header at address %d: %w", addr, err)
-	}
-
-	return nil
-}
-
 // ObjectHeaderSizeFromParsed calculates the on-disk size of an ObjectHeader
 // (as returned by ReadObjectHeader). This is used to determine how much space
 // the header occupies after modification (e.g., adding attributes).

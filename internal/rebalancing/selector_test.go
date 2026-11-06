@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/scigolib/hdf5/internal/structures"
+	"github.com/scigolib/hdf5/internal/utils"
+	"github.com/scigolib/hdf5/internal/utils/clocktest"
 )
 
 // TestDecisionString tests Decision.String() method.
@@ -204,7 +206,7 @@ func TestRuleBasedStrategy_DecisionRules(t *testing.T) {
 // Helper function to run decision rule tests.
 func runDecisionRuleTest(t *testing.T, tests []decisionRuleTest) {
 	t.Helper()
-	clock := &MockClock{current: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	for i := range tests {
 		tt := &tests[i] // Use pointer to avoid copying
@@ -468,7 +470,7 @@ func getUnknownWorkloadTests() []decisionRuleTest {
 
 // TestRuleBasedStrategy_ConfidenceCalculation tests confidence calculation.
 func TestRuleBasedStrategy_ConfidenceCalculation(t *testing.T) {
-	strategy := &RuleBasedStrategy{clock: RealClock{}}
+	strategy := &RuleBasedStrategy{clock: utils.RealClock{}}
 
 	tests := []struct {
 		name          string
@@ -541,7 +543,7 @@ func TestRuleBasedStrategy_ConfidenceCalculation(t *testing.T) {
 
 // TestConfigSelector_BasicSelection tests basic config selection.
 func TestConfigSelector_BasicSelection(t *testing.T) {
-	clock := &MockClock{current: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	selector := NewConfigSelector(
 		WithSelectorClock(clock),
@@ -579,7 +581,7 @@ func TestConfigSelector_BasicSelection(t *testing.T) {
 
 // TestConfigSelector_ConfidenceThreshold tests confidence threshold enforcement.
 func TestConfigSelector_ConfidenceThreshold(t *testing.T) {
-	clock := &MockClock{current: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	selector := NewConfigSelector(
 		WithSelectorClock(clock),
@@ -619,7 +621,7 @@ func TestConfigSelector_ConfidenceThreshold(t *testing.T) {
 
 // TestConfigSelector_ModeRestriction tests mode restriction enforcement.
 func TestConfigSelector_ModeRestriction(t *testing.T) {
-	clock := &MockClock{current: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	selector := NewConfigSelector(
 		WithSelectorClock(clock),
@@ -651,7 +653,7 @@ func TestConfigSelector_ModeRestriction(t *testing.T) {
 
 // TestConfigSelector_StabilityPeriod tests stability period enforcement.
 func TestConfigSelector_StabilityPeriod(t *testing.T) {
-	clock := &MockClock{current: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	selector := NewConfigSelector(
 		WithSelectorClock(clock),
@@ -678,7 +680,7 @@ func TestConfigSelector_StabilityPeriod(t *testing.T) {
 	}
 
 	// Advance time by 10 seconds (< stability period)
-	clock.current = clock.current.Add(10 * time.Second)
+	clock.Advance(10 * time.Second)
 
 	// Second decision: Try to switch to Incremental
 	features2 := WorkloadFeatures{
@@ -696,7 +698,7 @@ func TestConfigSelector_StabilityPeriod(t *testing.T) {
 	}
 
 	// Advance time by 25 more seconds (total 35s > stability period)
-	clock.current = clock.current.Add(25 * time.Second)
+	clock.Advance(25 * time.Second)
 
 	// Third decision: Now switch should be allowed
 	decision3 := selector.SelectConfig(features2, WorkloadFrequentWrites)
@@ -708,7 +710,7 @@ func TestConfigSelector_StabilityPeriod(t *testing.T) {
 
 // TestConfigSelector_StabilityPeriod_SameMode tests stability period with same mode.
 func TestConfigSelector_StabilityPeriod_SameMode(t *testing.T) {
-	clock := &MockClock{current: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	selector := NewConfigSelector(
 		WithSelectorClock(clock),
@@ -735,7 +737,7 @@ func TestConfigSelector_StabilityPeriod_SameMode(t *testing.T) {
 	}
 
 	// Advance time by 5 seconds (< stability period)
-	clock.current = clock.current.Add(5 * time.Second)
+	clock.Advance(5 * time.Second)
 
 	// Second decision: Same features → same mode
 	decision2 := selector.SelectConfig(features, WorkloadBatchDeletion)
@@ -813,7 +815,7 @@ func TestFormatBytes(t *testing.T) {
 
 // TestRuleBasedStrategy_NormalizeFileSize tests file size normalization.
 func TestRuleBasedStrategy_NormalizeFileSize(t *testing.T) {
-	strategy := &RuleBasedStrategy{clock: RealClock{}}
+	strategy := &RuleBasedStrategy{clock: utils.RealClock{}}
 
 	tests := []struct {
 		name     string
@@ -843,7 +845,7 @@ func TestRuleBasedStrategy_NormalizeFileSize(t *testing.T) {
 
 // TestRuleBasedStrategy_NormalizeOperationRate tests operation rate normalization.
 func TestRuleBasedStrategy_NormalizeOperationRate(t *testing.T) {
-	strategy := &RuleBasedStrategy{clock: RealClock{}}
+	strategy := &RuleBasedStrategy{clock: utils.RealClock{}}
 
 	tests := []struct {
 		name     string
@@ -892,7 +894,7 @@ func BenchmarkConfigSelector_SelectConfig(b *testing.B) {
 
 // BenchmarkRuleBasedStrategy_Select benchmarks strategy selection.
 func BenchmarkRuleBasedStrategy_Select(b *testing.B) {
-	strategy := &RuleBasedStrategy{clock: RealClock{}}
+	strategy := &RuleBasedStrategy{clock: utils.RealClock{}}
 
 	features := WorkloadFeatures{
 		DeleteRatio:   0.7,

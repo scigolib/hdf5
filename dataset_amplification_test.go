@@ -338,9 +338,20 @@ func TestExtractChunkPortion_WorkIsPerChunk(t *testing.T) {
 				extractChunkPortion(chunk, lastChunk, []uint64{4}, []uint64{dim}, tc.huge, 1, make([]byte, 8))
 			}()
 
+			// No work counter reaches this walk (a pure loop over the
+			// selection: no reader, no callback), so the guard is time, bounded
+			// by the test's own deadline: it fires only when the run is about
+			// to time out anyway, never because the machine is slow, and then
+			// names the defect. Without a deadline (-timeout 0) it waits.
+			var expired <-chan time.Time
+			if deadline, ok := t.Deadline(); ok {
+				timer := time.NewTimer(time.Until(deadline) * 9 / 10)
+				defer timer.Stop()
+				expired = timer.C
+			}
 			select {
 			case <-done:
-			case <-time.After(10 * time.Second):
+			case <-expired:
 				t.Fatal("extracting one chunk walked the whole selection")
 			}
 

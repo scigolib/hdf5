@@ -77,10 +77,10 @@ func FuzzOpenFile(f *testing.F) {
 
 		// A corrupted byte must not turn into an unbounded loop either: an
 		// infinite loop would only show up as a stalled worker and silence in
-		// the progress line, so it is failed explicitly here. The budget is
-		// generous for files of a few kilobytes. The work runs off the test
-		// goroutine so the budget can fire; a violation travels back as a
-		// string and is failed here, on the test goroutine.
+		// the progress line, so it is failed explicitly here (budget:
+		// fuzzHangBudget). The work runs off the test goroutine so the budget
+		// can fire; a violation travels back as a string and is failed here,
+		// on the test goroutine.
 		done := make(chan string, 1)
 		go func() {
 			file, err := hdf5.Open(path)
@@ -94,15 +94,39 @@ func FuzzOpenFile(f *testing.F) {
 			done <- exerciseFuzzFile(len(data), file)
 		}()
 
+		budget := fuzzHangBudget(t)
+		timer := time.NewTimer(budget)
+		defer timer.Stop()
+
 		select {
 		case violation := <-done:
 			if violation != "" {
 				t.Fatal(violation)
 			}
-		case <-time.After(5 * time.Second):
-			t.Fatalf("input did not finish in 5s")
+		case <-timer.C:
+			t.Fatalf("input did not finish within %v: an unbounded loop", budget)
 		}
 	})
+}
+
+// fuzzHangBudget is how long one input may run before it is failed as a hang.
+// An input takes milliseconds; the budget only has to tell a hang from a slow
+// machine, never measure speed.
+//
+// Under go test (the seed corpus, and fuzzing with a -timeout) the test has a
+// deadline and the budget runs to 90% of the time left before it: the guard
+// fires only when the run is about to time out anyway, and it then names the
+// input instead of dumping every goroutine. Without a deadline (-timeout 0) a
+// stalled fuzz worker would only show as silence, so a fixed 60 s budget,
+// four orders of magnitude over a normal input, reports it.
+//
+// A work bound (a reader that counts the bytes read) would be deterministic,
+// but the public API opens files only by path, so there is no reader to wrap.
+func fuzzHangBudget(t *testing.T) time.Duration {
+	if deadline, ok := t.Deadline(); ok {
+		return time.Until(deadline) * 9 / 10
+	}
+	return 60 * time.Second
 }
 
 // exerciseFuzzFile walks the file and reads the metadata and data it exposes.

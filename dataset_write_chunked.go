@@ -136,6 +136,13 @@ func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, co
 		return nil, err
 	}
 
+	// The parent must exist and must not hold the name yet, checked before
+	// anything is allocated (link_create.go).
+	parent, datasetName := parsePath(name)
+	if err := fw.checkLinkNameFree(parent, datasetName); err != nil {
+		return nil, err
+	}
+
 	// Create chunk coordinator
 	chunkCoordinator, err := writer.NewChunkCoordinator(dims, config.chunkDims)
 	if err != nil {
@@ -170,19 +177,7 @@ func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, co
 	}
 
 	// 8. Setup filter pipeline if configured
-	if config.pipeline != nil || config.enableShuffle {
-		// Create pipeline if needed
-		if config.pipeline == nil {
-			config.pipeline = writer.NewFilterPipeline()
-		}
-
-		// Add shuffle filter at beginning if requested
-		if config.enableShuffle {
-			// Element size from datatype
-			shuffleFilter := writer.NewShuffleFilter(elemSize)
-			config.pipeline.AddFilterAtStart(shuffleFilter)
-		}
-	}
+	config.setupShuffle(elemSize)
 
 	// 9. Create object header with optional filter pipeline
 	messages, err := fw.datasetHeaderMessages(datatypeData, dataspaceData, layoutData, core.LayoutChunked, config.pipeline)
@@ -220,10 +215,10 @@ func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, co
 		return nil, fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
 	}
 
-	// 9. Link to parent group
-	parent, datasetName := parsePath(name)
+	// 9. Link to parent group; a dataset that could not be linked is deleted
+	// again.
 	if err := fw.linkToParent(parent, datasetName, headerAddress); err != nil {
-		return nil, fmt.Errorf("failed to link dataset: %w", err)
+		return nil, fw.discardUnlinkedObject(headerAddress, fmt.Errorf("failed to link dataset: %w", err))
 	}
 
 	// 10. Create DatasetWriter
@@ -242,6 +237,19 @@ func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, co
 		chunkDims:        config.chunkDims,
 		pipeline:         config.pipeline, // Filter pipeline
 	}, nil
+}
+
+// setupShuffle puts the shuffle filter for elements of elemSize bytes at the
+// start of the filter pipeline when it was requested, creating the pipeline
+// if no other filter made one.
+func (config *datasetConfig) setupShuffle(elemSize uint32) {
+	if !config.enableShuffle {
+		return
+	}
+	if config.pipeline == nil {
+		config.pipeline = writer.NewFilterPipeline()
+	}
+	config.pipeline.AddFilterAtStart(writer.NewShuffleFilter(elemSize))
 }
 
 // writeChunkedData writes data to chunked dataset.

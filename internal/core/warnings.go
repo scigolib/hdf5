@@ -69,6 +69,14 @@ type warningSink struct {
 	list       []Warning
 	suppressed int
 	spans      []ChecksumSpan // legacy checksums recorded in list, for RepairLegacyChecksums
+	// spansIncomplete is set when a legacy checksum finding was suppressed
+	// past maxWarnings: its span was not kept, so spans cannot repair the file.
+	spansIncomplete bool
+	// codes marks every code ever reported, suppressed ones included: the
+	// write path refuses a file by code, and a finding dropped past
+	// maxWarnings must still refuse it. One bit per possible code, so the
+	// memory does not depend on the file.
+	codes [256]bool
 }
 
 // ChecksumSpan is a metadata block whose checksum is CRC32-IEEE: lookup3 over
@@ -98,12 +106,16 @@ func (sb *Superblock) recordf(code WarningCode, addr, span uint64, format string
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.codes[code] = true
 	key := warningKey{code, addr}
 	if _, dup := s.seen[key]; dup {
 		return
 	}
 	if len(s.list) >= maxWarnings {
 		s.suppressed++
+		if span > 0 {
+			s.spansIncomplete = true
+		}
 		return
 	}
 	if s.seen == nil {
@@ -117,8 +129,9 @@ func (sb *Superblock) recordf(code WarningCode, addr, span uint64, format string
 }
 
 // LegacyChecksums returns the blocks found so far whose checksum is
-// CRC32-IEEE, and whether the list is complete: it is not when warnings were
-// suppressed past maxWarnings, since a suppressed finding keeps no span.
+// CRC32-IEEE, and whether the list is complete: it is not when a legacy
+// checksum finding was suppressed past maxWarnings, since a suppressed finding
+// keeps no span.
 func (sb *Superblock) LegacyChecksums() (spans []ChecksumSpan, complete bool) {
 	if sb == nil {
 		return nil, true
@@ -127,7 +140,20 @@ func (sb *Superblock) LegacyChecksums() (spans []ChecksumSpan, complete bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return append([]ChecksumSpan(nil), s.spans...), s.suppressed == 0
+	return append([]ChecksumSpan(nil), s.spans...), !s.spansIncomplete
+}
+
+// HasWarning reports whether code was reported for this file so far,
+// including findings suppressed past maxWarnings.
+func (sb *Superblock) HasWarning(code WarningCode) bool {
+	if sb == nil {
+		return false
+	}
+	s := &sb.warnings
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.codes[code]
 }
 
 // Warnings returns a copy of the warnings recorded so far, with a final

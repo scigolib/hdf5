@@ -23,14 +23,20 @@ var ErrLimit = utils.ErrLimit
 // is not corrupt; the C library may read it. Match it with errors.Is.
 var ErrNotSupported = utils.ErrNotSupported
 
-// ErrNeedsRepack is wrapped by the error OpenForWrite returns for a file whose
-// version 2 object headers carry no valid checksum: files written by hdf5-go
-// v0.13.9 and earlier (v0.13.8 and earlier wrote no header checksum, v0.13.9
-// counted it in the chunk size), or a corrupted file. The HDF5 C library
-// cannot open such a file, and changing it in place would need every object
-// header rewritten. Read it with Open (File.Warnings lists what was found) and
-// write its contents into a new file; hdf5.Repack is planned for v0.15. It is
-// not ErrCorrupt: the file reads. Match it with errors.Is.
+// ErrNeedsRepack is wrapped by the error OpenForWrite returns for a file it
+// cannot make valid in place:
+//   - version 2 object headers without a valid checksum (hdf5-go v0.13.8 and
+//     earlier wrote none, v0.13.9 counted it in the chunk size), or a file
+//     corrupted after it was written;
+//   - integer or floating-point datatypes in the encoding of hdf5-go v0.13.9
+//     and earlier;
+//   - more legacy CRC32 checksums than the warning limit keeps, so not all of
+//     them could be located for repair.
+//
+// The HDF5 C library cannot open such a file, and making it valid needs its
+// object headers rewritten. Read it with Open (File.Warnings lists what was
+// found) and write its contents into a new file. It is not ErrCorrupt: the
+// file reads. Match it with errors.Is.
 var ErrNeedsRepack = errors.New("hdf5: file needs to be rewritten into a new file")
 
 // ErrNoData is wrapped by errors that refuse to read a dataset with no stored

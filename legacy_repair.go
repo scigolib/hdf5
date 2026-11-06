@@ -53,11 +53,20 @@ func scanForWrite(f *File) error {
 // anything. Every dataset header the early datatype encoder came with is a
 // version 2 header without a valid checksum, so repairing the datatype bytes
 // alone, though they are the same size, would not make such a file readable.
+//
+// The decision is made by code (core.Superblock.HasWarning), not from the
+// kept list: a finding suppressed past the warning limit still refuses.
 func refuseUnrepairableHeaders(f *File) error {
-	for _, w := range f.Warnings() {
-		if w.Code == WarnHeaderChecksum || w.Code == WarnHeaderChunkSize || w.Code == WarnLegacyDatatype {
-			return fmt.Errorf("%w: %s", ErrNeedsRepack, w.Message)
+	for _, code := range []WarningCode{WarnHeaderChecksum, WarnHeaderChunkSize, WarnLegacyDatatype} {
+		if !f.sb.HasWarning(core.WarningCode(code)) {
+			continue
 		}
+		for _, w := range f.Warnings() {
+			if w.Code == code {
+				return fmt.Errorf("%w: %s", ErrNeedsRepack, w.Message)
+			}
+		}
+		return fmt.Errorf("%w: %s found (beyond the warning limit)", ErrNeedsRepack, code)
 	}
 
 	return nil
@@ -77,12 +86,12 @@ func refuseUnrepairableHeaders(f *File) error {
 // and nothing is written.
 func repairLegacyChecksums(f *File, r io.ReaderAt, w io.WriterAt) error {
 	spans, complete := f.sb.LegacyChecksums()
-	if len(spans) == 0 {
-		return nil
-	}
 	if !complete {
 		return fmt.Errorf("%w: the file has more legacy checksums than one pass repairs; rewrite it into a new file",
 			ErrNeedsRepack)
+	}
+	if len(spans) == 0 {
+		return nil
 	}
 
 	sum := make([]byte, 4)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/scigolib/hdf5/internal/structures"
+	"github.com/scigolib/hdf5/internal/utils/clocktest"
 )
 
 // Test constants.
@@ -20,15 +21,6 @@ const (
 	MB = 1024 * KB
 	GB = 1024 * MB
 )
-
-// mockClock is a simple mock clock for testing (lowercase for test-only usage).
-type mockClock struct {
-	now time.Time
-}
-
-func (m *mockClock) Now() time.Time {
-	return m.now
-}
 
 // ============================================
 // Mock B-tree Implementation
@@ -203,7 +195,7 @@ func TestNewSmartRebalancer_CustomOptions(t *testing.T) {
 	btree := newMockBTree(100 * MB)
 	detector := NewWorkloadDetector(WithWindowSize(10 * time.Minute))
 	selector := NewConfigSelector()
-	clock := &mockClock{now: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	sr := NewSmartRebalancer(btree,
 		WithDetector(detector),
@@ -324,7 +316,11 @@ func TestSmartRebalancer_Stop_MultipleStops(t *testing.T) {
 
 func TestSmartRebalancer_StartStop_NoGoroutineLeak(t *testing.T) {
 	btree := newMockBTree(100 * MB)
-	sr := NewSmartRebalancer(btree, WithReevalInterval(10*time.Millisecond))
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	sr := NewSmartRebalancer(btree,
+		WithReevalInterval(10*time.Millisecond),
+		WithRebalancerClock(clock),
+	)
 
 	ctx := context.Background()
 
@@ -334,16 +330,21 @@ func TestSmartRebalancer_StartStop_NoGoroutineLeak(t *testing.T) {
 			t.Fatalf("Start #%d failed: %v", i+1, err)
 		}
 
-		// Give goroutine time to start
-		time.Sleep(5 * time.Millisecond)
+		// The monitor goroutine is running once it has created its ticker.
+		ticker := clock.AwaitTicker(i + 1)
 
 		if err := sr.Stop(); err != nil {
 			t.Fatalf("Stop #%d failed: %v", i+1, err)
 		}
-	}
 
-	// If we reach here without hanging, no goroutine leak
-	// (WaitGroup ensures goroutine finished)
+		// Stop waits for the goroutine (WaitGroup), and the goroutine stops
+		// its ticker on the way out, so the ticker is stopped by now.
+		select {
+		case <-ticker.Stopped():
+		default:
+			t.Fatalf("Stop #%d returned while the monitor goroutine still held its ticker", i+1)
+		}
+	}
 }
 
 // ============================================
@@ -413,7 +414,7 @@ func TestSmartRebalancer_RecordOperation_AfterStart(t *testing.T) {
 
 func TestSmartRebalancer_Evaluate_BatchDeletion(t *testing.T) {
 	btree := newMockBTree(100 * MB)
-	clock := &mockClock{now: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	detector := NewWorkloadDetector(
 		WithWindowSize(5*time.Minute),
@@ -459,7 +460,7 @@ func TestSmartRebalancer_Evaluate_BatchDeletion(t *testing.T) {
 
 func TestSmartRebalancer_Evaluate_AppendOnly(t *testing.T) {
 	btree := newMockBTree(100 * MB)
-	clock := &mockClock{now: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	detector := NewWorkloadDetector(
 		WithWindowSize(5*time.Minute),
@@ -863,7 +864,7 @@ func TestSmartRebalancer_ApplyDecision_WrongConfigType(t *testing.T) {
 
 func TestSmartRebalancer_EndToEnd_BatchDeletion(t *testing.T) {
 	btree := newMockBTree(100 * MB)
-	clock := &mockClock{now: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	detector := NewWorkloadDetector(
 		WithWindowSize(5*time.Minute),
@@ -925,7 +926,7 @@ func TestSmartRebalancer_EndToEnd_WorkloadEvolution(t *testing.T) {
 
 	t.Run("Phase1_AppendOnly", func(t *testing.T) {
 		btree := newMockBTree(100 * MB)
-		clock := &mockClock{now: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+		clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
 		detector := NewWorkloadDetector(
 			WithWindowSize(5*time.Minute),
@@ -953,7 +954,7 @@ func TestSmartRebalancer_EndToEnd_WorkloadEvolution(t *testing.T) {
 
 	t.Run("Phase2_BatchDeletion", func(t *testing.T) {
 		btree := newMockBTree(100 * MB)
-		clock := &mockClock{now: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+		clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
 		detector := NewWorkloadDetector(
 			WithWindowSize(5*time.Minute),
@@ -1049,9 +1050,14 @@ func TestSmartRebalancer_EndToEnd_WorkloadEvolution(t *testing.T) {
 // Integration Tests: Periodic Re-evaluation
 // ============================================
 
+// TestSmartRebalancer_PeriodicReevaluation drives the re-evaluation ticker with
+// the mock clock: no evaluation before the interval has passed, exactly one per
+// interval after it. Nothing waits on wall-clock time, so a loaded machine
+// cannot change the result.
 func TestSmartRebalancer_PeriodicReevaluation(t *testing.T) {
 	btree := newMockBTree(100 * MB)
-	clock := &mockClock{now: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock := clocktest.NewMockClock(start)
 
 	detector := NewWorkloadDetector(
 		WithWindowSize(5*time.Minute),
@@ -1060,11 +1066,11 @@ func TestSmartRebalancer_PeriodicReevaluation(t *testing.T) {
 	)
 	selector := NewConfigSelector(WithSelectorClock(clock))
 
-	// Short re-eval interval for testing
+	const interval = time.Minute
 	sr := NewSmartRebalancer(btree,
 		WithDetector(detector),
 		WithSelector(selector),
-		WithReevalInterval(50*time.Millisecond),
+		WithReevalInterval(interval),
 		WithRebalancerClock(clock),
 	)
 
@@ -1074,6 +1080,8 @@ func TestSmartRebalancer_PeriodicReevaluation(t *testing.T) {
 	}
 	defer sr.Stop()
 
+	clock.AwaitTicker(1) // the monitor loop is waiting on its ticker
+
 	// Record operations (append-only)
 	for i := 0; i < 50; i++ {
 		if err := sr.RecordOperation(OpWrite); err != nil {
@@ -1081,47 +1089,63 @@ func TestSmartRebalancer_PeriodicReevaluation(t *testing.T) {
 		}
 	}
 
-	// The re-evaluation runs on a real 50 ms ticker. Wait for the event with a
-	// generous deadline instead of a fixed sleep, so a loaded machine cannot
-	// fail the test while a broken ticker still does.
-	waitEvaluations := func(atLeast int64) int64 {
-		t.Helper()
-		deadline := time.Now().Add(10 * time.Second)
-		for {
-			n := int64(sr.GetStats().TotalEvaluations)
-			if n >= atLeast {
-				return n
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("expected at least %d evaluations within 10s, got %d", atLeast, n)
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
+	// Short of one interval no tick is delivered, so no evaluation can have
+	// run: the loop evaluates only on a tick.
+	clock.Advance(interval - time.Nanosecond)
+	if n := sr.GetStats().TotalEvaluations; n != 0 {
+		t.Fatalf("evaluations before the interval: got %d, want 0", n)
 	}
 
-	first := waitEvaluations(1)
-	waitEvaluations(first + 1) // re-evaluation keeps running over time
+	// Two intervals: Advance returns once the loop has received each tick.
+	clock.Advance(time.Nanosecond)
+	clock.Advance(interval)
+
+	// Stop waits for the loop, so the second evaluation has finished too.
+	if err := sr.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	stats := sr.GetStats()
+	if stats.TotalEvaluations != 2 {
+		t.Errorf("evaluations after two intervals: got %d, want 2", stats.TotalEvaluations)
+	}
+	if want := start.Add(2 * interval); !stats.LastEvalTime.Equal(want) {
+		t.Errorf("last evaluation at %v, want %v (the second tick)", stats.LastEvalTime, want)
+	}
 }
 
-func TestSmartRebalancer_ContextCancellation(_ *testing.T) {
+// TestSmartRebalancer_ContextCancellation checks that canceling the parent
+// context alone (no Stop) ends the monitor loop: the loop stops its ticker on
+// the way out, and a later tick reaches nobody.
+func TestSmartRebalancer_ContextCancellation(t *testing.T) {
 	btree := newMockBTree(100 * MB)
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
-	sr := NewSmartRebalancer(btree, WithReevalInterval(50*time.Millisecond))
+	const interval = 50 * time.Millisecond
+	sr := NewSmartRebalancer(btree,
+		WithReevalInterval(interval),
+		WithRebalancerClock(clock),
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	_ = sr.Start(ctx)
+	if err := sr.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	ticker := clock.AwaitTicker(1)
 
-	// Wait for goroutine to start
-	time.Sleep(10 * time.Millisecond)
-
-	// Cancel context
 	cancel()
 
-	// Wait for graceful shutdown
-	time.Sleep(100 * time.Millisecond)
+	// Blocks until the loop has returned; a loop that ignores the context
+	// hangs here until go test's -timeout reports it.
+	<-ticker.Stopped()
 
-	// Goroutine should have stopped (no hang)
-	// If we reach here, context cancellation worked
+	clock.Advance(interval) // the ticker is stopped: no evaluation
+	if n := sr.GetStats().TotalEvaluations; n != 0 {
+		t.Errorf("evaluations after cancellation: got %d, want 0", n)
+	}
+
+	if err := sr.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
 }
 
 // ============================================
@@ -1130,7 +1154,7 @@ func TestSmartRebalancer_ContextCancellation(_ *testing.T) {
 
 func TestSmartRebalancer_GetStats(t *testing.T) {
 	btree := newMockBTree(100 * MB)
-	clock := &mockClock{now: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	clock := clocktest.NewMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	sr := NewSmartRebalancer(btree, WithRebalancerClock(clock))
 

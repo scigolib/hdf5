@@ -84,8 +84,9 @@ func TestIncrementalRebalancing_WithDefer(t *testing.T) {
 		}
 	}
 
-	// Wait a bit to let goroutine run (if active)
-	time.Sleep(200 * time.Millisecond)
+	// No sleep before Close: FileWriter.EnableIncrementalRebalancing only
+	// validates the config and starts no goroutine (dataset_write.go), so
+	// there is nothing to wait for, and Close stops synchronously anyway.
 
 	// Close file (which also calls Stop() as safety net)
 	if err := fw.Close(); err != nil {
@@ -156,8 +157,9 @@ func TestIncrementalRebalancing_AutomaticCleanup(t *testing.T) {
 		t.Fatalf("Failed to close file: %v", err)
 	}
 
-	// Verify no goroutine leak even without explicit Stop()
-	time.Sleep(100 * time.Millisecond) // Let goroutines finish
+	// Verify no goroutine leak even without explicit Stop(). Close returns
+	// only after cleanup, so the count is taken at once: a sleep here would
+	// only hide a Close that returns before its goroutines end.
 	finalGoroutines := runtime.NumGoroutine()
 	if finalGoroutines > initialGoroutines+2 {
 		t.Errorf("Goroutine leak detected (no defer): initial=%d, final=%d",

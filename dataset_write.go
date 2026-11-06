@@ -972,8 +972,10 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 	if err != nil {
 		return nil, err
 	}
-
-	// Allocate space for dataset data
+	parent, datasetName := parsePath(name)
+	if err := fw.checkLinkNameFree(parent, datasetName); err != nil { // before any allocation
+		return nil, err
+	}
 	dataAddress, err := fw.writer.Allocate(dataSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate space for data: %w", err)
@@ -1041,11 +1043,9 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 		return nil, fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
 	}
 
-	// Link dataset to parent group's symbol table
-	// Parse path to get parent and dataset name
-	parent, datasetName := parsePath(name)
+	// Link dataset to parent group; an unlinked dataset is deleted again.
 	if err := fw.linkToParent(parent, datasetName, headerAddress); err != nil {
-		return nil, fmt.Errorf("failed to link dataset to parent: %w", err)
+		return nil, fw.discardUnlinkedObject(headerAddress, fmt.Errorf("failed to link dataset to parent: %w", err))
 	}
 
 	// Create DatasetWriter
@@ -1137,6 +1137,13 @@ func (fw *FileWriter) createContiguousCompound(name string, compoundType *core.D
 		return nil, err
 	}
 
+	// The parent must exist and must not hold the name yet, checked before
+	// anything is allocated (link_create.go).
+	parent, datasetName := parsePath(name)
+	if err := fw.checkLinkNameFree(parent, datasetName); err != nil {
+		return nil, err
+	}
+
 	// Allocate space for dataset data
 	dataAddress, err := fw.writer.Allocate(dataSize)
 	if err != nil {
@@ -1199,10 +1206,10 @@ func (fw *FileWriter) createContiguousCompound(name string, compoundType *core.D
 		return nil, fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
 	}
 
-	// Link dataset to parent group's symbol table
-	parent, datasetName := parsePath(name)
+	// Link dataset to parent group; a dataset that could not be linked is
+	// deleted again.
 	if err := fw.linkToParent(parent, datasetName, headerAddress); err != nil {
-		return nil, fmt.Errorf("failed to link dataset to parent: %w", err)
+		return nil, fw.discardUnlinkedObject(headerAddress, fmt.Errorf("failed to link dataset to parent: %w", err))
 	}
 
 	// Create DatasetWriter (for WriteRaw)

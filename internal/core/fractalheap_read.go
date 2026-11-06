@@ -62,6 +62,10 @@ type FractalHeap struct {
 	sb   *Superblock
 	addr uint64
 
+	hdrSize     uint64 // H5HF_HEADER_SIZE, what H5HF__hdr_delete frees
+	hugeBT2Addr uint64 // v2 B-tree of huge objects, undefinedAddress if none
+	fsAddr      uint64 // free-space manager header, undefinedAddress if none
+
 	idLen           uint64
 	checksumDBlocks bool
 	maxManSize      uint64
@@ -171,7 +175,7 @@ func OpenFractalHeap(r io.ReaderAt, sb *Superblock, addr uint64) (*FractalHeap, 
 
 	limit := dataLimit(r, sb)
 	h := &FractalHeap{
-		r: r, sb: sb, addr: addr, limit: limit, budget: blockBudget{limit: limit},
+		r: r, sb: sb, addr: addr, hdrSize: uint64(len(buf)), limit: limit, budget: blockBudget{limit: limit},
 		iblocks: map[uint64]*fheapIBlock{}, dblocks: map[uint64]fheapDBlock{},
 	}
 	if err := h.decodeHeader(buf); err != nil {
@@ -252,9 +256,9 @@ func (h *FractalHeap) decodeHeader(buf []byte) error {
 	h.checksumDBlocks = f.uint(1)&fheapFlagChecksumDBs != 0
 	h.maxManSize = f.uint(4)
 	f.uint(l) // huge_next_id
-	hugeBT2Addr := f.addr(o)
+	h.hugeBT2Addr = f.addr(o)
 	f.uint(l) // total_man_free
-	fsAddr := f.addr(o)
+	h.fsAddr = f.addr(o)
 	h.manSize = f.uint(l)
 	f.p += 7 * l // man_alloc_size, man_iter_off, man_nobjs, huge and tiny statistics
 	h.width = f.uint(2)
@@ -265,7 +269,7 @@ func (h *FractalHeap) decodeHeader(buf []byte) error {
 	h.rootAddr = f.addr(o)
 	h.currRootRows = f.uint(2)
 
-	h.legacy = hugeBT2Addr == 0 && fsAddr == 0
+	h.legacy = h.hugeBT2Addr == 0 && h.fsAddr == 0
 	if h.legacy {
 		h.sb.Warnf(WarnLegacyDenseLayout, h.addr, legacyDenseLayoutMessage,
 			"fractal heap", h.addr, "object offsets counted from the end of the block prefix")
@@ -556,8 +560,7 @@ func (h *FractalHeap) indirectBlock(addr, nrows, blockOff uint64) (*fheapIBlock,
 
 	o := int(h.sb.OffsetSize)
 	nents := nrows * h.width // nrows <= 64, width <= 2^16
-	// H5HF_MAN_INDIRECT_SIZE (H5HFpkg.h:119-129), unfiltered entries.
-	size := uint64(fheapPrefixSize+fheapChecksumSize+o+h.offSize) + nents*uint64(o) //nolint:gosec // small
+	size := h.indirectBlockSize(nrows)
 	if err := h.spend(size, addr); err != nil {
 		return nil, err
 	}

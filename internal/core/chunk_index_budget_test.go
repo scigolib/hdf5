@@ -2,11 +2,12 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
 	"math"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -248,7 +249,14 @@ func TestBTreeV1_OverlappingNodesBudget(t *testing.T) {
 // index never allocated stores nothing (H5Dchunk.c:8041-8047): the walk now
 // does the same and returns at once.
 //
-// Red on edb53b1: the call does not return within the 10 s deadline.
+// The bound is on work, not on time: the walk checks its context every
+// chunkVisitTick steps (an index entry, a lookup or a missing chunk; see
+// ChunkVisitor.Interrupt), and workCapContext fails the walk once it has
+// been checked more than a few times. A walk of the grid then stops after a
+// few thousand steps with errWorkCap, the same on any machine.
+//
+// Red on edb53b1: the call did not return within the 10 s deadline the test
+// used then.
 func TestCollectChunks_UnallocatedHugeGrid(t *testing.T) {
 	sb := &Superblock{Version: 3, OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian}
 	const grid = uint64(1) << 40
@@ -256,21 +264,40 @@ func TestCollectChunks_UnallocatedHugeGrid(t *testing.T) {
 	d.dataspace.Dimensions = []uint64{grid}
 	d.nelmts, d.dataBytes = grid, grid
 
-	type result struct {
-		entries []ChunkEntry
-		err     error
-	}
-	done := make(chan result, 1)
-	go func() {
-		entries, err := d.CollectChunks(bytes.NewReader(nil), sb, 1<<20)
-		done <- result{entries, err}
-	}()
+	ctx := &workCapContext{Context: context.Background(), maxChecks: 4}
+	entries, err := d.CollectChunksContext(ctx, bytes.NewReader(nil), sb, 1<<20)
+	require.NotErrorIs(t, err, errWorkCap,
+		"listing the chunks of an unallocated index walked the grid (%d context checks)", ctx.checks)
+	require.NoError(t, err)
+	require.Empty(t, entries)
 
-	select {
-	case got := <-done:
-		require.NoError(t, got.err)
-		require.Empty(t, got.entries)
-	case <-time.After(10 * time.Second):
-		t.Fatal("listing the chunks of an unallocated index walked the whole 2^40 grid")
+	// Control: the cap does stop a walk of the grid. A visit that reports
+	// each missing chunk must walk all 2^40 of them, and ends at the cap.
+	control := &workCapContext{Context: context.Background(), maxChecks: 4}
+	err = d.VisitChunks(bytes.NewReader(nil), sb, nil, 1<<20, ChunkVisitor{
+		Missing:   func([]uint64) error { return nil },
+		Interrupt: control.Err,
+	})
+	require.ErrorIs(t, err, errWorkCap, "the work cap did not stop a walk of the whole grid")
+}
+
+// errWorkCap is returned by workCapContext once its budget of checks is spent.
+var errWorkCap = errors.New("work cap reached")
+
+// workCapContext counts the walk's context checks, one per chunkVisitTick
+// steps, and reports errWorkCap after maxChecks of them: a deterministic
+// bound on the work of a walk, unlike a wall-clock deadline.
+type workCapContext struct {
+	context.Context
+	maxChecks int
+	checks    int
+}
+
+// Err counts one check and fails once the budget is spent.
+func (c *workCapContext) Err() error {
+	c.checks++
+	if c.checks > c.maxChecks {
+		return errWorkCap
 	}
+	return c.Context.Err()
 }

@@ -1,8 +1,6 @@
 package core
 
 import (
-	"bytes"
-	"encoding/binary"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -90,108 +88,4 @@ func TestAddMessageToObjectHeader_V1NotSupported(t *testing.T) {
 	err := AddMessageToObjectHeader(oh, MsgAttribute, []byte{1, 2, 3})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "only object header version 2 is supported")
-}
-
-// TestWriteObjectHeader_Success tests writing an object header.
-func TestWriteObjectHeader_Success(t *testing.T) {
-	// Create a minimal object header v2
-	oh := &ObjectHeader{
-		Version: 2,
-		Flags:   0,
-		Type:    ObjectTypeDataset,
-		Messages: []*HeaderMessage{
-			{
-				Type: MsgDataspace,
-				Data: []byte{0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // Minimal dataspace
-			},
-		},
-	}
-
-	sb := &Superblock{
-		Endianness: binary.LittleEndian,
-		OffsetSize: 8,
-		LengthSize: 8,
-	}
-
-	// Create a buffer to write to
-	writer := newMockWriterAtForModify()
-
-	err := WriteObjectHeader(writer, 48, oh, sb)
-	require.NoError(t, err)
-
-	// Verify data was written
-	data := writer.Bytes()
-	assert.True(t, len(data) > 0)
-
-	// Verify signature
-	assert.Equal(t, "OHDR", string(data[48:52]))
-
-	// Verify version
-	assert.Equal(t, byte(2), data[52])
-}
-
-// TestWriteObjectHeader_NilHeader tests error with nil header.
-func TestWriteObjectHeader_NilHeader(t *testing.T) {
-	sb := &Superblock{
-		Endianness: binary.LittleEndian,
-	}
-
-	writer := newMockWriterAtForModify()
-
-	err := WriteObjectHeader(writer, 48, nil, sb)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "object header is nil")
-}
-
-// TestWriteObjectHeader_V1NotSupported tests error with v1 header.
-func TestWriteObjectHeader_V1NotSupported(t *testing.T) {
-	oh := &ObjectHeader{
-		Version:  1,
-		Flags:    0,
-		Messages: []*HeaderMessage{},
-	}
-
-	sb := &Superblock{
-		Endianness: binary.LittleEndian,
-	}
-
-	writer := newMockWriterAtForModify()
-
-	err := WriteObjectHeader(writer, 48, oh, sb)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "only object header version 2 is supported")
-}
-
-// mockWriterAtForModify is a simple implementation of io.WriterAt for testing.
-type mockWriterAtForModify struct {
-	buf *bytes.Buffer
-}
-
-func newMockWriterAtForModify() *mockWriterAtForModify {
-	return &mockWriterAtForModify{
-		buf: &bytes.Buffer{},
-	}
-}
-
-func (m *mockWriterAtForModify) WriteAt(p []byte, off int64) (int, error) {
-	// Expand buffer if needed
-	needed := int(off) + len(p)
-	if m.buf.Len() < needed {
-		m.buf.Grow(needed - m.buf.Len())
-		for m.buf.Len() < needed {
-			m.buf.WriteByte(0)
-		}
-	}
-
-	// Write at offset
-	bufBytes := m.buf.Bytes()
-	copy(bufBytes[off:], p)
-	m.buf.Reset()
-	m.buf.Write(bufBytes)
-
-	return len(p), nil
-}
-
-func (m *mockWriterAtForModify) Bytes() []byte {
-	return m.buf.Bytes()
 }
