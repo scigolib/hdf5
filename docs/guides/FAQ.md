@@ -157,7 +157,7 @@ enumDs, _ := fw.CreateDataset("/status", hdf5.EnumInt8, []uint64{5},
 **Current limitations**:
 - Some advanced filters
 
-**Quality**: Official HDF5 test suite: <<SUITE>>. Files written by this library are read back
+**Quality**: Official HDF5 test suite: 379 of 383 valid files. Files written by this library are read back
 by the C library's `h5dump` in CI.
 
 See [ROADMAP.md](../../ROADMAP.md) for future plans.

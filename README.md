@@ -246,7 +246,7 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
   - Test coverage: 88%+ library packages (target: >70%) ✅
   - Lint issues: 0 (34+ linters) ✅
   - TODO items: 0 (all resolved) ✅
-  - Official HDF5 test suite: <<SUITE>> ✅
+  - Official HDF5 test suite: 379 of 383 valid files ✅
 
 - **Security** ✨ NEW:
   - 4 CVEs fixed (CVE-2025-7067, CVE-2025-6269, CVE-2025-2926, CVE-2025-44905) ✅
@@ -281,7 +281,9 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 - ✅ **ChunkIterator API** - Memory-efficient iteration over large datasets
 
 **Validation**:
-- ✅ Official HDF5 Test Suite: <<SUITE>>
+- ✅ Official HDF5 Test Suite: 379 of 383 valid files (the other 4 need the family or multi file driver, or
+  are truncated and refused by the C library as well; 50 files of the suite are deliberately invalid or need
+  unsupported drivers and are skipped)
 - ✅ Files written by this library are read back by the C library's h5dump (`c-interop` CI job)
 
 **Future Enhancements**:
@@ -365,7 +367,7 @@ Contributions are welcome! This is an early-stage project and we'd love your hel
 | Writing | ✅ Full | ✅ Full | ❌ No |
 | HDF5 1.8+ | ✅ Yes | ⚠️ Limited | ❌ No |
 | Advanced Datatypes | ✅ All | ✅ Yes | ❌ No |
-| Test Suite Validation | ✅ <<SUITE>> | ⚠️ Unknown | ❌ No |
+| Test Suite Validation | ✅ 379 of 383 valid files | ⚠️ Unknown | ❌ No |
 | Maintained | ✅ Active | ⚠️ Slow | ❌ Inactive |
 | Thread-safe | ⚠️ User must sync* | ⚠️ Conditional | ❌ No |
 

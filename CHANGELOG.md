@@ -9,32 +9,216 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+This release completes the security work of v0.14.2 (GHSA-8p88-h28q-w6m9) and brings the reader and the
+writer in line with the HDF5 C library, which is the reference for every check below. Several fixes change
+behaviour that earlier versions got wrong; they are listed under **Changed**. Files written by earlier
+versions of this library keep reading; see **Files written by earlier versions**.
+
+### Security
+
+Crafted files could make the library allocate, read or loop far beyond the size of the file. v0.14.2 bounded
+whole-dataset reads; this release closes the same class of bug on every other path found:
+
+- **Hyperslab reads (#75).** `ReadSlice` sized its buffer before any check: one changed byte in a 5,656-byte
+  file made a 12-value read request 40.9 GB and abort the process. Every reader now works from one validated
+  dataset descriptor, built once per dataset as the C library validates storage when it opens a dataset.
+- **Chunk indexes.** The v1 B-tree walk checks node levels, visited addresses and entry counts. Every index
+  walk (v1 and v2 B-tree, fixed and extensible array) and the fractal heap reader charge one byte budget:
+  a walk never reads more than the file holds. Before, overlapping blocks made a 73 KB file read 8.4 MB, and
+  larger parameters amounted to tens of gigabytes. Listing the chunks of an unallocated index no longer walks
+  its whole grid (a 2^40-chunk dataset hung), and `ChunkIteratorWithContext` honours cancellation inside the
+  walk.
+- **Object header continuations.** A continuation chain that loops back no longer hangs `Open`; a
+  536-byte file was enough.
+- **Decompression and conversion.** Deflate, bzip2 and LZF output is capped at the chunk size;
+  dereferenced variable-length data, compound results and array conversions count against the read limit.
+- **Shared datatypes.** A committed datatype referenced by many attributes is decoded once per file and
+  capped at 16 MiB; before, a 1 MiB file could need about 18 GiB.
+- **External raw data files** are no longer opened by default. A crafted file could name any path, for
+  example a key next to it. Reading them now needs `File.SetExternalFilePrefix`, and names resolve only
+  inside that directory (through `os.OpenRoot`); absolute names, `..` and links leading out are refused.
+  This is stricter than the C library, which opens names as given.
+
+Chunked datasets can legitimately be larger than the file (unwritten chunks read as the fill value), so they
+are bounded by a per-file read limit: `File.SetReadLimit` / `File.ReadLimit`, 4 GiB by default (less on
+32-bit targets).
+
+### Fixed — reading
+
+- Values that were silently wrong:
+  - datasets compressed with filters the library does not decode (N-bit, scale-offset, SZIP and others)
+    returned the packed bytes as values; they now fail with `ErrNotSupported`, as the C filter pipeline
+    does, and the per-chunk filter mask is honoured;
+  - unwritten chunks and unallocated storage read as the dataset's fill value instead of 0;
+  - unsigned 4- and 8-byte compound members read negative above 2^31 (now `uint32` / `uint64`);
+  - Fletcher32 checksums are verified instead of stripped unchecked;
+  - `ReadHyperslab` returned wrong values for some 1-D stride/block selections, partial middle dimensions
+    and 3-D selections with a non-zero start.
+- Valid files that could not be read: committed (shared) datatypes; data layout messages version 1 and 2;
+  version 2 filter pipeline messages; datasets of array types; external raw data files (see Security);
+  enumerations (read as their integer values); HDF5 1.10+ chunk indexes (single chunk, implicit, fixed
+  array, extensible array, v2 B-tree); fractal heaps with indirect blocks (groups and objects with many
+  links or attributes); creation-order-tracked object headers; the end-of-chunk gap of v2 object headers;
+  undefined addresses of any width; superblock extensions of files with a user block.
+- Groups whose B-tree has more than one level (more than 256 links with the default K) are read; before,
+  they failed with "non-leaf B-tree nodes not supported yet".
+- Superblock version 2 and 3: the field sizes are read where the format puts them, and the checksum is
+  verified. Symbol table entries and group B-tree keys use the file's length size, so files whose offset
+  and length sizes differ read correctly. The group B-tree K values are kept from the file (superblock 0,
+  or the superblock extension's B-tree K message). Version 2 object header checksums are verified;
+  a mismatch is reported through `File.Warnings()` (see "Files written by earlier versions").
+- The superblock extension of a file with a user block is read at the file's base address, and the stored
+  end-of-file of a moved superblock is adjusted as the C library does.
+- Dense attribute storage written by the C library is read in full (before: 0 of 9 attributes in
+  `tattr4_be.h5`, without an error); `dense_links.h5` no longer loses one of its 17 links.
+- A corrupt file whose group links back to an address on its own load path no longer hangs the reader:
+  object loading detects the cycle and returns an error. Found by `FuzzOpenFile`; the input is kept as a seed.
+- Version 0 superblocks are decoded with the field widths they declare instead of assuming 8-byte addresses.
+  Old writers produced files with 4-byte offsets (`tsizeslheap.h5` in the official suite); such files now open
+  and walk.
+- A corrupt fractal heap header could claim a maximum heap size that the file's length field cannot address:
+  the offset width was computed in 16-bit arithmetic, so 65535 bits wrapped to a zero-byte offset instead of
+  failing. Both heap-header parsers now reject the value, matching the C decoder's requirement that the size
+  is non-zero and no wider than `8 × sizeof_size`.
+
+### Fixed — writing
+
+Files this library wrote were not always what the C library reads. Each fix is compared with C-written
+files and checked with h5dump:
+
+- Compound datatypes (#65): h5py and H5Web could not open compound datasets ("invalid number of members:
+  0"). One datatype codec now mirrors the C encoder and decoder for every class.
+- Dense attribute and link storage was never readable by the C library: wrong message type, wrong index
+  record type, wrong heap offsets and name hashes. It is now written as C writes it.
+- An attribute added through `OpenForWrite` could overwrite the neighbouring object; header rewrites now
+  go through one path.
+- A group with more than about 90 links was written unreadable (its name heap was moved but not
+  re-referenced; in the default superblock-2 layout the root header checksum broke), and a group with more
+  than 256 links overwrote the next block. The heap prefix now stays in place and only its data block
+  moves (H5HL.c); the group B-tree splits and grows levels as in the C library (H5B.c, H5Gnode.c), with K
+  taken from the file. New groups start with an empty B-tree, as C creates them. Deleting a group frees its
+  B-tree nodes, symbol table nodes and both parts of a moved heap; deleting a non-empty group is refused
+  before anything is written.
+- `OpenForWrite` can add objects to existing subgroups in both group formats. In groups of the 1.8 format
+  (link messages, dense link storage) links are inserted and removed as the C library does, including the
+  compact↔dense switches.
+- Object headers grow as the C library grows them (H5Oalloc.c): free space in any chunk first, then a chunk
+  extended in place, then a new continuation chunk, moving a message when needed. Before, a header whose first
+  chunk was full failed with "object header full", typically on the second or third link of a group written by
+  h5py or h5repack.
+- Creating an object under a name that already exists is refused before anything is allocated, for every kind
+  of object (groups, datasets of every kind, links). Before, a duplicate in a group whose name heap was full
+  corrupted the group, and a failed duplicate `CreateGroup` made later datasets in that group disappear.
+- `Delete` is all-or-nothing: every range the object frees is collected and checked before the first write, and
+  errors are returned instead of ignored. It now frees chunk-index blocks of every index type and dense
+  attribute and link storage, which used to leak; freed bytes match h5stat. Deleting a non-empty group (any
+  format) or an object with shared attribute messages is refused before anything is written.
+- External links are written as the C library writes them: a link message with C's value layout (H5L.c,
+  H5Olink.c). A symbol-table group that receives one is converted to the 1.8 format first, as C converts it
+  (H5Gobj.c). Before, `CreateExternalLink` wrote an object header of its own and h5dump refused the whole file,
+  and external links written by the C library failed to parse.
+- `CreateDenseGroup` raises the reference count of every hard link target, as C does; `Delete` of a target
+  afterwards freed an object still in use. Deleting a link of a version-1 header updates its reference count.
+- `OpenForWrite` ignores the root group cache of a superblock-0 file when the root has no symbol table message,
+  as the C library does (H5Groot.c).
+- Incremental B-tree rebalancing: a data race between a delete and the background rebalancer, a deadlock when
+  the progress callback stopped rebalancing, and a double close on a repeated stop. After `Stop` returns, no
+  rebalancing work touches the tree.
+- Dataset headers: fill value message, filter flags, filter pipeline version 2, dataspace version 2 with
+  maximum dimensions, message order, all as C writes them. Fletcher32 is computed as C computes it.
+- Chunked datasets of an array type dropped two thirds of their data; chunks of 4 GiB or more are refused
+  instead of being recorded with a truncated size.
+- `OpenForWrite` + `Close` on a superblock-0 file with non-default B-tree K values rewrote them with the
+  defaults.
+
+### Performance
+
+Compared with v0.14.2 on the release benchmarks (`release_bench_test.go`, benchstat): object headers are read
+with one read per chunk instead of two per message, and message data no longer takes a 4 KiB pooled buffer
+each. Opening and walking a file is about half the time with a tenth of the memory; slices of chunked datasets
+take 58–72% less time and 75% less memory; `OpenForWrite`, which now checks the whole file before writing, takes
+the same time as before with 57% less memory.
+
 ### Added
 
-- Reading files with a user block. The superblock is located the way the C library locates it —
-  at offset 0 or at a power of two starting at 512 — and its position becomes the file's base
-  address; metadata addresses are resolved relative to it at the I/O boundary. Official-suite
-  files `twithub.h5`, `twithub513.h5` and two `h5clear_fsm_persist_user_*` files now read.
-  Writing to such a file is refused with a clear error until the write path applies the base too.
+- `Dataset.Shape`, `MaxShape`, `Datatype`, `Layout`: structured metadata instead of parsing `Info()` (#67).
+- Public compound API: `NewCompoundType`, `NewPackedCompoundType`, `FileWriter.CreateCompound`,
+  `DatasetWriter.Write([]map[string]any)` (#65).
+- `NamedDatatype.DatatypeInfo()`.
+- Sentinel errors for `errors.Is`: `ErrCorrupt`, `ErrLimit`, `ErrNotSupported`, `ErrNoData`,
+  `ErrNeedsRepack`.
+- `File.SetReadLimit` / `ReadLimit`, `File.SetExternalFilePrefix`.
+- `File.Warnings()`, `Warning`, `WarningCode` and its constants: findings about a file that did not stop
+  it from being read (see "Files written by earlier versions").
+- `ChunkIteratorWithContext` cancels inside the index walk.
+- Reading files with a user block. The superblock is located the way the C library locates it — at offset 0
+  or at a power of two starting at 512 — and its position becomes the file's base address; metadata addresses
+  are resolved relative to it at the I/O boundary. Official-suite files `twithub.h5`, `twithub513.h5` and two
+  `h5clear_fsm_persist_user_*` files now read. Writing to such a file is refused with a clear error until the
+  write path applies the base too.
+
+### Changed
+
+Behaviour that was wrong before and may be visible to callers:
+
+- Unsupported filters fail with `ErrNotSupported` instead of returning packed bytes.
+- Unsigned 4- and 8-byte compound members are `uint32` / `uint64` (were `int32` / `int64`).
+- A scalar dataspace has rank 0.
+- External raw data files need `File.SetExternalFilePrefix`.
+- A damaged attribute message is reported instead of skipped.
+- `Info()` returns `ErrCorrupt` or `ErrLimit` for invalid metadata instead of a summary.
+- Dense attribute and link storage of earlier versions is migrated to the C layout when the object is
+  rewritten.
 
 ### Removed
 
-- `scripts/pre-release-check.sh`, a maintainer-only validation script. It duplicated the release
-  checks and still described the retired `develop` branch flow; those checks now live in the
-  maintainer's release tooling.
+- `scripts/pre-release-check.sh`, a maintainer-only validation script. It duplicated the release checks and
+  still described the retired `develop` branch flow; those checks now live in the maintainer's release tooling.
 
-### Fixed
+### Deprecated
 
-- A corrupt file whose group links back to an address on its own load path no longer hangs the
-  reader: object loading detects the cycle and returns an error. Found by `FuzzOpenFile`; the
-  input is kept as a seed.
-- Version 0 superblocks are decoded with the field widths they declare instead of assuming 8-byte
-  addresses. Old writers produced files with 4-byte offsets (`tsizeslheap.h5` in the official
-  suite); such files previously failed to load, and now open and walk.
-- A corrupt fractal heap header could claim a maximum heap size that the file's length field cannot
-  address: the offset width was computed in 16-bit arithmetic, so 65535 bits wrapped to a
-  zero-byte offset instead of failing. Both heap-header parsers now reject the value, matching the
-  C decoder's requirement that the size is non-zero and no wider than `8 × sizeof_size`.
+- `CreateCompoundDataset`: use `CreateCompound`.
+- `NamedDatatype.Datatype()`: use `DatatypeInfo()`; the internal return type goes in v1.0.
+
+### Documentation
+
+- README, ROADMAP and the guides describe the v0.14.3 API and behaviour: structured metadata instead of
+  parsing `Info()`, the compound API, the read limit, external files, sentinel errors, the unsupported
+  filters (SZIP, N-bit, scale-offset).
+- Corrected: B-tree rebalancing. The C library rebalances v2 B-trees on every delete; this library does
+  too by default (`WithBTreeRebalancing(false)` turns it off), and the lazy, incremental and smart
+  strategies choose when. The docs said the opposite.
+- Corrected: the v0.12.0 migration note refers to a `WriteCompound()` function that never existed. Use
+  `NewCompoundType` / `NewPackedCompoundType`, `FileWriter.CreateCompound` and
+  `DatasetWriter.Write([]map[string]any)`.
+
+### Files written by earlier versions
+
+Earlier versions of this library wrote some structures the HDF5 C library cannot read. Such files keep
+reading, and every finding is reported through `File.Warnings()`; nothing is accepted silently. See
+`docs/guides/TROUBLESHOOTING.md`, "Files Written By Older Versions".
+
+| Written by | Defect | `Warnings()` code | `OpenForWrite` |
+|---|---|---|---|
+| ≤ v0.13.4 | metadata checksums computed as CRC32 instead of Jenkins lookup3 | `WarnLegacySuperblockChecksum`, `WarnLegacyMetadataChecksum` | repaired in place |
+| ≤ v0.13.8 | v2 object headers without a checksum | `WarnHeaderChecksum` | refused: `ErrNeedsRepack` |
+| v0.13.9 | v2 object header chunk size counts its checksum | `WarnHeaderChunkSize` | refused: `ErrNeedsRepack` |
+| ≤ v0.13.9 | early integer/float datatype encoding | `WarnLegacyDatatype` | refused: `ErrNeedsRepack` |
+| ≤ v0.14.2 | dense attribute storage in a non-C layout | `WarnLegacyDenseLayout` | migrated on the first attribute change |
+| ≤ v0.14.2 | external links in a non-C value layout, in a header of their own | `WarnLegacyExternalLink` | refused: `ErrNeedsRepack` |
+
+A file that needs repacking can be read with `Open` and its data written into a new file; a function that
+does this for a whole file is planned. Reading such files is planned to need an explicit option from v1.0 on.
+
+### Retracted versions
+
+v0.9.0-beta through v0.13.9 are retracted in `go.mod`: they wrote files no HDF5 tool can open. Builds that
+use them keep working; `go get` and `go mod tidy` no longer select them, and `go list -m -u` shows the
+reason.
+
+### Contributors
+
+Thanks to @TuSKan (#75), @kf-domeng (#65) and @skyqvn (#67) for the reports.
 
 ## [v0.14.2] - 2026-10-21
 

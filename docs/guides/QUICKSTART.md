@@ -461,7 +461,7 @@ if err != nil {
 - ✅ All datatypes including compound
 - ✅ Soft/external links supported
 - ✅ Named datatypes (committed datatypes) supported
-- ✅ Official HDF5 test suite: <<SUITE>>
+- ✅ Official HDF5 test suite: 379 of 383 valid files
 
 See [README.md](../../README.md) for full feature list.
 
