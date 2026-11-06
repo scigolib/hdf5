@@ -329,3 +329,69 @@ func TestCInterop_RepackRoundTrip(t *testing.T) {
 		require.NoError(t, f.Close())
 	}
 }
+
+// h5dumpBlock returns the block of `h5dump -p -H` output that starts with
+// the line "<name> {", with whitespace normalized.
+func h5dumpBlock(t *testing.T, out, name string) string {
+	t.Helper()
+	start := strings.Index(out, name+" {")
+	require.GreaterOrEqual(t, start, 0, "h5dump output has no %s block:\n%s", name, out)
+	end := strings.Index(out[start:], "}")
+	require.GreaterOrEqual(t, end, 0)
+	return strings.Join(strings.Fields(out[start:start+end+1]), " ")
+}
+
+// TestCInterop_FillValueMatchesC: the C library reports the same fill value,
+// allocation time and filters for a Go-written dataset as for a C-written
+// dataset created with the default dataset creation property list (TASK-072).
+func TestCInterop_FillValueMatchesC(t *testing.T) {
+	h5dump := h5tool(t, "h5dump")
+
+	cases := []struct {
+		name   string
+		sb     uint8
+		dt     Datatype
+		opts   []DatasetOption
+		write  func(ds *DatasetWriter) error
+		ref    cRef
+		blocks []string
+	}{
+		{
+			"contiguous", SuperblockV2, Int32, nil,
+			func(ds *DatasetWriter) error { return ds.Write(sixInt32s()) },
+			cContigV18, []string{"FILTERS", "FILLVALUE", "ALLOCATION_TIME"},
+		},
+		{
+			"chunked_deflate", SuperblockV2, Int32, []DatasetOption{WithChunkDims([]uint64{2}), WithGZIPCompression(1)},
+			func(ds *DatasetWriter) error { return ds.Write(sixInt32s()) },
+			cChunkedV18, []string{"FILTERS", "FILLVALUE", "ALLOCATION_TIME"},
+		},
+		{
+			"vlen_string", SuperblockV2, VLenString, nil,
+			func(ds *DatasetWriter) error { return ds.Write([]string{"a", "bb", "ccc", "dddd", "e", "ff"}) },
+			cVLenV18, []string{"FILLVALUE", "ALLOCATION_TIME"},
+		},
+		{
+			"v0_contiguous", SuperblockV0, Int32, nil,
+			func(ds *DatasetWriter) error { return ds.Write(sixInt32s()) },
+			cContigV0, []string{"FILLVALUE", "ALLOCATION_TIME"},
+		},
+		{
+			"v0_chunked", SuperblockV0, Int32, []DatasetOption{WithChunkDims([]uint64{2})},
+			func(ds *DatasetWriter) error { return ds.Write(sixInt32s()) },
+			cChunkedV0, []string{"FILLVALUE", "ALLOCATION_TIME"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			file := writeOne(t, tc.sb, func(fw *FileWriter) (*DatasetWriter, error) {
+				return fw.CreateDataset("/d", tc.dt, []uint64{6}, tc.opts...)
+			}, tc.write)
+			got := runH5(t, h5dump, "--enable-error-stack", "-p", "-H", "-d", "/d", file)
+			want := runH5(t, h5dump, "-p", "-H", "-d", tc.ref.path, filepath.FromSlash(tc.ref.file))
+			for _, b := range tc.blocks {
+				require.Equal(t, h5dumpBlock(t, want, b), h5dumpBlock(t, got, b), "%s block", b)
+			}
+		})
+	}
+}

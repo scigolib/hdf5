@@ -149,7 +149,7 @@ func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, co
 	btreeAddress := uint64(0)
 
 	// 6. Create dataspace message
-	dataspaceData, err := core.EncodeDataspaceMessage(dims, config.maxDims)
+	dataspaceData, err := fw.encodeDatasetDataspace(dims, config.maxDims)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode dataspace: %w", err)
 	}
@@ -185,27 +185,14 @@ func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, co
 	}
 
 	// 9. Create object header with optional filter pipeline
-	ohw := &core.ObjectHeaderWriter{
-		Version: 2,
-		Flags:   0, // Minimal flags
-		Messages: []core.MessageWriter{
-			{Type: core.MsgDatatype, Data: datatypeData},
-			{Type: core.MsgDataspace, Data: dataspaceData},
-			{Type: core.MsgDataLayout, Data: layoutData},
-		},
+	messages, err := fw.datasetHeaderMessages(datatypeData, dataspaceData, layoutData, core.LayoutChunked, config.pipeline)
+	if err != nil {
+		return nil, err
 	}
-
-	// Add filter pipeline message if present
-	if config.pipeline != nil && !config.pipeline.IsEmpty() {
-		pipelineData, err := config.pipeline.EncodePipelineMessage()
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode filter pipeline: %w", err)
-		}
-
-		ohw.Messages = append(ohw.Messages, core.MessageWriter{
-			Type: core.MsgFilterPipeline,
-			Data: pipelineData,
-		})
+	ohw := &core.ObjectHeaderWriter{
+		Version:  2,
+		Flags:    0, // Minimal flags
+		Messages: messages,
 	}
 
 	// Pre-allocate OHDR with padding for future attributes.
@@ -233,27 +220,14 @@ func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, co
 		return nil, fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
 	}
 
-	// Calculate offset of B-tree address within the file.
-	// Object header v2 layout:
-	//   - OHDR signature: 4 bytes
-	//   - Version: 1 byte
-	//   - Flags: 1 byte
-	//   - Chunk size: 1 byte (for flags bits 0-1 = 0)
-	//   - Messages (each: type 1 + size 2 + flags 1 + data):
-	//     - Datatype: 4 + len(datatypeData)
-	//     - Dataspace: 4 + len(dataspaceData)
-	//     - Layout header: 4 bytes
-	//     - Layout data: version(1) + class(1) + dimensionality(1) + btreeAddress(offsetSize)
-	// The B-tree address is at offset 3 within layout message data.
-	layoutBTreeOffset := headerAddress +
-		4 + // OHDR
-		1 + // version
-		1 + // flags
-		1 + // chunk size
-		4 + uint64(len(datatypeData)) + // datatype message
-		4 + uint64(len(dataspaceData)) + // dataspace message
-		4 + // layout message header
-		3 // offset to btree address within layout data (version + class + dimensionality)
+	// File offset of the B-tree address in the layout message, patched when
+	// the chunks are written. A version 3 chunked layout holds version,
+	// class and dimensionality, then the address (H5Olayout.c:637-645).
+	layoutDataOffset, err := v2MessageDataOffset(ohw, headerSize, core.MsgDataLayout)
+	if err != nil {
+		return nil, err
+	}
+	layoutBTreeOffset := headerAddress + layoutDataOffset + 3
 
 	// 9. Link to parent group
 	parent, datasetName := parsePath(name)
@@ -279,6 +253,29 @@ func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, co
 		layoutBTreeOffset: layoutBTreeOffset,
 		headerSize:        headerSize,
 	}, nil
+}
+
+// v2MessageDataOffset returns the offset, from the start of the version 2
+// object header ohw written in headerSize bytes, of the data of its message
+// of type typ. The messages fill the single chunk right before the 4-byte
+// checksum, each behind a 4-byte header (type, size, flags; H5Ocache.c:1258-
+// 1305), so the offset is counted back from the end; the prefix, whose
+// chunk-size field is 1 to 8 bytes wide, does not enter the count.
+func v2MessageDataOffset(ohw *core.ObjectHeaderWriter, headerSize uint64, typ core.MessageType) (uint64, error) {
+	const checksumSize, msgHeaderSize = 4, 4
+	end := headerSize - checksumSize
+	for i := len(ohw.Messages) - 1; i >= 0; i-- {
+		m := ohw.Messages[i]
+		size := msgHeaderSize + uint64(len(m.Data))
+		if size > end {
+			return 0, fmt.Errorf("object header of %d bytes cannot hold its messages", headerSize)
+		}
+		end -= size
+		if m.Type == typ {
+			return end + msgHeaderSize, nil
+		}
+	}
+	return 0, fmt.Errorf("object header has no message of type %d", typ)
 }
 
 // writeChunkedData writes data to chunked dataset.

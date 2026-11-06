@@ -520,16 +520,17 @@ func TestMetaOrder_FloatVAX(t *testing.T) {
 
 // TestDatasetMaxShape_NoStoredMax: a dataspace without stored maximum
 // dimensions reports its current dimensions as the maximum (H5S.c:968-972).
+// The fixture is C-written: our writer stores maximum dimensions as C does.
 func TestDatasetMaxShape_NoStoredMax(t *testing.T) {
-	_, ds := openDataset(t, writeFloat64Dataset(t, []uint64{3, 4}), "/x")
+	_, ds := openDataset(t, "testdata/hdf5_official/taindices.h5", "/2d")
 
 	desc, err := ds.descriptor()
 	require.NoError(t, err)
-	require.Nil(t, desc.Dataspace().MaxDims, "the writer stores no maximum dimensions")
+	require.Nil(t, desc.Dataspace().MaxDims, "taindices.h5 /2d stores no maximum dimensions")
 
 	maxShape, err := ds.MaxShape()
 	require.NoError(t, err)
-	assert.Equal(t, []uint64{3, 4}, maxShape)
+	assert.Equal(t, []uint64{10, 10}, maxShape)
 }
 
 // TestFilterID_String: predefined filters print their C names; others print

@@ -2,8 +2,11 @@ package writer
 
 import (
 	"encoding/binary"
+	"encoding/hex"
+	"os"
 	"testing"
 
+	"github.com/scigolib/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,7 +30,7 @@ func TestFletcher32Filter_Encode(t *testing.T) {
 	filter := NewFletcher32Filter()
 	flags, cdValues := filter.Encode()
 
-	require.Equal(t, uint16(0), flags)
+	require.Equal(t, FilterFlagMandatory, flags, "H5Pset_fletcher32 adds fletcher32 as mandatory (H5Pocpl.c:1104)")
 	require.Equal(t, 0, len(cdValues))
 }
 
@@ -456,4 +459,77 @@ func TestFletcher32Filter_MultipleCorruptionScenarios(t *testing.T) {
 			require.Error(t, err, "Should detect corruption in: %s", tt.name)
 		})
 	}
+}
+
+// TestFletcher32_MatchesCChunks checks Apply byte for byte against the four
+// chunks C wrote into h5repack_fletcher.h5 /dset_fletcher32 (int32 40x20,
+// chunks 20x10 of 800 bytes plus the checksum, at the addresses h5ls -va
+// lists). Each chunk is 400 words, so the 360-word folding of
+// H5_checksum_fletcher32 (H5checksum.c:94-136) is exercised.
+func TestFletcher32_MatchesCChunks(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/hdf5_official/h5repack_fletcher.h5")
+	require.NoError(t, err)
+
+	filter := NewFletcher32Filter()
+	for _, addr := range []int{4016, 4820, 5624, 6428} {
+		require.LessOrEqual(t, addr+804, len(raw))
+		chunk := raw[addr : addr+804]
+
+		got, err := filter.Apply(chunk[:800])
+		require.NoError(t, err)
+		require.Equal(t, hex.EncodeToString(chunk[800:]), hex.EncodeToString(got[800:]), "checksum of the chunk at %d", addr)
+
+		back, err := filter.Remove(chunk)
+		require.NoError(t, err)
+		require.Equal(t, chunk[:800], back)
+	}
+}
+
+// TestFletcher32_FoldsLikeC covers sums that reach a multiple of 65535: C
+// folds them to 0xFFFF (H5checksum.c:118-135), a modulo would give 0, and C
+// then rejects the chunk.
+func TestFletcher32_FoldsLikeC(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+		want uint32
+	}{
+		{"one_word_ffff", []byte{0xFF, 0xFF}, 0xFFFFFFFF},
+		{"two_words_ffff", []byte{0xFF, 0xFF, 0xFF, 0xFF}, 0xFFFFFFFF},
+		// Big-endian words: 0x0102 -> sum1 0x0102, sum2 0x0102.
+		{"big_endian_word", []byte{0x01, 0x02}, 0x01020102},
+		// An odd last byte is the high half of a word (H5checksum.c:125-130).
+		{"odd_byte", []byte{0x2A}, 0x2A002A00},
+		// sum1 = 0x8000 + 0x7FFF = 0xFFFF exactly; sum2 = 0x8000 + 0xFFFF = 0x17FFF -> 0x8000.
+		{"sum1_is_65535", []byte{0x80, 0x00, 0x7F, 0xFF}, 0x8000FFFF},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, calculateFletcher32(tc.data))
+
+			out, err := NewFletcher32Filter().Apply(tc.data)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, binary.LittleEndian.Uint32(out[len(tc.data):]))
+		})
+	}
+}
+
+// TestFletcher32Filter_Remove_AcceptsReversed checks that Remove accepts the
+// pre-1.6.3 checksum with the bytes of each 16-bit half swapped, as
+// H5Z__filter_fletcher32 does (H5Zfletcher32.c:79-102), and wraps
+// utils.ErrCorrupt otherwise.
+func TestFletcher32Filter_Remove_AcceptsReversed(t *testing.T) {
+	data := []byte{1, 2, 3, 4, 5, 6, 7}
+	sum := calculateFletcher32(data)
+	reversed := (sum&0x00FF00FF)<<8 | (sum&0xFF00FF00)>>8
+	require.NotEqual(t, sum, reversed)
+
+	chunk := binary.LittleEndian.AppendUint32(append([]byte{}, data...), reversed)
+	back, err := NewFletcher32Filter().Remove(chunk)
+	require.NoError(t, err)
+	require.Equal(t, data, back)
+
+	chunk = binary.LittleEndian.AppendUint32(append([]byte{}, data...), sum^1)
+	_, err = NewFletcher32Filter().Remove(chunk)
+	require.ErrorIs(t, err, utils.ErrCorrupt)
 }

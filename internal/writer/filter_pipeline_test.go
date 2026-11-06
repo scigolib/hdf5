@@ -223,7 +223,7 @@ func TestFilterPipeline_EmptyData(t *testing.T) {
 func TestFilterPipeline_EncodePipelineMessage_Empty(t *testing.T) {
 	pipeline := NewFilterPipeline()
 
-	_, err := pipeline.EncodePipelineMessage()
+	_, err := pipeline.EncodePipelineMessage(PipelineVersion1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "empty filter pipeline")
 }
@@ -238,7 +238,7 @@ func TestFilterPipeline_EncodePipelineMessage_SingleFilter(t *testing.T) {
 	}
 	pipeline.AddFilter(filter)
 
-	msg, err := pipeline.EncodePipelineMessage()
+	msg, err := pipeline.EncodePipelineMessage(PipelineVersion1)
 	require.NoError(t, err)
 
 	// Check header
@@ -289,7 +289,7 @@ func TestFilterPipeline_EncodePipelineMessage_MultipleFilters(t *testing.T) {
 	pipeline.AddFilter(filter1)
 	pipeline.AddFilter(filter2)
 
-	msg, err := pipeline.EncodePipelineMessage()
+	msg, err := pipeline.EncodePipelineMessage(PipelineVersion1)
 	require.NoError(t, err)
 
 	// Check header
@@ -326,7 +326,7 @@ func TestFilterPipeline_EncodePipelineMessage_NoName(t *testing.T) {
 	}
 	pipeline.AddFilter(filter)
 
-	msg, err := pipeline.EncodePipelineMessage()
+	msg, err := pipeline.EncodePipelineMessage(PipelineVersion1)
 	require.NoError(t, err)
 
 	// Check header
@@ -358,7 +358,7 @@ func TestFilterPipeline_EncodePipelineMessage_LongName(t *testing.T) {
 	}
 	pipeline.AddFilter(filter)
 
-	msg, err := pipeline.EncodePipelineMessage()
+	msg, err := pipeline.EncodePipelineMessage(PipelineVersion1)
 	require.NoError(t, err)
 
 	offset := 8
@@ -380,4 +380,43 @@ func TestFilterPipeline_EncodePipelineMessage_LongName(t *testing.T) {
 	require.Equal(t, uint32(2), cd2)
 	require.Equal(t, uint32(3), cd3)
 	require.Equal(t, cdOffset+12+4, len(msg))
+}
+
+// TestFilterPipeline_EncodePipelineMessage_V2 checks version 2 against
+// H5O__pline_encode (H5Opline.c:280-348): no reserved bytes, no name length
+// or name for a filter below 256, an unpadded NUL-terminated name for one
+// above, no padding after an odd number of values.
+func TestFilterPipeline_EncodePipelineMessage_V2(t *testing.T) {
+	pipeline := NewFilterPipeline()
+	pipeline.AddFilter(&mockFilter{id: FilterGZIP, name: "deflate", flags: FilterFlagOptional, cdValues: []uint32{9}})
+	pipeline.AddFilter(&mockFilter{id: FilterLZF, name: "lzf", flags: FilterFlagOptional, cdValues: []uint32{0, 0, 0}})
+	pipeline.AddFilter(&mockFilter{id: FilterFletcher32, name: "fletcher32", flags: FilterFlagMandatory})
+
+	msg, err := pipeline.EncodePipelineMessage(PipelineVersion2)
+	require.NoError(t, err)
+	want := []byte{
+		2, 3, // version, filters
+		1, 0, 1, 0, 1, 0, 9, 0, 0, 0, // deflate: id, flags, 1 value, level 9
+		0x00, 0x7d, 4, 0, 1, 0, 3, 0, 'l', 'z', 'f', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // lzf: id 32000, name length 4, flags, 3 values, name, values
+		3, 0, 0, 0, 0, 0, // fletcher32: id, mandatory, no values
+	}
+	require.Equal(t, want, msg)
+}
+
+func TestFilterPipeline_EncodePipelineMessage_BadVersion(t *testing.T) {
+	pipeline := NewFilterPipeline()
+	pipeline.AddFilter(&mockFilter{id: FilterGZIP, name: "deflate", cdValues: []uint32{1}})
+	for _, v := range []uint8{0, 3} {
+		_, err := pipeline.EncodePipelineMessage(v)
+		require.Error(t, err, "version %d", v)
+	}
+}
+
+func TestFilterPipeline_EncodePipelineMessage_TooManyFilters(t *testing.T) {
+	pipeline := NewFilterPipeline()
+	for i := 0; i < maxFilters+1; i++ {
+		pipeline.AddFilter(&mockFilter{id: FilterShuffle, name: "shuffle", cdValues: []uint32{4}})
+	}
+	_, err := pipeline.EncodePipelineMessage(PipelineVersion2)
+	require.Error(t, err)
 }

@@ -104,7 +104,7 @@ func (f *GZIPFilter) Remove(data []byte) ([]byte, error) {
 // Encode returns the filter parameters for the Pipeline message.
 //
 // For GZIP, the client data contains a single value: the compression level.
-// Flags are always 0 for GZIP.
+// The filter is optional, as H5Pset_deflate adds it (H5Pocpl.c:1065).
 func (f *GZIPFilter) Encode() (flags uint16, cdValues []uint32) {
-	return 0, []uint32{uint32(f.level)} //nolint:gosec // G115: Compression level is 1-9, always fits in uint32
+	return FilterFlagOptional, []uint32{uint32(f.level)} //nolint:gosec // G115: Compression level is 1-9, always fits in uint32
 }

@@ -55,7 +55,7 @@ func TestShuffleFilter_Encode(t *testing.T) {
 			filter := NewShuffleFilter(tt.elementSize)
 			flags, cdValues := filter.Encode()
 
-			require.Equal(t, uint16(0), flags)
+			require.Equal(t, FilterFlagOptional, flags, "H5Pset_shuffle adds shuffle as optional (H5Pdcpl.c:2963)")
 			require.Equal(t, 1, len(cdValues))
 			require.Equal(t, tt.elementSize, cdValues[0])
 		})

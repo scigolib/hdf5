@@ -130,7 +130,7 @@ func (f *ShuffleFilter) Remove(data []byte) ([]byte, error) {
 // Encode returns the filter parameters for the Pipeline message.
 //
 // For shuffle, the client data contains a single value: the element size.
-// Flags are always 0 for shuffle.
+// The filter is optional, as H5Pset_shuffle adds it (H5Pdcpl.c:2963).
 func (f *ShuffleFilter) Encode() (flags uint16, cdValues []uint32) {
-	return 0, []uint32{f.elementSize}
+	return FilterFlagOptional, []uint32{f.elementSize}
 }
