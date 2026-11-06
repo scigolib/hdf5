@@ -209,20 +209,29 @@ var errGroupBTreeCycle = errors.New("group B-tree node reached twice")
 // L-1, and a level-0 node's children are symbol table nodes. A node reached
 // twice is corruption: in a tree each node has one parent, and a shared node
 // would multiply the work of the walk.
+//
+// The visited set alone does not bound the walk: version 1 B-tree nodes carry
+// no checksum, so nodes at distinct but overlapping addresses each pass it.
+// Every node and every symbol table node is charged to one core.WalkBudget
+// before it is read, so the walk reads no more than the file holds and the
+// entries it yields are bounded by the file's size.
 func WalkGroupBTree(r io.ReaderAt, sb *core.Superblock, addr uint64, fn func(snodAddr uint64) error) error {
 	l := NewGroupBTreeLayout(sb)
 	visited := make(map[uint64]struct{})
-	return walkGroupBTreeNode(r, sb, l, addr, GroupBTreeLevelUnknown, visited, fn)
+	return walkGroupBTreeNode(r, sb, l, addr, GroupBTreeLevelUnknown, visited, core.NewWalkBudget(r, sb), fn)
 }
 
 func walkGroupBTreeNode(r io.ReaderAt, sb *core.Superblock, l GroupBTreeLayout, addr uint64, expLevel int,
-	visited map[uint64]struct{}, fn func(uint64) error,
+	visited map[uint64]struct{}, budget *core.WalkBudget, fn func(uint64) error,
 ) error {
 	if _, seen := visited[addr]; seen {
 		return fmt.Errorf("group B-tree node at 0x%x: %w: %w", addr, errGroupBTreeCycle, utils.ErrCorrupt)
 	}
 	visited[addr] = struct{}{}
 
+	if err := budget.Charge(l.NodeSize(), addr, "group B-tree"); err != nil {
+		return err
+	}
 	node, err := ReadGroupBTreeNode(r, sb, l, addr, expLevel)
 	if err != nil {
 		return err
@@ -230,10 +239,14 @@ func walkGroupBTreeNode(r io.ReaderAt, sb *core.Superblock, l GroupBTreeLayout, 
 	for i := 0; i < node.N; i++ {
 		child := node.Children[i]
 		if node.Level > 0 {
-			if err := walkGroupBTreeNode(r, sb, l, child, int(node.Level)-1, visited, fn); err != nil {
+			if err := walkGroupBTreeNode(r, sb, l, child, int(node.Level)-1, visited, budget, fn); err != nil {
 				return err
 			}
 			continue
+		}
+		// fn reads the symbol table node: charge it first.
+		if err := budget.Charge(l.SNODSize(), child, "group symbol table"); err != nil {
+			return err
 		}
 		if err := fn(child); err != nil {
 			return err
