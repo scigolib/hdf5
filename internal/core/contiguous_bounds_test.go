@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/scigolib/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,7 +55,7 @@ func TestReadDatasetFloat64_ContiguousOversizeDataspace(t *testing.T) {
 	_, err := ReadDatasetFloat64(newSmallReader(), header, newBoundsTestSuperblock())
 
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to read contiguous data")
+	require.ErrorIs(t, err, utils.ErrCorrupt) // Rejected when the descriptor is built (ADR-004).
 	require.Contains(t, err.Error(), "read beyond end of file")
 	require.Contains(t, err.Error(), "size=8000000")
 	require.Contains(t, err.Error(), "fileSize=64")
@@ -63,15 +64,14 @@ func TestReadDatasetFloat64_ContiguousOversizeDataspace(t *testing.T) {
 // TestReadDatasetCompound_ContiguousOversizeDataspace verifies the bound in the
 // compound reader: 1,000,000 four-byte structs is 4,000,000 bytes claimed.
 func TestReadDatasetCompound_ContiguousOversizeDataspace(t *testing.T) {
-	props := buildCompoundV3Props(t, []testCompoundMember{
+	header := newOversizeContiguousHeader(fixtureCompoundBytes(4, []testCompoundMember{
 		{name: "id", offset: 0, dtClass: DatatypeFixed, dtSize: 4},
-	})
-	header := newOversizeContiguousHeader(buildCompoundDatatypeV3(4, props))
+	}))
 
 	_, err := ReadDatasetCompound(newSmallReader(), header, newBoundsTestSuperblock())
 
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to read contiguous data")
+	require.ErrorIs(t, err, utils.ErrCorrupt) // Rejected when the descriptor is built (ADR-004).
 	require.Contains(t, err.Error(), "read beyond end of file")
 	require.Contains(t, err.Error(), "size=4000000")
 	require.Contains(t, err.Error(), "fileSize=64")
@@ -85,7 +85,7 @@ func TestReadDatasetStrings_ContiguousOversizeDataspace(t *testing.T) {
 	_, err := ReadDatasetStrings(newSmallReader(), header, newBoundsTestSuperblock())
 
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to read contiguous data")
+	require.ErrorIs(t, err, utils.ErrCorrupt) // Rejected when the descriptor is built (ADR-004).
 	require.Contains(t, err.Error(), "read beyond end of file")
 	require.Contains(t, err.Error(), "size=4000000")
 	require.Contains(t, err.Error(), "fileSize=64")
@@ -100,7 +100,7 @@ func TestReadDatasetVLenBytes_ContiguousOversizeDataspace(t *testing.T) {
 	_, err := ReadDatasetVLenBytes(newSmallReader(), header, newBoundsTestSuperblock())
 
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to read contiguous data")
+	require.ErrorIs(t, err, utils.ErrCorrupt) // Rejected when the descriptor is built (ADR-004).
 	require.Contains(t, err.Error(), "read beyond end of file")
 	require.Contains(t, err.Error(), "size=16000000")
 	require.Contains(t, err.Error(), "fileSize=64")
@@ -136,10 +136,7 @@ func TestReadDatasetFloat64_ContiguousSizeOverflow(t *testing.T) {
 // 16-byte heap ID size, and the bound under test is applied before that data
 // would be dereferenced.
 func buildVLenDatatypeMessage(size uint32) []byte {
-	data := make([]byte, 16)
-	classAndVersion := uint32(DatatypeVarLen) | (1 << 4)
-	binary.LittleEndian.PutUint32(data[0:4], classAndVersion)
-	binary.LittleEndian.PutUint32(data[4:8], size)
-
-	return data
+	// A complete vlen datatype (base type unsigned char): zeroed base bytes
+	// are a version-0 datatype the C decoder rejects (H5Odtype.c:151).
+	return fixtureVLenBytes(size)
 }

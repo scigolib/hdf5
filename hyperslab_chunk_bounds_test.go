@@ -1,42 +1,21 @@
 package hdf5
 
 import (
-	"math"
 	"testing"
 
-	"github.com/scigolib/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
-// TestGenerateChunkCoordinates_RejectsUnrepresentableSpan is the ADR-003
-// regression test for the hyperslab chunk-limit computation. The span is
-// derived from dataset dimensions and the selection, i.e. from file metadata;
-// converting it to int without a check wraps, and the wrapped value used to
-// size the result slice in make (a panic on any platform, not only 32-bit).
-func TestGenerateChunkCoordinates_RejectsUnrepresentableSpan(t *testing.T) {
-	first := []uint64{0}
-	last := []uint64{math.MaxUint64 - 1}
+// The ADR-003 tests of generateChunkCoordinates (unrepresentable span, count
+// above MaxChunkCoordinates, regular range) were removed with the function:
+// the chunked hyperslab reader no longer materializes the grid of overlapping
+// chunk coordinates, it filters the stored B-tree entries by chunkRange
+// (TASK-062 review finding M1), so there is no grid-sized allocation left to
+// bound.
 
-	_, err := generateChunkCoordinates(first, last)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "platform limit")
-}
-
-// TestGenerateChunkCoordinates_RejectsChunkCountAbovePolicy covers the policy
-// cap: a representable but enormous chunk count would allocate gigabytes of
-// descriptors before the loop even starts.
-func TestGenerateChunkCoordinates_RejectsChunkCountAbovePolicy(t *testing.T) {
-	first := []uint64{0}
-	last := []uint64{utils.MaxChunkCoordinates} // span = cap + 1
-
-	_, err := generateChunkCoordinates(first, last)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "exceeds maximum")
-}
-
-// TestFindOverlappingChunks_RankMismatch covers the review finding that a chunk
-// grid shorter than the selection rank was indexed past its end.
-func TestFindOverlappingChunks_RankMismatch(t *testing.T) {
+// TestChunkRange_RankMismatch covers the review finding that a chunk grid
+// shorter than the selection rank was indexed past its end.
+func TestChunkRange_RankMismatch(t *testing.T) {
 	sel := &HyperslabSelection{
 		Start:  []uint64{0, 0},
 		Count:  []uint64{1, 1},
@@ -44,19 +23,25 @@ func TestFindOverlappingChunks_RankMismatch(t *testing.T) {
 		Block:  []uint64{1, 1},
 	}
 
-	_, err := findOverlappingChunks(sel, []uint64{4}, []uint64{10, 10})
+	_, _, err := chunkRange(sel, []uint64{4}, []uint64{10, 10})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "rank mismatch")
 }
 
-// TestGenerateChunkCoordinates_RegularRange pins the behavior the guard must
-// not change: a normal 2-D span still produces every coordinate.
-func TestGenerateChunkCoordinates_RegularRange(t *testing.T) {
-	first := []uint64{0, 0}
-	last := []uint64{1, 1}
+// TestChunkRange_RegularRange pins the overlapping range of a normal 2-D
+// selection: rows 3-12 and columns 0-4 of a 4×4-chunked grid.
+func TestChunkRange_RegularRange(t *testing.T) {
+	sel := &HyperslabSelection{
+		Start:  []uint64{3, 0},
+		Count:  []uint64{10, 5},
+		Stride: []uint64{1, 1},
+		Block:  []uint64{1, 1},
+	}
 
-	coords, err := generateChunkCoordinates(first, last)
+	first, last, err := chunkRange(sel, []uint64{4, 4, 8}, []uint64{16, 16})
 	require.NoError(t, err)
-	require.Len(t, coords, 4)
-	require.ElementsMatch(t, [][]uint64{{0, 0}, {0, 1}, {1, 0}, {1, 1}}, coords)
+	require.Equal(t, []uint64{0, 0}, first)
+	require.Equal(t, []uint64{3, 1}, last)
+	require.True(t, chunkInRange([]uint64{2, 1}, first, last))
+	require.False(t, chunkInRange([]uint64{2, 2}, first, last))
 }

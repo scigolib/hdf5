@@ -44,6 +44,21 @@ func dataLimit(r io.ReaderAt, sb *Superblock) uint64 {
 	return 0
 }
 
+// checkRegion validates [addr, addr+size) against the readable end of r. A
+// reader that reports a size of 0 is an empty file, not one of unknown size:
+// utils.ValidateRegion treats a zero limit as unknown and would skip the
+// check, so the empty case is decided here (found by FuzzDatasetDescriptor: a
+// contiguous dataset of 83 MB accepted against an empty reader).
+func checkRegion(r io.ReaderAt, sb *Superblock, addr, size uint64, what string) error {
+	if size > 0 {
+		if n, ok := utils.ReaderSize(r); ok && n == 0 {
+			return fmt.Errorf("%s: read beyond end of file: offset=%d size=%d fileSize=0", what, addr, size)
+		}
+	}
+
+	return utils.ValidateRegion(addr, size, dataLimit(r, sb), what)
+}
+
 // ReadBlock is the single funnel for block reads — the Go counterpart of
 // H5F_block_read (H5Fio.c:105-142). It validates [addr, addr+size) against the
 // file limit and maxSize, then allocates and reads.
@@ -74,7 +89,7 @@ func ReadBlock(r io.ReaderAt, sb *Superblock, addr, size, maxSize uint64, what s
 		return nil, err
 	}
 
-	if err := utils.ValidateRegion(addr, size, dataLimit(r, sb), what); err != nil {
+	if err := checkRegion(r, sb, addr, size, what); err != nil {
 		return nil, err
 	}
 
@@ -125,23 +140,25 @@ func contigDataSize(r io.ReaderAt, sb *Superblock, addr, nelmts, elemSize uint64
 		return 0, err
 	}
 
-	if err := utils.ValidateRegion(addr, total, dataLimit(r, sb), what); err != nil {
+	if err := checkRegion(r, sb, addr, total, what); err != nil {
 		return 0, err
 	}
 
 	return total, nil
 }
 
-// readContiguousDatasetData is the one path every dataset reader takes for a
-// contiguous layout: contigDataSize validates the metadata-derived size and
-// region, then ReadBlock performs the bounded read. Keeping both steps here is
-// what stops the next reader from copying the unchecked make+ReadAt pattern
-// that ADR-003 had to remove from four places.
-func readContiguousDatasetData(r io.ReaderAt, sb *Superblock, layout *DataLayoutMessage, nelmts, elemSize uint64) ([]byte, error) {
-	dataSize, err := contigDataSize(r, sb, layout.DataAddress, nelmts, elemSize, "dataset data")
+// readContiguousDatasetData reads the whole storage of a contiguous dataset.
+// The descriptor validated the size and region against the file
+// (contigDataSize, H5D__contig_check); ResultSize sizes the read and ReadBlock
+// performs it, rejecting an unallocated (undefined) address. Keeping the steps
+// here is what stops the next reader from copying the unchecked make+ReadAt
+// pattern that ADR-003 had to remove from four places.
+func readContiguousDatasetData(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, resultElemSize, limit uint64) ([]byte, error) {
+	dataSize, err := desc.ResultSize(desc.nelmts, resultElemSize, limit)
 	if err != nil {
 		return nil, err
 	}
 
-	return ReadBlock(r, sb, layout.DataAddress, dataSize, maxDatasetSize, "dataset data")
+	//nolint:gosec // G115: ResultSize returns a non-negative int.
+	return ReadBlock(r, sb, desc.layout.DataAddress, uint64(dataSize), maxDatasetSize, "dataset data")
 }

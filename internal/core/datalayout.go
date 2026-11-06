@@ -138,7 +138,7 @@ func parseLayoutV3(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLa
 
 		offset := 2
 		// Read data address.
-		msg.DataAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
+		msg.DataAddress = readLayoutAddress(data[offset:], int(sb.OffsetSize), sb.Endianness)
 		offset += int(sb.OffsetSize)
 
 		// Read data size.
@@ -162,7 +162,7 @@ func parseLayoutV3(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLa
 		if offset+int(sb.OffsetSize) > len(data) {
 			return nil, errors.New("chunked layout address truncated")
 		}
-		msg.DataAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
+		msg.DataAddress = readLayoutAddress(data[offset:], int(sb.OffsetSize), sb.Endianness)
 		offset += int(sb.OffsetSize)
 
 		// Read chunk dimensions.
@@ -261,6 +261,10 @@ func parseChunkedLayoutV4(data []byte, sb *Superblock, msg *DataLayoutMessage) (
 		return nil, errors.New("chunked layout message too short")
 	}
 
+	// The class byte is decoded for every class (H5Olayout.c:222); without it
+	// the message kept the zero value, LayoutCompact.
+	msg.Class = LayoutChunked
+
 	flags := data[2]
 	ndims := data[3]
 	encBytes := int(data[4])
@@ -311,7 +315,7 @@ func parseChunkedLayoutV4(data []byte, sb *Superblock, msg *DataLayoutMessage) (
 	}
 
 	offset += skip
-	msg.DataAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
+	msg.DataAddress = readLayoutAddress(data[offset:], int(sb.OffsetSize), sb.Endianness)
 
 	return msg, nil
 }
@@ -340,6 +344,28 @@ func chunkIndexParamSize(indexType, flags uint8, sb *Superblock) (int, error) {
 	default:
 		return 0, fmt.Errorf("unsupported chunk index type: %d", indexType)
 	}
+}
+
+// readLayoutAddress decodes a file address of the given width. An address made of
+// 0xff bytes only is the encoded "undefined address" at any width and decodes
+// to undefinedAddress, as H5F_addr_decode_len does (H5Fint.c:3009-3049): with
+// 4-byte offsets an unallocated dataset stores 0xffffffff, which must not be
+// taken for a location inside the file.
+func readLayoutAddress(data []byte, size int, endianness binary.ByteOrder) uint64 {
+	n := min(size, len(data))
+	allOnes := n > 0
+	for _, b := range data[:n] {
+		if b != 0xff {
+			allOnes = false
+			break
+		}
+	}
+
+	if allOnes {
+		return undefinedAddress
+	}
+
+	return readUint64(data, size, endianness)
 }
 
 // Helper function to read variable-sized unsigned integers.

@@ -284,20 +284,9 @@ func TestReadDatasetInfo(t *testing.T) {
 
 func buildDatatypeMessage(t *testing.T, class DatatypeClass, size uint32) []byte {
 	t.Helper()
-	// Simple datatype message (version 1).
-	// Bytes 0-3: class | version << 4 | bitfield << 8.
-	// Bytes 4-7: size.
-	data := make([]byte, 8)
-	classAndVersion := uint32(class) | (1 << 4) // Version 1.
-	data[0] = byte(classAndVersion & 0xFF)
-	data[1] = byte((classAndVersion >> 8) & 0xFF)
-	data[2] = byte((classAndVersion >> 16) & 0xFF)
-	data[3] = byte((classAndVersion >> 24) & 0xFF)
-	data[4] = byte(size & 0xFF)
-	data[5] = byte((size >> 8) & 0xFF)
-	data[6] = byte((size >> 16) & 0xFF)
-	data[7] = byte((size >> 24) & 0xFF)
-	return data
+	// A datatype as the codec (and the C library) encodes it; a bare 8-byte
+	// header without class properties is rejected (H5Odtype.c:175, :226).
+	return fixtureDatatypeBytes(class, size)
 }
 
 func buildDataspaceMessage(t *testing.T, dims []uint64) []byte {

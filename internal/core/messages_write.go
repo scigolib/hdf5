@@ -2,7 +2,6 @@ package core
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 )
 
@@ -158,239 +157,6 @@ func encodeChunkedLayout(chunkDims []uint64, btreeAddress uint64, sb *Superblock
 
 	// Last dimension = datatype element size (per H5Dchunk.c:826-835)
 	binary.LittleEndian.PutUint32(buf[offset:], elementSize)
-
-	return buf, nil
-}
-
-// EncodeDatatypeMessage encodes a Datatype message.
-// Supports primitive types: int8-64, uint8-64, float32, float64, and fixed-length strings.
-//
-// Parameters:
-//   - dt: Datatype message to encode
-//
-// Returns:
-//   - Encoded message bytes
-//   - Error if datatype is not supported
-//
-// Format:
-//   - Bytes 0-3: Class (4 bits) | Version (4 bits) | Class Bit Field (24 bits)
-//   - Bytes 4-7: Size (4 bytes)
-//   - Bytes 8+: Properties (variable, depends on class)
-//
-// Reference: HDF5 spec III.C (Datatype Message)
-// C Reference: H5Odtype.c - H5O__dtype_encode()..
-func EncodeDatatypeMessage(dt *DatatypeMessage) ([]byte, error) {
-	// Basic validation
-	if dt.Size == 0 {
-		return nil, fmt.Errorf("datatype size cannot be 0")
-	}
-
-	// Support all basic and advanced types
-	switch dt.Class {
-	case DatatypeFixed, DatatypeFloat:
-		// Numeric types: 8 bytes header + properties
-		return encodeDatatypeNumeric(dt)
-	case DatatypeString:
-		// String type: 8 bytes header + properties
-		return encodeDatatypeString(dt)
-	case DatatypeArray:
-		// Array type: needs ArrayMessage field in DatatypeMessage
-		return nil, fmt.Errorf("array datatype encoding requires EncodeArrayDatatypeMessage")
-	case DatatypeEnum:
-		// Enum type: needs EnumMessage field in DatatypeMessage
-		return nil, fmt.Errorf("enum datatype encoding requires EncodeEnumDatatypeMessage")
-	case DatatypeReference:
-		// Reference type: encoded as simple fixed-size type
-		return encodeDatatypeReference(dt)
-	case DatatypeOpaque:
-		// Opaque type: needs tag in properties
-		return encodeDatatypeOpaque(dt)
-	case DatatypeCompound:
-		// Compound type: 8 bytes header + member definitions
-		return encodeDatatypeCompound(dt)
-	case DatatypeVarLen:
-		// Variable-length type: header + base type
-		return encodeDatatypeVLen(dt)
-	default:
-		return nil, fmt.Errorf("unsupported datatype class for writing: %d", dt.Class)
-	}
-}
-
-// encodeDatatypeNumeric encodes numeric datatypes (fixed-point and floating-point).
-func encodeDatatypeNumeric(dt *DatatypeMessage) ([]byte, error) {
-	// Version 1 for basic numeric types
-	version := uint8(1)
-
-	// Validate size
-	switch dt.Size {
-	case 1, 2, 4, 8:
-		// Valid sizes
-	default:
-		return nil, fmt.Errorf("invalid numeric datatype size: %d (must be 1, 2, 4, or 8)", dt.Size)
-	}
-
-	// Per C reference (H5Odtype.c - H5O__dtype_encode_helper):
-	// Properties format uses uint16 pairs and type-specific fields.
-	var properties []byte
-
-	if dt.Class == DatatypeFloat {
-		// Floating-point properties (12 bytes total per H5Odtype.c):
-		//   uint16: bit_offset (always 0 for standard IEEE 754)
-		//   uint16: bit_precision (total bits: 32 or 64)
-		//   uint8:  exponent bit position
-		//   uint8:  exponent size (bits)
-		//   uint8:  mantissa bit position
-		//   uint8:  mantissa size (bits)
-		//   uint32: exponent bias
-
-		var epos, esize, mpos, msize uint8
-		var ebias uint32
-
-		switch dt.Size {
-		case 4:
-			// IEEE 754 float32: sign(1) + exp(8) + mantissa(23) = 32 bits
-			epos = 23  // exponent starts after mantissa
-			esize = 8  // 8-bit exponent
-			mpos = 0   // mantissa starts at bit 0
-			msize = 23 // 23-bit mantissa
-			ebias = 127
-		case 8:
-			// IEEE 754 float64: sign(1) + exp(11) + mantissa(52) = 64 bits
-			epos = 52  // exponent starts after mantissa
-			esize = 11 // 11-bit exponent
-			mpos = 0   // mantissa starts at bit 0
-			msize = 52 // 52-bit mantissa
-			ebias = 1023
-		default:
-			return nil, fmt.Errorf("unsupported float size: %d", dt.Size)
-		}
-
-		properties = make([]byte, 12)
-		binary.LittleEndian.PutUint16(properties[0:2], 0) // bit_offset = 0
-		binary.LittleEndian.PutUint16(properties[2:4], uint16(dt.Size*8))
-		properties[4] = epos
-		properties[5] = esize
-		properties[6] = mpos
-		properties[7] = msize
-		binary.LittleEndian.PutUint32(properties[8:12], ebias)
-	} else {
-		// Fixed-point (integer) properties (4 bytes per H5Odtype.c):
-		//   uint16: bit_offset (always 0)
-		//   uint16: bit_precision (total bits)
-		properties = make([]byte, 4)
-		binary.LittleEndian.PutUint16(properties[0:2], 0)                 // bit_offset = 0
-		binary.LittleEndian.PutUint16(properties[2:4], uint16(dt.Size*8)) //nolint:gosec // G115: dt.Size is 1/2/4/8, max value 64 fits uint16
-	}
-
-	// Build message: header (8 bytes) + properties
-	messageSize := 8 + len(properties)
-	buf := make([]byte, messageSize)
-
-	// Pack class, version, and class bit field into bytes 0-3
-	classAndVersion := uint32(dt.Class) | (uint32(version) << 4) | (dt.ClassBitField << 8)
-	binary.LittleEndian.PutUint32(buf[0:4], classAndVersion)
-
-	// Size (bytes 4-7)
-	binary.LittleEndian.PutUint32(buf[4:8], dt.Size)
-
-	// Properties
-	copy(buf[8:], properties)
-
-	return buf, nil
-}
-
-// encodeDatatypeString encodes string datatype (fixed-length only for MVP).
-func encodeDatatypeString(dt *DatatypeMessage) ([]byte, error) {
-	if dt.Size == 0 {
-		return nil, fmt.Errorf("fixed-length strings must have size > 0")
-	}
-
-	// Version 1 for string types
-	version := uint8(1)
-
-	// String properties: 1 byte (padding/charset)
-	// Bit 0-3: Padding type (0=null-terminated, 1=null-padded, 2=space-padded)
-	// Bit 4-7: Character set (0=ASCII, 1=UTF-8)
-	properties := []byte{0} // Default: null-terminated ASCII
-
-	// Build message
-	messageSize := 8 + len(properties)
-	buf := make([]byte, messageSize)
-
-	// Pack class, version, and class bit field
-	classAndVersion := uint32(dt.Class) | (uint32(version) << 4) | (dt.ClassBitField << 8)
-	binary.LittleEndian.PutUint32(buf[0:4], classAndVersion)
-
-	// Size
-	binary.LittleEndian.PutUint32(buf[4:8], dt.Size)
-
-	// Properties
-	copy(buf[8:], properties)
-
-	return buf, nil
-}
-
-// encodeDatatypeCompound encodes compound datatype.
-// This function expects the compound type to already be fully encoded in dt.Properties.
-// Use EncodeCompoundDatatypeV3() or EncodeCompoundDatatypeV1() to create the full encoding.
-func encodeDatatypeCompound(dt *DatatypeMessage) ([]byte, error) {
-	// The compound datatype should already be fully encoded (header + properties)
-	// This was created by EncodeCompoundDatatypeV3/V1, which includes everything
-	if len(dt.Properties) == 0 {
-		return nil, errors.New("compound datatype has no member definitions")
-	}
-
-	// Build full message: 8-byte header + properties
-	totalSize := 8 + len(dt.Properties)
-	buf := make([]byte, totalSize)
-
-	// Encode header (8 bytes)
-	// Byte 0-3: Class (4 bits) | Version (4 bits) | ClassBitField (24 bits)
-	classAndVersion := uint32(dt.Class) | (uint32(dt.Version) << 4) | (dt.ClassBitField << 8)
-	binary.LittleEndian.PutUint32(buf[0:4], classAndVersion)
-
-	// Byte 4-7: Size
-	binary.LittleEndian.PutUint32(buf[4:8], dt.Size)
-
-	// Byte 8+: Properties (member definitions)
-	copy(buf[8:], dt.Properties)
-
-	return buf, nil
-}
-
-// encodeDatatypeVLen encodes variable-length datatype (strings, ragged arrays).
-// VLen data is stored in global heap, dataset contains 16-byte heap IDs.
-//
-// C Reference: H5Odtype.c - H5O__dtype_encode_helper() lines 1352-1365, 1438-1442.
-// Header format (same as ALL datatypes):
-//
-//	Bytes 0-3: class (bits 0-3) | version (bits 4-7) | ClassBitField (bits 8-31)
-//	Bytes 4-7: Size (uint32 LE)
-//	Bytes 8+:  Base type message (nested datatype)
-//
-// ClassBitField for VLen (H5Odtype.c:1356-1359):
-//
-//	Bits 0-3:  VLen type (0=sequence, 1=string)
-//	Bits 4-7:  Padding type (for strings only)
-//	Bits 8-11: Character set (for strings: 0=ASCII, 1=UTF-8)
-func encodeDatatypeVLen(dt *DatatypeMessage) ([]byte, error) {
-	// Version must be >= 1 for VLen (C ref: H5Odtype.c:151 rejects version < 1).
-	version := dt.Version
-
-	// Build message: 8-byte header + base type properties (no separate ClassBitField field).
-	buf := make([]byte, 8+len(dt.Properties))
-
-	// Pack class, version, and class bit field into bytes 0-3.
-	// This is the SAME pattern used by encodeDatatypeNumeric, encodeDatatypeString,
-	// encodeDatatypeCompound, and all other encode functions.
-	classAndVersion := uint32(dt.Class) | (uint32(version) << 4) | (dt.ClassBitField << 8)
-	binary.LittleEndian.PutUint32(buf[0:4], classAndVersion)
-
-	// Size (bytes 4-7).
-	binary.LittleEndian.PutUint32(buf[4:8], dt.Size)
-
-	// Base type message (bytes 8+).
-	copy(buf[8:], dt.Properties)
 
 	return buf, nil
 }
@@ -646,240 +412,71 @@ func writeUint64(buf []byte, value uint64, size int, endianness binary.ByteOrder
 	}
 }
 
-// encodeDatatypeReference encodes reference datatypes (object/region references).
-// Reference types are fixed-size types with no additional properties.
-func encodeDatatypeReference(dt *DatatypeMessage) ([]byte, error) {
-	// Version 1 for reference types
-	version := uint8(1)
-
-	// Validate size
-	if dt.Size != 8 && dt.Size != 12 {
-		return nil, fmt.Errorf("invalid reference datatype size: %d (must be 8 for object ref or 12 for region ref)", dt.Size)
-	}
-
-	// No additional properties for reference types
-	// Properties are minimal (just header)
-	buf := make([]byte, 8)
-
-	// Pack class, version, and class bit field into bytes 0-3
-	// ClassBitField encodes reference type: 0=object, 1=region
-	classAndVersion := uint32(dt.Class) | (uint32(version) << 4) | (dt.ClassBitField << 8)
-	binary.LittleEndian.PutUint32(buf[0:4], classAndVersion)
-
-	// Size (bytes 4-7)
-	binary.LittleEndian.PutUint32(buf[4:8], dt.Size)
-
-	return buf, nil
-}
-
-// encodeDatatypeOpaque encodes opaque datatypes (uninterpreted byte sequences with tag).
-func encodeDatatypeOpaque(dt *DatatypeMessage) ([]byte, error) {
-	// Version 1 for opaque types
-	version := uint8(1)
-
-	if dt.Size == 0 {
-		return nil, fmt.Errorf("opaque datatype size cannot be 0")
-	}
-
-	// Extract tag from Properties (assuming it's stored there)
-	// In HDF5, the tag is padded to multiple of 8 bytes
-	tag := string(dt.Properties)
-	if tag == "" {
-		return nil, fmt.Errorf("opaque datatype requires non-empty tag")
-	}
-
-	// Calculate padded tag length (multiple of 8)
-	tagLen := len(tag)
-	paddedLen := ((tagLen + 7) / 8) * 8
-
-	// ClassBitField stores the padded tag length
-	classBitField := uint32(paddedLen) //nolint:gosec // Safe: padded length limited
-
-	// Build message: header (8 bytes) + padded tag
-	messageSize := 8 + paddedLen
-	buf := make([]byte, messageSize)
-
-	// Pack class, version, and padded tag length
-	classAndVersion := uint32(dt.Class) | (uint32(version) << 4) | (classBitField << 8)
-	binary.LittleEndian.PutUint32(buf[0:4], classAndVersion)
-
-	// Size
-	binary.LittleEndian.PutUint32(buf[4:8], dt.Size)
-
-	// Tag (null-padded to paddedLen)
-	copy(buf[8:], tag)
-	// Remaining bytes are already zero (null-padded)
-
-	return buf, nil
-}
-
-// EncodeArrayDatatypeMessage encodes an array datatype message.
-// Array datatypes contain a base type and dimensions.
-//
-// Parameters:
-//   - baseTyp: Encoded base datatype message
-//   - dims: Array dimensions
-//
-// Returns:
-//   - Encoded message bytes (full datatype message with array properties)
-//   - Error if encoding fails
-//
-// Format (version 3, HDF5 1.8+):
-//   - Bytes 0-3: Class (4 bits) | Version (4 bits) | Reserved (24 bits)
-//   - Bytes 4-7: Size (total array size = product of dims * base size)
-//   - Byte 8: Dimensionality (ndims)
-//   - Bytes 9+: Dimension sizes (ndims * 4 bytes each, uint32)
-//   - Following: Base type message (encoded datatype)
-//
-// Reference: HDF5 spec III.C (Datatype Message - Array class).
-// C Reference: H5Odtype.c - H5O__dtype_encode_helper() for H5T_ARRAY.
+// EncodeArrayDatatypeMessage encodes an array datatype message (version 3)
+// over an already encoded base datatype message. The encoding is done by the
+// datatype codec (see [NewArrayDatatype], H5Odtype.c:1367-1403); arraySize
+// must equal the product of dims times the base type size.
 func EncodeArrayDatatypeMessage(baseType []byte, dims []uint64, arraySize uint32) ([]byte, error) {
 	if len(dims) == 0 {
 		return nil, fmt.Errorf("array dimensions cannot be empty")
 	}
-	if len(dims) > 255 {
-		return nil, fmt.Errorf("too many array dimensions: %d (max 255)", len(dims))
+	if len(dims) > arrayMaxRank {
+		return nil, fmt.Errorf("too many array dimensions: %d (max %d)", len(dims), arrayMaxRank)
 	}
-	if len(baseType) == 0 {
-		return nil, fmt.Errorf("base type cannot be empty")
+	base, err := decodeEncodedBase(baseType)
+	if err != nil {
+		return nil, err
 	}
-
-	// Version 3 (no reserved bytes for dimensions)
-	version := uint8(3)
-	ndims := uint8(len(dims)) //nolint:gosec // Safe: validated above
-
-	// Calculate message size
-	// Header: 8 bytes
-	// Ndims: 1 byte
-	// Dimensions: ndims * 4 bytes (uint32 for each dimension)
-	// Base type: len(baseType) bytes
-	headerSize := 8
-	dimsSize := 1 + int(ndims)*4
-	messageSize := headerSize + dimsSize + len(baseType)
-
-	buf := make([]byte, messageSize)
-	offset := 0
-
-	// Pack class, version, reserved (0)
-	classAndVersion := uint32(DatatypeArray) | (uint32(version) << 4)
-	binary.LittleEndian.PutUint32(buf[offset:offset+4], classAndVersion)
-	offset += 4
-
-	// Size (total array size)
-	binary.LittleEndian.PutUint32(buf[offset:offset+4], arraySize)
-	offset += 4
-
-	// Dimensionality
-	buf[offset] = ndims
-	offset++
-
-	// Dimensions (uint32 each)
-	for _, dim := range dims {
+	dims32 := make([]uint32, len(dims))
+	for i, dim := range dims {
 		if dim > 0xFFFFFFFF {
 			return nil, fmt.Errorf("dimension %d too large (max 2^32-1)", dim)
 		}
-		binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(dim))
-		offset += 4
+		dims32[i] = uint32(dim)
 	}
-
-	// Base type message
-	copy(buf[offset:], baseType)
-
-	return buf, nil
+	return EncodeDatatypeMessage(&DatatypeMessage{
+		Class: DatatypeArray, Version: dtypeVersion3, Size: arraySize, ArrayDims: dims32, Base: base,
+	})
 }
 
-// EncodeEnumDatatypeMessage encodes an enum datatype message.
-// Enum datatypes map integer values to symbolic names.
-//
-// Parameters:
-//   - baseType: Encoded base integer datatype message
-//   - names: Enum member names
-//   - values: Enum member values (as bytes, size = nmembs * baseSize)
-//   - enumSize: Size of enum (same as base type size)
-//
-// Returns:
-//   - Encoded message bytes (full datatype message with enum properties)
-//   - Error if encoding fails
-//
-// Format (version 1):
-//   - Bytes 0-3: Class (4 bits) | Version (4 bits) | NumMembers (16 bits, in classBitField)
-//   - Bytes 4-7: Size (base type size)
-//   - Following: Base type message
-//   - Following: ALL member names (each null-terminated, padded to multiple
-//     of 8; v3 would be unpadded), then ALL member values as one array.
-//     Names and values are two separate blocks, NOT interleaved pairs.
-//
-// Reference: HDF5 spec III.C (Datatype Message - Enum class).
-// C Reference: H5Odtype.c - H5O__dtype_encode_helper() for H5T_ENUM.
+// EncodeEnumDatatypeMessage encodes an enumeration datatype message (version
+// 1: names padded to eight bytes, all names then all values) over an already
+// encoded base datatype message. values holds len(names)*enumSize bytes. The
+// encoding is done by the datatype codec (see [NewEnumDatatype],
+// H5Odtype.c:1316-1350).
 func EncodeEnumDatatypeMessage(baseType []byte, names []string, values []byte, enumSize uint32) ([]byte, error) {
 	if len(names) == 0 {
 		return nil, fmt.Errorf("enum must have at least one member")
 	}
-	if len(names) > 0xFFFF {
-		return nil, fmt.Errorf("too many enum members: %d (max 65535)", len(names))
+	if len(names) > maxListedMembers {
+		return nil, fmt.Errorf("too many enum members: %d (max %d)", len(names), maxListedMembers)
 	}
+	base, err := decodeEncodedBase(baseType)
+	if err != nil {
+		return nil, err
+	}
+	need := uint64(len(names)) * uint64(enumSize)
+	if uint64(len(values)) < need {
+		return nil, fmt.Errorf("not enough value bytes: %d, need %d", len(values), need)
+	}
+	return EncodeDatatypeMessage(&DatatypeMessage{
+		Class: DatatypeEnum, Version: dtypeVersion1, Size: enumSize,
+		EnumNames: names, EnumValues: values[:need], Base: base,
+	})
+}
+
+// decodeEncodedBase decodes an encoded base datatype message that must
+// consist of exactly one datatype.
+func decodeEncodedBase(baseType []byte) (*DatatypeMessage, error) {
 	if len(baseType) == 0 {
 		return nil, fmt.Errorf("base type cannot be empty")
 	}
-
-	nmembs := uint16(len(names)) //nolint:gosec // Safe: validated above
-	// Version 1: member names are null-terminated and padded to a multiple
-	// of 8 — which is the layout written below. Version 3 stores names
-	// WITHOUT padding; stamping 3 here made the C library read the pad
-	// zeros as a next name ("0 length enum name").
-	version := uint8(1)
-
-	// Calculate total message size
-	headerSize := 8
-	baseTypeSize := len(baseType)
-
-	// Calculate names + values size
-	namesValuesSize := 0
-	for i, name := range names {
-		// Name: null-terminated, padded to multiple of 8
-		nameLen := len(name) + 1 // include null terminator
-		paddedNameLen := ((nameLen + 7) / 8) * 8
-		namesValuesSize += paddedNameLen
-
-		// Value: enumSize bytes
-		valueOffset := i * int(enumSize)
-		if valueOffset+int(enumSize) > len(values) {
-			return nil, fmt.Errorf("not enough value bytes for member %d", i)
-		}
-		namesValuesSize += int(enumSize)
+	base, n, err := DecodeDatatype(baseType)
+	if err != nil {
+		return nil, fmt.Errorf("base type: %w", err)
 	}
-
-	messageSize := headerSize + baseTypeSize + namesValuesSize
-	buf := make([]byte, messageSize)
-	offset := 0
-
-	// Pack class, version, nmembs
-	// ClassBitField stores nmembs (lower 16 bits)
-	classAndVersion := uint32(DatatypeEnum) | (uint32(version) << 4) | (uint32(nmembs) << 8)
-	binary.LittleEndian.PutUint32(buf[offset:offset+4], classAndVersion)
-	offset += 4
-
-	// Size
-	binary.LittleEndian.PutUint32(buf[offset:offset+4], enumSize)
-	offset += 4
-
-	// Base type message
-	copy(buf[offset:], baseType)
-	offset += len(baseType)
-
-	// All names first (null-terminated, each padded to a multiple of 8) —
-	// the C library decodes a names block followed by a values block.
-	for _, name := range names {
-		nameLen := len(name) + 1
-		paddedNameLen := ((nameLen + 7) / 8) * 8
-
-		copy(buf[offset:], name)
-		// Null terminator and padding are already zero.
-		offset += paddedNameLen
+	if n != len(baseType) {
+		return nil, fmt.Errorf("base type: %d trailing bytes after the datatype", len(baseType)-n)
 	}
-
-	// Then all values as one array.
-	copy(buf[offset:], values[:int(enumSize)*len(names)])
-
-	return buf, nil
+	return base, nil
 }

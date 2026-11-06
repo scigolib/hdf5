@@ -109,10 +109,12 @@ func TestLoadObject_NamedDatatypeBranch(t *testing.T) {
 	})
 	require.NotEmpty(t, namedDTs, "bad_compound.h5 should contain at least one NamedDatatype")
 
+	// The committed type is a zero-member compound, which the decoder rejects
+	// as C does (H5Odtype.c:358-360): it stays listed with no datatype.
 	for _, nd := range namedDTs {
 		assert.NotEmpty(t, nd.Name(), "NamedDatatype should have a name")
 		dt := nd.Datatype()
-		assert.NotNil(t, dt, "NamedDatatype.Datatype() should not be nil for bad_compound.h5")
+		assert.Nil(t, dt, "NamedDatatype.Datatype() should be nil for bad_compound.h5")
 	}
 }
 
@@ -711,7 +713,7 @@ func TestValidateSelectionDimensions_CountMismatch(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// dispatchHyperslabReader - compact dispatch (dataset_read_hyperslab.go)
+// readHyperslab - compact dispatch (dataset_read_hyperslab.go)
 // ---------------------------------------------------------------------------
 
 // TestDispatchHyperslabReader_Compact tests reading hyperslab from a compact
@@ -735,7 +737,7 @@ func TestDispatchHyperslabReader_Compact(t *testing.T) {
 		t.Skip("compact dataset not found in tfilters.h5")
 	}
 
-	// ReadHyperslab on compact dataset (exercises dispatchHyperslabReader compact branch).
+	// ReadHyperslab on compact dataset (exercises the readHyperslab compact branch).
 	sel := &HyperslabSelection{
 		Start: []uint64{0, 0},
 		Count: []uint64{5, 5},
@@ -879,7 +881,7 @@ func TestChunkIteratorWithContext_ImmediateCancel(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// extractHyperslabMessages - missing messages (dataset_read_hyperslab.go)
+// Dataset.descriptor - missing messages (dataset_read_hyperslab.go)
 // ---------------------------------------------------------------------------
 
 // TestExtractHyperslabMessages_MissingDatatype tests the error path when

@@ -30,7 +30,7 @@ func buildVLenDataspaceMessage(dim uint64) []byte {
 // "slice bounds out of range [4:1]".
 func TestReadDatasetVLenBytes_RejectsTooSmallHeapID(t *testing.T) {
 	header := &ObjectHeader{Messages: []*HeaderMessage{
-		{Type: MsgDatatype, Data: buildDatatypeMessage(t, DatatypeVarLen, 1)},
+		{Type: MsgDatatype, Data: fixtureVLenBytes(1)}, // decodable vlen, malformed 1-byte element size
 		{Type: MsgDataspace, Data: buildVLenDataspaceMessage(1)},
 		{Type: MsgDataLayout, Data: buildCoverageCompactLayoutMsg([]byte{0x11})},
 	}}

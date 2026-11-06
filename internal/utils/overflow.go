@@ -156,6 +156,18 @@ const (
 	// a caller should iterate with ChunkIterator instead of asking for one list
 	// (ADR-003: one policy, stated where it applies).
 	MaxChunkCoordinates = 10_000_000
+
+	// DefaultReadLimit is the default per-file read limit: the most bytes one
+	// read of a chunked dataset may allocate for its result. A chunked dataset
+	// can legitimately be larger than its file (unwritten chunks read as the
+	// fill value), so no file-derived bound is correct; C never sizes the
+	// result (the caller passes the buffer to H5Dread), but this library
+	// allocates on the caller's behalf and Go cannot recover from a failed
+	// allocation (ADR-004 §1). Callers raise it with File.SetReadLimit.
+	//
+	// It is 4 GiB on 64-bit targets. On 32-bit targets it is MaxInt/4 (512 MiB):
+	// 4 GiB exceeds the whole address space there, so it would bound nothing.
+	DefaultReadLimit uint64 = min(4<<30, math.MaxInt/4)
 )
 
 // ValidateHyperslabBounds validates hyperslab selection bounds.
@@ -178,8 +190,9 @@ func ValidateHyperslabBounds(start, count, stride, dims []uint64) error {
 			return fmt.Errorf("hyperslab stride overflow at dimension %d: %w", i, err)
 		}
 
-		endIndex := start[i] + maxIndex
-		if endIndex >= dims[i] {
+		// start comes from the caller: a wrapped sum would pass the comparison.
+		endIndex, err := SafeAdd(start[i], maxIndex)
+		if err != nil || endIndex >= dims[i] {
 			return fmt.Errorf("hyperslab selection exceeds dataset bounds at dimension %d: start=%d, count=%d, stride=%d, dim_size=%d",
 				i, start[i], count[i], stride[i], dims[i])
 		}

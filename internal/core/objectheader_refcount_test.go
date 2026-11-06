@@ -153,222 +153,163 @@ func TestReferenceCount_IncrementThenDecrement(t *testing.T) {
 }
 
 // --- VLen Datatype Encoding Tests ---
+//
+// These tests used to call the per-class encoders of messages_write.go with
+// version 0 and without a base type; the C decoder rejects both (version
+// H5Odtype.c:151, base type :768-772). They now encode through the codec and
+// pin the bytes the C library writes.
+
+// uint8LEBytes is H5T_NATIVE_UCHAR on a little-endian machine, the base type
+// of a C variable-length string (H5T.c:4945-4948).
+var uint8LEBytes = []byte{0x10, 0x00, 0x00, 0x00, 1, 0, 0, 0, 0, 0, 8, 0}
+
+// float64LEBytes is H5T_IEEE_F64LE: version 1, implied normalization, sign at
+// bit 63, exponent 52+11 bits, mantissa 0+52 bits, bias 1023.
+var float64LEBytes = []byte{
+	0x11, 0x20, 0x3F, 0x00, 8, 0, 0, 0,
+	0, 0, 64, 0, 52, 11, 0, 52, 0xFF, 0x03, 0, 0,
+}
 
 // TestEncodeDatatypeVLen_String tests encoding a variable-length string datatype.
 func TestEncodeDatatypeVLen_String(t *testing.T) {
-	// Create a vlen string datatype
-	// ClassBitField for vlen string: type=1 (string), padding=0, charset=0 (ASCII)
-	dt := &DatatypeMessage{
-		Class:         DatatypeVarLen,
-		Version:       0,
-		Size:          16,         // VLen heap ID size
-		ClassBitField: 0x00000001, // type=1 (string)
-		Properties:    []byte{},   // No base type properties for simple vlen string
-	}
-
-	data, err := encodeDatatypeVLen(dt)
+	dt, err := NewVLenStringDatatype(StringNullTerm, CharsetASCII)
 	require.NoError(t, err)
-	require.NotNil(t, data)
+	data, err := EncodeDatatypeMessage(dt)
+	require.NoError(t, err)
 
-	// C Reference (H5Odtype.c:1438-1442):
-	// Bytes 0-3 = class (bits 0-3) | version (bits 4-7) | ClassBitField (bits 8-31)
-	// Class 9 (VarLen), version 0, ClassBitField 1 (string) =>
-	// uint32 LE = 0x09 | (0 << 4) | (1 << 8) = 0x00000109
-	require.Equal(t, byte(0x09), data[0]) // class=9, version=0
-	require.Equal(t, byte(0x01), data[1]) // ClassBitField bits 8-15: type=1 (string)
-	require.Equal(t, byte(0x00), data[2])
-	require.Equal(t, byte(0x00), data[3])
-
-	// Bytes 4-7: Size (16)
-	size := binary.LittleEndian.Uint32(data[4:8])
-	require.Equal(t, uint32(16), size)
-
-	// Total: 8 bytes header + 0 bytes properties = 8 bytes
-	require.Equal(t, 8, len(data))
+	// Class 9, version 1; class bits: kind 1 (string), padding 0, ASCII
+	// (H5Odtype.c:1356-1360); size 16; base type unsigned char.
+	want := append([]byte{0x19, 0x01, 0x00, 0x00, 16, 0, 0, 0}, uint8LEBytes...)
+	require.Equal(t, want, data)
 }
 
 // TestEncodeDatatypeVLen_Int tests encoding a variable-length integer sequence datatype.
 func TestEncodeDatatypeVLen_Int(t *testing.T) {
-	// Base type: int32 (4 bytes properties for integer)
-	baseTypeProps := make([]byte, 4)
-	baseTypeProps[0] = 0  // Byte order: little-endian
-	baseTypeProps[1] = 32 // Precision: 32 bits
-	baseTypeProps[2] = 0  // Offset
-	baseTypeProps[3] = 0  // Padding
-
-	// Create a vlen integer sequence datatype
-	// ClassBitField for vlen sequence: type=0 (sequence), padding=0, charset=0
-	dt := &DatatypeMessage{
-		Class:         DatatypeVarLen,
-		Version:       0,
-		Size:          16,         // VLen heap ID size
-		ClassBitField: 0x00000000, // type=0 (sequence)
-		Properties:    baseTypeProps,
-	}
-
-	data, err := encodeDatatypeVLen(dt)
+	base, err := NewIntegerDatatype(4, true)
 	require.NoError(t, err)
-	require.NotNil(t, data)
+	dt, err := NewVLenSequenceDatatype(base)
+	require.NoError(t, err)
+	data, err := EncodeDatatypeMessage(dt)
+	require.NoError(t, err)
 
-	// C Reference: bytes 0-3 = class|version|classBitField, bytes 4-7 = size, bytes 8+ = properties.
-	// Total size: 8 (header) + 4 (base type props) = 12.
-	require.Equal(t, 12, len(data))
-
-	// Verify header: class=9, version=0, classBitField=0 => byte 0 = 0x09.
-	require.Equal(t, byte(0x09), data[0])
-
-	// Verify size field.
-	size := binary.LittleEndian.Uint32(data[4:8])
-	require.Equal(t, uint32(16), size)
-
-	// Verify base type properties start at byte 8 (not 12).
-	require.Equal(t, baseTypeProps, data[8:12])
+	// The base type message follows the 8-byte header directly.
+	want := append([]byte{0x19, 0x00, 0x00, 0x00, 16, 0, 0, 0}, int32LEBytes...)
+	require.Equal(t, want, data)
 }
 
 // TestEncodeDatatypeVLen_UTF8String tests encoding a vlen UTF-8 string.
 func TestEncodeDatatypeVLen_UTF8String(t *testing.T) {
-	// ClassBitField: type=1 (string), padding=0, charset=1 (UTF-8)
-	// Bits 0-3: type=1, bits 4-7: padding=0, bits 8-11: charset=1
-	classBitField := uint32(1) | (uint32(1) << 8) // type=string, charset=UTF-8
-
-	dt := &DatatypeMessage{
-		Class:         DatatypeVarLen,
-		Version:       0,
-		Size:          16,
-		ClassBitField: classBitField,
-		Properties:    []byte{},
-	}
-
-	data, err := encodeDatatypeVLen(dt)
+	dt, err := NewVLenStringDatatype(StringNullTerm, CharsetUTF8)
+	require.NoError(t, err)
+	data, err := EncodeDatatypeMessage(dt)
 	require.NoError(t, err)
 
-	// C Reference: ClassBitField is packed into bytes 1-3 of the header uint32.
-	// class=9 | version=0<<4 | classBitField<<8 = 0x09 | (0x0101 << 8) = 0x00010109
-	// Bytes: 0x09, 0x01, 0x01, 0x00
-	require.Equal(t, byte(0x09), data[0])
-	require.Equal(t, byte(0x01), data[1]) // ClassBitField bits 0-7: type=1
-	require.Equal(t, byte(0x01), data[2]) // ClassBitField bits 8-15: charset=1 (UTF-8)
-	require.Equal(t, byte(0x00), data[3])
+	// Character set in class bits 8-11 lands in header byte 2.
+	require.Equal(t, []byte{0x19, 0x01, 0x01, 0x00}, data[0:4])
+	require.Equal(t, uint32(16), binary.LittleEndian.Uint32(data[4:8]))
+	require.Equal(t, uint8LEBytes, data[8:])
+}
 
-	// Total: 8 bytes (no properties).
-	require.Equal(t, 8, len(data))
+// TestEncodeDatatypeVLen_EmptyProperties tests that a variable-length type
+// without a base type is refused: the C decoder always reads one.
+func TestEncodeDatatypeVLen_EmptyProperties(t *testing.T) {
+	dt := &DatatypeMessage{
+		Class:         DatatypeVarLen,
+		Size:          16,
+		ClassBitField: 1,
+	}
+	_, err := EncodeDatatypeMessage(dt)
+	require.ErrorContains(t, err, "no base type")
+}
+
+// TestEncodeDatatypeVLen_WithBaseType tests vlen with a float64 base type.
+func TestEncodeDatatypeVLen_WithBaseType(t *testing.T) {
+	base, err := NewFloatDatatype(8)
+	require.NoError(t, err)
+	dt, err := NewVLenSequenceDatatype(base)
+	require.NoError(t, err)
+	data, err := EncodeDatatypeMessage(dt)
+	require.NoError(t, err)
+
+	require.Len(t, data, 8+len(float64LEBytes))
+	// Base type starts immediately after the header.
+	require.Equal(t, float64LEBytes, data[8:])
 }
 
 // --- Compound Datatype Encoding Tests ---
 
-// TestEncodeDatatypeCompound_TwoMembers tests encoding compound with two integer members.
-func TestEncodeDatatypeCompound_TwoMembers(t *testing.T) {
-	// Create int32 member types
-	intType, err := CreateBasicDatatypeMessage(DatatypeFixed, 4)
+// encodeDecodeCompound encodes fields as a v3 compound, decodes it, and
+// re-encodes the decoded message, requiring identical bytes.
+func encodeDecodeCompound(t *testing.T, size uint32, fields []CompoundFieldDef) (*DatatypeMessage, []byte) {
+	t.Helper()
+	encoded, err := EncodeCompoundDatatypeV3(size, fields)
 	require.NoError(t, err)
 
-	fields := []CompoundFieldDef{
-		{Name: "x", Offset: 0, Type: intType},
-		{Name: "y", Offset: 4, Type: intType},
-	}
-
-	// Encode using V3 format to get full bytes (header + properties)
-	encoded, err := EncodeCompoundDatatypeV3(8, fields)
-	require.NoError(t, err)
-	require.NotNil(t, encoded)
-
-	// Parse to get a DatatypeMessage
 	dt, err := ParseDatatypeMessage(encoded)
 	require.NoError(t, err)
 	require.Equal(t, DatatypeCompound, dt.Class)
-	require.Equal(t, uint32(8), dt.Size)
+	require.Equal(t, size, dt.Size)
+	require.Len(t, dt.Members, len(fields))
 
-	// Now test encodeDatatypeCompound (internal function)
-	result, err := encodeDatatypeCompound(dt)
+	again, err := EncodeDatatypeMessage(dt)
 	require.NoError(t, err)
-	require.NotNil(t, result)
+	require.Equal(t, encoded, again)
 
-	// Verify the result contains valid header
-	classAndVersion := binary.LittleEndian.Uint32(result[0:4])
-	class := DatatypeClass(classAndVersion & 0x0F)
-	require.Equal(t, DatatypeCompound, class)
+	// Member count is the low 16 bits of the class bit field (H5Odtype.c:1247).
+	require.Equal(t, uint16(len(fields)), binary.LittleEndian.Uint16(encoded[1:3]))
+	return dt, encoded
+}
 
-	// Verify size
-	resultSize := binary.LittleEndian.Uint32(result[4:8])
-	require.Equal(t, uint32(8), resultSize)
+// TestEncodeDatatypeCompound_TwoMembers tests encoding compound with two integer members.
+func TestEncodeDatatypeCompound_TwoMembers(t *testing.T) {
+	intType, err := CreateBasicDatatypeMessage(DatatypeFixed, 4)
+	require.NoError(t, err)
 
-	// Verify properties are present
-	require.True(t, len(result) > 8)
+	encodeDecodeCompound(t, 8, []CompoundFieldDef{
+		{Name: "x", Offset: 0, Type: intType},
+		{Name: "y", Offset: 4, Type: intType},
+	})
 }
 
 // TestEncodeDatatypeCompound_WithString tests compound with a string member.
 func TestEncodeDatatypeCompound_WithString(t *testing.T) {
 	intType, err := CreateBasicDatatypeMessage(DatatypeFixed, 4)
 	require.NoError(t, err)
-
 	strType, err := CreateBasicDatatypeMessage(DatatypeString, 10)
 	require.NoError(t, err)
 
-	fields := []CompoundFieldDef{
+	dt, _ := encodeDecodeCompound(t, 14, []CompoundFieldDef{
 		{Name: "id", Offset: 0, Type: intType},
 		{Name: "name", Offset: 4, Type: strType},
-	}
-
-	encoded, err := EncodeCompoundDatatypeV3(14, fields)
-	require.NoError(t, err)
-
-	dt, err := ParseDatatypeMessage(encoded)
-	require.NoError(t, err)
-
-	result, err := encodeDatatypeCompound(dt)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	// Verify class
-	classAndVersion := binary.LittleEndian.Uint32(result[0:4])
-	class := DatatypeClass(classAndVersion & 0x0F)
-	require.Equal(t, DatatypeCompound, class)
-
-	// Verify total size = 14 (4 int + 10 string)
-	resultSize := binary.LittleEndian.Uint32(result[4:8])
-	require.Equal(t, uint32(14), resultSize)
+	})
+	require.Equal(t, uint32(10), dt.Members[1].Type.Size)
 }
 
-// TestEncodeDatatypeCompound_EmptyProperties tests error when properties are empty.
+// TestEncodeDatatypeCompound_EmptyProperties tests that a compound without
+// members is refused (C: "invalid number of members: 0", H5Odtype.c:358-360).
 func TestEncodeDatatypeCompound_EmptyProperties(t *testing.T) {
 	dt := &DatatypeMessage{
-		Class:      DatatypeCompound,
-		Version:    3,
-		Size:       8,
-		Properties: []byte{}, // Empty - should fail
+		Class:   DatatypeCompound,
+		Version: 3,
+		Size:    8,
 	}
-
-	_, err := encodeDatatypeCompound(dt)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "no member definitions")
+	_, err := EncodeDatatypeMessage(dt)
+	require.ErrorContains(t, err, "compound with 0 members")
 }
 
 // TestEncodeDatatypeCompound_ThreeMembers tests compound with three mixed-type members.
 func TestEncodeDatatypeCompound_ThreeMembers(t *testing.T) {
 	intType, err := CreateBasicDatatypeMessage(DatatypeFixed, 4)
 	require.NoError(t, err)
-
 	floatType, err := CreateBasicDatatypeMessage(DatatypeFloat, 8)
 	require.NoError(t, err)
 
-	fields := []CompoundFieldDef{
+	dt, _ := encodeDecodeCompound(t, 16, []CompoundFieldDef{
 		{Name: "a", Offset: 0, Type: intType},
 		{Name: "b", Offset: 4, Type: floatType},
 		{Name: "c", Offset: 12, Type: intType},
-	}
-
-	encoded, err := EncodeCompoundDatatypeV3(16, fields)
-	require.NoError(t, err)
-
-	dt, err := ParseDatatypeMessage(encoded)
-	require.NoError(t, err)
-
-	result, err := encodeDatatypeCompound(dt)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	resultSize := binary.LittleEndian.Uint32(result[4:8])
-	require.Equal(t, uint32(16), resultSize)
+	})
+	require.Equal(t, uint32(12), dt.Members[2].Offset)
 }
 
 // TestEncodeDatatypeCompound_RoundTrip tests encode-decode-encode roundtrip.
@@ -376,71 +317,11 @@ func TestEncodeDatatypeCompound_RoundTrip(t *testing.T) {
 	intType, err := CreateBasicDatatypeMessage(DatatypeFixed, 4)
 	require.NoError(t, err)
 
-	fields := []CompoundFieldDef{
+	_, encoded := encodeDecodeCompound(t, 8, []CompoundFieldDef{
 		{Name: "x", Offset: 0, Type: intType},
 		{Name: "y", Offset: 4, Type: intType},
-	}
-
-	// First encode
-	encoded1, err := EncodeCompoundDatatypeV3(8, fields)
-	require.NoError(t, err)
-
-	// Parse
-	dt, err := ParseDatatypeMessage(encoded1)
-	require.NoError(t, err)
-
-	// Second encode via encodeDatatypeCompound
-	encoded2, err := encodeDatatypeCompound(dt)
-	require.NoError(t, err)
-
-	// Both should produce the same class and size
-	class1 := DatatypeClass(binary.LittleEndian.Uint32(encoded1[0:4]) & 0x0F)
-	class2 := DatatypeClass(binary.LittleEndian.Uint32(encoded2[0:4]) & 0x0F)
-	require.Equal(t, class1, class2)
-
-	size1 := binary.LittleEndian.Uint32(encoded1[4:8])
-	size2 := binary.LittleEndian.Uint32(encoded2[4:8])
-	require.Equal(t, size1, size2)
-}
-
-// TestEncodeDatatypeVLen_EmptyProperties tests vlen with empty properties (no base type).
-func TestEncodeDatatypeVLen_EmptyProperties(t *testing.T) {
-	dt := &DatatypeMessage{
-		Class:         DatatypeVarLen,
-		Version:       0,
-		Size:          16,
-		ClassBitField: 1,
-		Properties:    []byte{},
-	}
-
-	data, err := encodeDatatypeVLen(dt)
-	require.NoError(t, err)
-	// C Reference: 8 bytes header + 0 properties = 8 bytes.
-	// ClassBitField is packed into header bytes 1-3, not a separate field.
-	require.Equal(t, 8, len(data))
-}
-
-// TestEncodeDatatypeVLen_WithBaseType tests vlen with base type properties.
-func TestEncodeDatatypeVLen_WithBaseType(t *testing.T) {
-	// Base type: float64 (12 bytes properties for float)
-	baseTypeProps := make([]byte, 12)
-	baseTypeProps[0] = 0  // Byte order: little-endian
-	baseTypeProps[1] = 64 // Precision: 64 bits
-
-	dt := &DatatypeMessage{
-		Class:         DatatypeVarLen,
-		Version:       0,
-		Size:          16,
-		ClassBitField: 0, // sequence type
-		Properties:    baseTypeProps,
-	}
-
-	data, err := encodeDatatypeVLen(dt)
-	require.NoError(t, err)
-	// C Reference: 8 bytes header + 12 properties = 20 bytes.
-	// ClassBitField is packed into header bytes 1-3, not a separate field.
-	require.Equal(t, 20, len(data))
-
-	// Verify base type properties start at byte 8 (immediately after header).
-	require.Equal(t, baseTypeProps, data[8:20])
+	})
+	// Header (class 6, version 3, 2 members, size 8), then per member: name,
+	// 1-byte offset (limit_enc_size(8) = 1), member type.
+	require.Equal(t, []byte{0x36, 2, 0, 0, 8, 0, 0, 0, 'x', 0, 0}, encoded[:11])
 }

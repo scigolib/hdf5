@@ -3,6 +3,7 @@ package hdf5
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/scigolib/hdf5/internal/core"
 	"github.com/scigolib/hdf5/internal/structures"
@@ -24,6 +25,35 @@ type Dataset struct {
 	file    *File
 	name    string
 	address uint64 // Address of object header.
+
+	// desc caches the validated descriptor, built on first read (descriptor).
+	desc atomic.Pointer[core.DatasetDescriptor]
+}
+
+// descriptor returns the dataset's validated descriptor, building it on first
+// use: the Go counterpart of the state H5Dopen builds and validates once
+// (H5D__open_oid, H5Dint.c:1766). The descriptor is immutable, so concurrent
+// readers share one; two goroutines racing on the first call may both build it
+// and keep either, which is equivalent. A failed build is not cached, so an I/O
+// error is not remembered forever.
+func (d *Dataset) descriptor() (*core.DatasetDescriptor, error) {
+	if desc := d.desc.Load(); desc != nil {
+		return desc, nil
+	}
+
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read object header: %w", err)
+	}
+
+	desc, err := core.NewDatasetDescriptor(d.file.reader, header, d.file.sb)
+	if err != nil {
+		return nil, fmt.Errorf("dataset %q: %w", d.name, err)
+	}
+
+	d.desc.CompareAndSwap(nil, desc)
+
+	return d.desc.Load(), nil
 }
 
 // NamedDatatype represents an HDF5 committed (named) datatype.
@@ -33,7 +63,11 @@ type NamedDatatype struct {
 	file     *File
 	name     string
 	address  uint64                // Address of object header.
-	datatype *core.DatatypeMessage // The stored datatype definition.
+	datatype *core.DatatypeMessage // The stored datatype definition; nil if it does not decode.
+
+	// decodeErr is why the datatype did not decode (nil when it did). Kept for
+	// the typed metadata accessors of TASK-063.
+	decodeErr error
 }
 
 // Name returns the named datatype's name.
@@ -41,7 +75,9 @@ func (n *NamedDatatype) Name() string {
 	return n.name
 }
 
-// Datatype returns the underlying datatype definition.
+// Datatype returns the underlying datatype definition, or nil when the stored
+// datatype message does not decode (the C library likewise refuses to open
+// such a type, while the file and the rest of the group stay readable).
 func (n *NamedDatatype) Datatype() *core.DatatypeMessage {
 	return n.datatype
 }
@@ -100,42 +136,36 @@ func (d *Dataset) ReadAttribute(name string) (interface{}, error) {
 // Currently supports float64, float32, int32, int64 datatypes.
 // All values are converted to float64 for convenience.
 func (d *Dataset) Read() ([]float64, error) {
-	// Read object header for this dataset.
-	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
+	desc, err := d.descriptor()
 	if err != nil {
 		return nil, err
 	}
 
-	// Use the dataset reader to get values.
-	return core.ReadDatasetFloat64(d.file.reader, header, d.file.sb)
+	return core.ReadFloat64(d.file.reader, d.file.sb, desc, d.file.ReadLimit())
 }
 
 // ReadStrings reads string dataset values and returns them as string array.
 // Supports fixed-length strings (null-terminated, null-padded, space-padded).
 // Variable-length strings are not yet supported.
 func (d *Dataset) ReadStrings() ([]string, error) {
-	// Read object header for this dataset.
-	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
+	desc, err := d.descriptor()
 	if err != nil {
 		return nil, err
 	}
 
-	// Use the string dataset reader.
-	return core.ReadDatasetStrings(d.file.reader, header, d.file.sb)
+	return core.ReadStrings(d.file.reader, d.file.sb, desc, d.file.ReadLimit())
 }
 
 // ReadCompound reads compound dataset values and returns them as array of maps.
 // Each map represents one compound structure instance with field names as keys.
 // Supports nested compound types, numeric types, and fixed-length strings.
 func (d *Dataset) ReadCompound() ([]core.CompoundValue, error) {
-	// Read object header for this dataset.
-	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
+	desc, err := d.descriptor()
 	if err != nil {
 		return nil, err
 	}
 
-	// Use the compound dataset reader.
-	return core.ReadDatasetCompound(d.file.reader, header, d.file.sb)
+	return core.ReadCompound(d.file.reader, d.file.sb, desc, d.file.ReadLimit())
 }
 
 // ReadVLenBytes reads a variable-length dataset and returns values as [][]byte.
@@ -146,14 +176,12 @@ func (d *Dataset) ReadCompound() ([]core.CompoundValue, error) {
 // For typed sequences the caller must interpret the returned bytes according
 // to the base element type and byte order.
 func (d *Dataset) ReadVLenBytes() ([][]byte, error) {
-	// Read object header for this dataset.
-	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
+	desc, err := d.descriptor()
 	if err != nil {
 		return nil, err
 	}
 
-	// Use the variable-length dataset reader.
-	return core.ReadDatasetVLenBytes(d.file.reader, header, d.file.sb)
+	return core.ReadVLenBytes(d.file.reader, d.file.sb, desc, d.file.ReadLimit())
 }
 
 // Info returns metadata about the dataset without reading actual values.
@@ -660,23 +688,29 @@ func loadObject(file *File, address uint64, name string) (Object, error) {
 	case core.ObjectTypeDatatype:
 		// Named (committed) datatype - a datatype stored as a first-class object.
 		// Extract the datatype from the object header's Datatype message.
-		var datatype *core.DatatypeMessage
+		//
+		// A datatype that does not decode fails only its own users, not the
+		// group that lists it: C opens such a file and fails H5Topen2 on the
+		// type and H5Dopen2 on a dataset using it (test/dtypes.c:3847-3870,
+		// bad_compound.h5 with a zero-member compound). The object stays in the
+		// tree with no datatype and the decode error kept for later accessors.
+		named := &NamedDatatype{
+			file:    file,
+			name:    name,
+			address: address,
+		}
 		for _, msg := range header.Messages {
 			if msg.Type == core.MsgDatatype {
 				dt, err := core.ParseDatatypeMessage(msg.Data)
 				if err != nil {
-					return nil, fmt.Errorf("failed to parse named datatype: %w", err)
+					named.decodeErr = fmt.Errorf("failed to parse named datatype %q: %w", name, err)
+				} else {
+					named.datatype = dt
 				}
-				datatype = dt
 				break
 			}
 		}
-		return &NamedDatatype{
-			file:     file,
-			name:     name,
-			address:  address,
-			datatype: datatype,
-		}, nil
+		return named, nil
 	case core.ObjectTypeUnknown:
 		// For v0 files, groups may have no messages and thus ObjectTypeUnknown.
 		// Try loading as a group first.

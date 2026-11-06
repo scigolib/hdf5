@@ -10,7 +10,7 @@ import (
 // TestReadHyperslabCompact_1D tests reading a hyperslab from a compact layout dataset (1D slice).
 // Uses tfilters.h5 reference file which has a "compact" dataset with COMPACT storage layout.
 // Dataset: 20x10 Int32, stored directly in the object header.
-// Exercises: readHyperslabCompact, extractHyperslabFromRawData.
+// Exercises: readHyperslabRuns (compact source).
 func TestReadHyperslabCompact_1D(t *testing.T) {
 	f, err := Open("testdata/hdf5_official/tfilters.h5")
 	require.NoError(t, err, "Open tfilters.h5")
@@ -38,7 +38,7 @@ func TestReadHyperslabCompact_1D(t *testing.T) {
 }
 
 // TestReadHyperslabCompact_2D tests reading a 2D sub-region from a compact layout dataset.
-// Exercises: readHyperslabCompact, extractHyperslabFromRawData, extractHyperslabRecursive.
+// Exercises: readHyperslabRuns (compact source).
 func TestReadHyperslabCompact_2D(t *testing.T) {
 	f, err := Open("testdata/hdf5_official/tfilters.h5")
 	require.NoError(t, err, "Open tfilters.h5")
@@ -74,7 +74,7 @@ func TestReadHyperslabCompact_2D(t *testing.T) {
 }
 
 // TestReadHyperslab_CompactWithStride tests strided reading on the compact reference file.
-// Exercises: readHyperslabCompact with stride parameters via extractHyperslabRecursive.
+// Exercises: readHyperslabRuns (compact source) with stride parameters.
 func TestReadHyperslab_CompactWithStride(t *testing.T) {
 	f, err := Open("testdata/hdf5_official/tfilters.h5")
 	require.NoError(t, err)
@@ -152,7 +152,7 @@ func TestReadHyperslab_Float32Dataset(t *testing.T) {
 }
 
 // TestReadHyperslab_Float32_2D tests reading a 2D float32 dataset with hyperslab.
-// Exercises: convertBytesToFloat32AsFloat64 via 2D contiguous (readContiguous2DOptimized).
+// Exercises: convertBytesToFloat32AsFloat64 via 2D contiguous (readHyperslabRuns).
 func TestReadHyperslab_Float32_2D(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_hyperslab_float32_2d.h5")
@@ -278,9 +278,9 @@ func TestReadHyperslab_Int64_Negative(t *testing.T) {
 }
 
 // TestReadHyperslab_3DContiguous tests reading a 3D dataset via ReadSlice.
-// Exercises: readContiguousRowByRow for 3D, extractHyperslabRecursive.
-// Note: The 3D row-by-row reader has a known bounding-box offset issue,
-// so this test verifies the code path executes and returns correct element count.
+// Every element of the result is checked: the former 3-D reader's bounding-box
+// offset bug (TASK-062) made only the first plane trustworthy, and this test
+// used to check that plane alone.
 func TestReadHyperslab_3DContiguous(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_hyperslab_3d.h5")
@@ -312,7 +312,7 @@ func TestReadHyperslab_3DContiguous(t *testing.T) {
 	ds, found := findDatasetByName(f, "data_3d")
 	require.True(t, found)
 
-	// Read sub-block with non-contiguous last dim to force readContiguousRowByRow.
+	// Read sub-block with non-contiguous last dim to exercise readHyperslabRuns with partial rows.
 	// [0:2, 0:3, 0:4] = 2x3x4 region (last dim < full dim 6)
 	countX, countY, countZ := uint64(2), uint64(3), uint64(4)
 
@@ -327,21 +327,23 @@ func TestReadHyperslab_3DContiguous(t *testing.T) {
 	require.Len(t, resultData, int(countX*countY*countZ),
 		"expected %d elements", countX*countY*countZ)
 
-	// Verify at least the first plane (x=0) which should be correctly read
+	// Verify every element of every plane.
 	idx := 0
-	for y := uint64(0); y < countY; y++ {
-		for z := uint64(0); z < countZ; z++ {
-			expected := float64(y*10 + z)
-			require.Equal(t, expected, resultData[idx],
-				"[0,%d,%d] (idx %d): expected %f, got %f",
-				y, z, idx, expected, resultData[idx])
-			idx++
+	for x := uint64(0); x < countX; x++ {
+		for y := uint64(0); y < countY; y++ {
+			for z := uint64(0); z < countZ; z++ {
+				expected := float64(x*100 + y*10 + z)
+				require.Equal(t, expected, resultData[idx],
+					"[%d,%d,%d] (idx %d): expected %f, got %f",
+					x, y, z, idx, expected, resultData[idx])
+				idx++
+			}
 		}
 	}
 }
 
 // TestReadHyperslab_3DStridedSelection tests 3D hyperslab with stride > 1.
-// Exercises: readContiguousRowByRow with stride, extractHyperslabRecursive.
+// Exercises: readHyperslabRuns with stride.
 func TestReadHyperslab_3DStridedSelection(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_hyperslab_3d_strided.h5")
@@ -404,7 +406,7 @@ func TestReadHyperslab_3DStridedSelection(t *testing.T) {
 }
 
 // TestReadHyperslab_2DStridedSelection tests 2D hyperslab with varying stride.
-// Exercises: readContiguous2DOptimized with asymmetric strides.
+// Exercises: readHyperslabRuns with asymmetric strides.
 func TestReadHyperslab_2DStridedSelection(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_hyperslab_2d_stride.h5")
@@ -462,7 +464,7 @@ func TestReadHyperslab_2DStridedSelection(t *testing.T) {
 }
 
 // TestReadHyperslab_NDimensionalExtraction tests hyperslab extraction for 4D data.
-// Exercises: readContiguousRowByRow and extractHyperslabRecursive at 4D.
+// Exercises: readHyperslabRuns at 4D.
 func TestReadHyperslab_NDimensionalExtraction(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_hyperslab_4d.h5")
@@ -494,8 +496,8 @@ func TestReadHyperslab_NDimensionalExtraction(t *testing.T) {
 	require.True(t, found)
 
 	// Read sub-block: [0:1, 0:1, 0:2, 0:6] = 1x1x2x6 = 12 elements.
-	// Selecting full last dim (=6) triggers isContiguousSelection=true,
-	// routing through readContiguousOptimized instead of readContiguousRowByRow.
+	// Selecting the full last dim (=6) merges it into each run (readHyperslabRuns),
+	// so every selected row of the third dimension costs one run.
 	count := []uint64{1, 1, 2, 6}
 
 	result, err := ds.ReadSlice([]uint64{0, 0, 0, 0}, count)
@@ -608,8 +610,8 @@ func TestReadHyperslab_Chunked2DInt64(t *testing.T) {
 }
 
 // TestReadHyperslab_2DContiguousFullLastDim tests the contiguous optimization path
-// where the last dimension is fully selected (isContiguousSelection=true).
-// Exercises: readContiguousOptimized multi-dimensional contiguous path.
+// where the last dimension is fully selected: whole rows merge into one run.
+// Exercises: readHyperslabRuns with merged trailing dimensions.
 func TestReadHyperslab_2DContiguousFullLastDim(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_full_last_dim.h5")

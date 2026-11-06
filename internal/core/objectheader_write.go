@@ -13,6 +13,12 @@ type ObjectHeaderWriter struct {
 	Flags    uint8
 	Messages []MessageWriter
 
+	// Times and AttrPhaseChange are the optional version-2 prefix fields of
+	// an existing header (see ObjectHeader); written when the matching flag
+	// (0x20, 0x10) is set, dropped with their flag when empty.
+	Times           []byte
+	AttrPhaseChange []byte
+
 	// V1-specific fields (used only when Version == 1)
 	RefCount uint32 // Reference count (always 1 for new files)
 }
@@ -21,6 +27,12 @@ type ObjectHeaderWriter struct {
 type MessageWriter struct {
 	Type MessageType
 	Data []byte
+
+	// Flags are the message flags (H5Ocache.c:1277-1279). A message read from
+	// an existing header keeps its flags on rewrite: dropping
+	// H5O_MSG_FLAG_SHARED turns a shared-message reference into a bogus
+	// inline message.
+	Flags uint8
 }
 
 // NewMinimalRootGroupHeader creates a minimal object header v2 for an empty root group.
@@ -183,7 +195,7 @@ func (ohw *ObjectHeaderWriter) sizeV2() uint64 {
 	chunkSizeFieldWidth := chunkSizeFieldWidth(messageDataSize)
 
 	// Total on-disk size: Signature (4) + Version (1) + Flags (1) + ChunkSizeField + Messages + Checksum (4)
-	return 4 + 1 + 1 + chunkSizeFieldWidth + messageDataSize + checksumSize
+	return 4 + 1 + 1 + ohw.v2PrefixFieldsSize() + chunkSizeFieldWidth + messageDataSize + checksumSize
 }
 
 // chunkSizeFieldWidth returns the number of bytes needed for the chunk size field
@@ -311,7 +323,7 @@ func (ohw *ObjectHeaderWriter) writeToV1(w io.WriterAt, address uint64) (uint64,
 		offset += 2
 
 		// Message flags (1 byte)
-		buf[offset] = 0 // For MVP: no flags
+		buf[offset] = msg.Flags
 		offset++
 
 		// Reserved (3 bytes) - already zero from make()
@@ -377,11 +389,17 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 	case 8:
 		flagsBits = 3
 	}
-	flags := (ohw.Flags & 0xFC) | flagsBits // Preserve other flag bits, set bits 0-1
+	if ohw.Flags&ohdrFlagAttrCrtOrder != 0 {
+		// Tracked attribute creation order adds a 2-byte creation index to
+		// every message header (H5Ocache.c:1283-1289); rewriting such a
+		// header is not supported, refuse instead of corrupting it.
+		return 0, fmt.Errorf("object header at %d tracks attribute creation order (flags 0x%02x): rewriting it is not supported", address, ohw.Flags)
+	}
+	flags := ohw.v2PrefixFlags() | flagsBits // keep the optional-field flags whose fields are present
 
 	// Build header buffer: prefix + messages + checksum
 	// Signature (4) + Version (1) + Flags (1) + Chunk Size field (variable) + Messages + Checksum (4)
-	headerSize := 4 + 1 + 1 + csWidth + messageDataSize + uint64(checksumSize)
+	headerSize := 4 + 1 + 1 + ohw.v2PrefixFieldsSize() + csWidth + messageDataSize + uint64(checksumSize)
 	buf := make([]byte, headerSize)
 
 	offset := 0
@@ -398,6 +416,14 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 	buf[offset] = flags
 	offset++
 
+	// Optional times and attribute phase change fields (H5Ocache.c:1030-1055).
+	if flags&ohdrFlagStoreTimes != 0 {
+		offset += copy(buf[offset:], ohw.Times)
+	}
+	if flags&ohdrFlagAttrPhaseChange != 0 {
+		offset += copy(buf[offset:], ohw.AttrPhaseChange)
+	}
+
 	// Chunk 0 size (variable width based on flags bits 0-1)
 	writeChunkSize(buf[offset:], chunkSize, csWidth)
 	offset += int(csWidth) //nolint:gosec // G115: csWidth is 1, 2, 4, or 8
@@ -413,8 +439,7 @@ func (ohw *ObjectHeaderWriter) writeToV2(w io.WriterAt, address uint64) (uint64,
 		offset += 2
 
 		// Message flags (1 byte)
-		// For MVP: flags = 0 (not shared, not constant, not shareable)
-		buf[offset] = 0
+		buf[offset] = msg.Flags
 		offset++
 
 		// Message data
@@ -506,16 +531,19 @@ func WriteObjectHeader(w io.WriterAt, addr uint64, oh *ObjectHeader, sb *Superbl
 
 	// Build object header writer from the object header
 	ohw := &ObjectHeaderWriter{
-		Version:  oh.Version,
-		Flags:    oh.Flags,
-		Messages: make([]MessageWriter, len(oh.Messages)),
+		Version:         oh.Version,
+		Flags:           oh.Flags,
+		Times:           oh.Times,
+		AttrPhaseChange: oh.AttrPhaseChange,
+		Messages:        make([]MessageWriter, len(oh.Messages)),
 	}
 
 	// Convert messages
 	for i, msg := range oh.Messages {
 		ohw.Messages[i] = MessageWriter{
-			Type: msg.Type,
-			Data: msg.Data,
+			Type:  msg.Type,
+			Flags: msg.Flags,
+			Data:  msg.Data,
 		}
 	}
 
@@ -540,14 +568,17 @@ func ObjectHeaderSizeFromParsed(oh *ObjectHeader) uint64 {
 		return 0
 	}
 	ohw := &ObjectHeaderWriter{
-		Version:  oh.Version,
-		Flags:    oh.Flags,
-		Messages: make([]MessageWriter, len(oh.Messages)),
+		Version:         oh.Version,
+		Flags:           oh.Flags,
+		Times:           oh.Times,
+		AttrPhaseChange: oh.AttrPhaseChange,
+		Messages:        make([]MessageWriter, len(oh.Messages)),
 	}
 	for i, msg := range oh.Messages {
 		ohw.Messages[i] = MessageWriter{
-			Type: msg.Type,
-			Data: msg.Data,
+			Type:  msg.Type,
+			Flags: msg.Flags,
+			Data:  msg.Data,
 		}
 	}
 	return ohw.Size()
@@ -636,7 +667,7 @@ func WriteContinuationChunkV2(w io.WriterAt, address uint64, messages []MessageW
 		offset++
 		binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(msg.Data))) //nolint:gosec // Safe: message size validated
 		offset += 2
-		buf[offset] = 0 // Message flags
+		buf[offset] = msg.Flags // Message flags
 		offset++
 		copy(buf[offset:offset+len(msg.Data)], msg.Data)
 		offset += len(msg.Data)
@@ -709,4 +740,30 @@ func RewriteObjectHeaderV2(w io.WriterAt, r io.ReaderAt, addr uint64, sb *Superb
 	}
 
 	return nil
+}
+
+// v2PrefixFlags returns the header flags without the chunk-size bits, with
+// the times and phase-change flags kept only when their fields are present.
+func (ohw *ObjectHeaderWriter) v2PrefixFlags() uint8 {
+	flags := ohw.Flags &^ (0x03 | ohdrFlagStoreTimes | ohdrFlagAttrPhaseChange)
+	if ohw.Flags&ohdrFlagStoreTimes != 0 && len(ohw.Times) == ohdrTimesSize {
+		flags |= ohdrFlagStoreTimes
+	}
+	if ohw.Flags&ohdrFlagAttrPhaseChange != 0 && len(ohw.AttrPhaseChange) == ohdrAttrPhaseChangeSize {
+		flags |= ohdrFlagAttrPhaseChange
+	}
+	return flags
+}
+
+// v2PrefixFieldsSize is the size of the optional prefix fields written.
+func (ohw *ObjectHeaderWriter) v2PrefixFieldsSize() uint64 {
+	flags := ohw.v2PrefixFlags()
+	var n uint64
+	if flags&ohdrFlagStoreTimes != 0 {
+		n += ohdrTimesSize
+	}
+	if flags&ohdrFlagAttrPhaseChange != 0 {
+		n += ohdrAttrPhaseChangeSize
+	}
+	return n
 }

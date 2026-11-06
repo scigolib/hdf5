@@ -16,20 +16,17 @@ func TestReadDatasetCompound_CompactLayout(t *testing.T) {
 	// Build a version 3 compound datatype with 2 members:
 	//   { int32 id; float64 value; } = 12 bytes per element (4 + 8)
 	//
-	// Compound v3 format:
-	//   4 bytes: member count
-	//   For each member:
-	//     - null-terminated name (NOT padded in v3)
-	//     - 4 bytes: member byte offset
-	//     - 8+ bytes: member datatype message (class|version, size, [properties])
+	// Compound v3 format (H5Odtype.c:1238-1308): member count in the class
+	// bit field; per member a null-terminated name, an offset of
+	// H5VM_limit_enc_size(size) bytes and the member datatype message.
 
-	compoundProps := buildCompoundV3Props(t, []testCompoundMember{
+	compoundMembers := []testCompoundMember{
 		{name: "id", offset: 0, dtClass: DatatypeFixed, dtSize: 4},
 		{name: "value", offset: 4, dtClass: DatatypeFloat, dtSize: 8},
-	})
+	}
 
-	// Compound datatype header: class=6 (compound), version=3, member count in properties.
-	compoundDtMsg := buildCompoundDatatypeV3(12, compoundProps)
+	// Compound datatype message, encoded by the datatype codec.
+	compoundDtMsg := fixtureCompoundBytes(12, compoundMembers)
 
 	// Build dataspace: 1D with 2 elements.
 	dataspaceMsg := buildDataspaceV1Message([]uint64{2})
@@ -66,12 +63,12 @@ func TestReadDatasetCompound_CompactLayout(t *testing.T) {
 
 // TestReadDatasetCompound_Int64Members tests compound dataset reading with int64 fields.
 func TestReadDatasetCompound_Int64Members(t *testing.T) {
-	compoundProps := buildCompoundV3Props(t, []testCompoundMember{
+	compoundMembers := []testCompoundMember{
 		{name: "x", offset: 0, dtClass: DatatypeFixed, dtSize: 8},
 		{name: "y", offset: 8, dtClass: DatatypeFixed, dtSize: 8},
-	})
+	}
 
-	compoundDtMsg := buildCompoundDatatypeV3(16, compoundProps)
+	compoundDtMsg := fixtureCompoundBytes(16, compoundMembers)
 	dataspaceMsg := buildDataspaceV1Message([]uint64{3})
 
 	// 3 elements, each 16 bytes (two int64s).
@@ -108,11 +105,11 @@ func TestReadDatasetCompound_Int64Members(t *testing.T) {
 
 // TestReadDatasetCompound_EmptyDataset_V3 tests reading a compound dataset with zero elements.
 func TestReadDatasetCompound_EmptyDataset_V3(t *testing.T) {
-	compoundProps := buildCompoundV3Props(t, []testCompoundMember{
+	compoundMembers := []testCompoundMember{
 		{name: "a", offset: 0, dtClass: DatatypeFixed, dtSize: 4},
-	})
+	}
 
-	compoundDtMsg := buildCompoundDatatypeV3(4, compoundProps)
+	compoundDtMsg := fixtureCompoundBytes(4, compoundMembers)
 	dataspaceMsg := buildDataspaceV1Message([]uint64{0})
 	layoutMsg := buildCompactLayoutMessage([]byte{})
 
@@ -132,11 +129,11 @@ func TestReadDatasetCompound_EmptyDataset_V3(t *testing.T) {
 
 // TestReadDatasetCompound_UnsupportedLayoutClass tests error on unknown layout class.
 func TestReadDatasetCompound_UnsupportedLayoutClass(t *testing.T) {
-	compoundProps := buildCompoundV3Props(t, []testCompoundMember{
+	compoundMembers := []testCompoundMember{
 		{name: "a", offset: 0, dtClass: DatatypeFixed, dtSize: 4},
-	})
+	}
 
-	compoundDtMsg := buildCompoundDatatypeV3(4, compoundProps)
+	compoundDtMsg := fixtureCompoundBytes(4, compoundMembers)
 	dataspaceMsg := buildDataspaceV1Message([]uint64{2})
 
 	// Build a layout with unsupported class (99).
@@ -349,11 +346,8 @@ func TestReadDatasetFloat64_CompactLayout(t *testing.T) {
 
 // TestReadDatasetFloat64_Int32CompactLayout tests reading int32 dataset as float64 via compact layout.
 func TestReadDatasetFloat64_Int32CompactLayout(t *testing.T) {
-	// Build int32 datatype.
-	dtData := make([]byte, 8)
-	classAndVersion := uint32(DatatypeFixed) | (1 << 4)
-	binary.LittleEndian.PutUint32(dtData[0:4], classAndVersion)
-	binary.LittleEndian.PutUint32(dtData[4:8], 4)
+	// Build int32 datatype (codec-encoded; the bare header had no precision).
+	dtData := fixtureDatatypeBytes(DatatypeFixed, 4)
 
 	dsMsg := buildDataspaceV1Message([]uint64{4})
 
@@ -521,63 +515,6 @@ type testCompoundMember struct {
 	offset  uint32
 	dtClass DatatypeClass
 	dtSize  uint32
-}
-
-// buildCompoundV3Props builds compound v3 properties from test member definitions.
-func buildCompoundV3Props(t *testing.T, members []testCompoundMember) []byte {
-	t.Helper()
-	buf := make([]byte, 0, 4+len(members)*32)
-
-	// 4 bytes: member count.
-	countBuf := make([]byte, 4)
-	binary.LittleEndian.PutUint32(countBuf, uint32(len(members)))
-	buf = append(buf, countBuf...)
-
-	for _, m := range members {
-		// Null-terminated name (NOT padded in v3).
-		buf = append(buf, []byte(m.name)...)
-		buf = append(buf, 0)
-
-		// 4 bytes: member byte offset.
-		offsetBuf := make([]byte, 4)
-		binary.LittleEndian.PutUint32(offsetBuf, m.offset)
-		buf = append(buf, offsetBuf...)
-
-		// Member datatype message (8 bytes minimum for header).
-		dtHeader := make([]byte, 8)
-		classAndVersion := uint32(m.dtClass) | (3 << 4) // version 3
-		binary.LittleEndian.PutUint32(dtHeader[0:4], classAndVersion)
-		binary.LittleEndian.PutUint32(dtHeader[4:8], m.dtSize)
-
-		// Add properties for the member datatype so ParseDatatypeMessage works correctly.
-		var dtProps []byte
-		switch m.dtClass {
-		case DatatypeFixed:
-			// Integer properties: 4 bytes (bit offset + precision).
-			dtProps = make([]byte, 4)
-			binary.LittleEndian.PutUint16(dtProps[2:4], uint16(m.dtSize*8))
-		case DatatypeFloat:
-			// Float properties: 12 bytes.
-			dtProps = make([]byte, 12)
-		case DatatypeString:
-			// No additional properties needed for simple string.
-		}
-
-		buf = append(buf, dtHeader...)
-		buf = append(buf, dtProps...)
-	}
-
-	return buf
-}
-
-// buildCompoundDatatypeV3 builds a complete compound datatype message (v3).
-func buildCompoundDatatypeV3(structSize uint32, properties []byte) []byte {
-	result := make([]byte, 8+len(properties))
-	classAndVersion := uint32(DatatypeCompound) | (3 << 4) // version=3, class=6 (compound)
-	binary.LittleEndian.PutUint32(result[0:4], classAndVersion)
-	binary.LittleEndian.PutUint32(result[4:8], structSize)
-	copy(result[8:], properties)
-	return result
 }
 
 // buildCompactLayoutMessage builds a compact layout message (data stored inline).

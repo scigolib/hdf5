@@ -905,14 +905,17 @@ func transitionToDenseAttributes(fw *FileWriter, objectAddr uint64, _ *core.Obje
 	// 7. Calculate object header size (without AttrInfo message yet)
 	// to determine where dense storage should be allocated
 	ohWriter := &core.ObjectHeaderWriter{
-		Version:  oh.Version,
-		Flags:    oh.Flags,
-		Messages: make([]core.MessageWriter, len(oh.Messages)),
+		Version:         oh.Version,
+		Flags:           oh.Flags,
+		Times:           oh.Times,
+		AttrPhaseChange: oh.AttrPhaseChange,
+		Messages:        make([]core.MessageWriter, len(oh.Messages)),
 	}
 	for i, msg := range oh.Messages {
 		ohWriter.Messages[i] = core.MessageWriter{
-			Type: msg.Type,
-			Data: msg.Data,
+			Type:  msg.Type,
+			Flags: msg.Flags,
+			Data:  msg.Data,
 		}
 	}
 
@@ -1054,27 +1057,11 @@ func prepareVLenStringAttribute(fw *FileWriter, strings []string) (*core.Datatyp
 		copy(data[i*16:], hid.Encode())
 	}
 
-	// 4. Build the VLen string datatype.
-	// Base type: DatatypeString, version=1, size=1, ClassBitField=0x00 (ASCII, null-pad).
-	baseMsg := &core.DatatypeMessage{
-		Class:         core.DatatypeString,
-		Version:       1,
-		Size:          1,    // Character size
-		ClassBitField: 0x00, // ASCII, null-pad
-	}
-	baseTypeMsg, err := core.EncodeDatatypeMessage(baseMsg)
+	// 4. Build the VLen string datatype: null-terminated ASCII, 16-byte heap
+	// IDs, unsigned char base type as the C library builds it (H5T.c:4940-4970).
+	dt, err := core.NewVLenStringDatatype(core.StringNullTerm, core.CharsetASCII)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("encode base type message: %w", err)
-	}
-
-	// Outer type: DatatypeVarLen, version=1, size=16 (heap ID size).
-	// ClassBitField: type=1 (string) in bits 0-3, padding=0 in bits 4-7, charset=0 (ASCII) in bits 8-11.
-	dt := &core.DatatypeMessage{
-		Class:         core.DatatypeVarLen,
-		Version:       1,
-		Size:          16,
-		ClassBitField: 0x01, // Type=1 (string), padding=0, charset=0 (ASCII)
-		Properties:    baseTypeMsg,
+		return nil, nil, nil, fmt.Errorf("build vlen string datatype: %w", err)
 	}
 
 	// 5. Build the dataspace.
@@ -1128,10 +1115,9 @@ func inferSignedInt(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMess
 		return nil, nil, fmt.Errorf("not a signed integer type")
 	}
 
-	dt := &core.DatatypeMessage{
-		Class:         core.DatatypeFixed,
-		Size:          size,
-		ClassBitField: 0x08, // Bit 3 set for signed integers
+	dt, err := core.NewIntegerDatatype(size, true) // H5T_STD_I<n>LE
+	if err != nil {
+		return nil, nil, err
 	}
 
 	ds := &core.DataspaceMessage{
@@ -1158,10 +1144,9 @@ func inferUnsignedInt(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMe
 		return nil, nil, fmt.Errorf("not an unsigned integer type")
 	}
 
-	dt := &core.DatatypeMessage{
-		Class:         core.DatatypeFixed,
-		Size:          size,
-		ClassBitField: 0, // Bit 3 clear for unsigned integers
+	dt, err := core.NewIntegerDatatype(size, false) // H5T_STD_U<n>LE
+	if err != nil {
+		return nil, nil, err
 	}
 
 	ds := &core.DataspaceMessage{
@@ -1184,10 +1169,13 @@ func inferFloat(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage,
 		return nil, nil, fmt.Errorf("not a float type")
 	}
 
-	dt := &core.DatatypeMessage{
-		Class:         core.DatatypeFloat,
-		Size:          size,
-		ClassBitField: 0, // Little-endian
+	// H5T_IEEE_F<n>LE. Before v0.14.3 this was a literal with class bit
+	// field 0: sign bit position 0, which the C library rejects
+	// (H5Odtype.c:264-267); the constructor sets sign position and
+	// normalization.
+	dt, err := core.NewFloatDatatype(size)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	ds := &core.DataspaceMessage{
@@ -1203,10 +1191,9 @@ func inferString(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage
 	str := v.String()
 	size := uint32(len(str) + 1) //nolint:gosec // Safe: string length fits in uint32
 
-	dt := &core.DatatypeMessage{
-		Class:         core.DatatypeString,
-		Size:          size,
-		ClassBitField: 0, // ASCII, null-terminated
+	dt, err := core.NewStringDatatype(size, core.StringNullTerm, core.CharsetASCII)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	ds := &core.DataspaceMessage{
@@ -1230,30 +1217,23 @@ func inferSlice(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage,
 	length := uint64(v.Len()) //nolint:gosec // Safe: slice length conversion
 
 	var dt *core.DatatypeMessage
+	var err error
 
+	// Element types as the C library writes them: H5T_STD_I/U<n>LE and
+	// H5T_IEEE_F<n>LE (float literals with class bit field 0 before v0.14.3
+	// put the sign bit at position 0, H5Odtype.c:264-267).
 	switch elemKind {
-	case reflect.Int8:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFixed, Size: 1, ClassBitField: 0x08}
-	case reflect.Uint8:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFixed, Size: 1, ClassBitField: 0}
-	case reflect.Int16:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFixed, Size: 2, ClassBitField: 0x08}
-	case reflect.Uint16:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFixed, Size: 2, ClassBitField: 0}
-	case reflect.Int32:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFixed, Size: 4, ClassBitField: 0x08}
-	case reflect.Uint32:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFixed, Size: 4, ClassBitField: 0}
-	case reflect.Int64:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFixed, Size: 8, ClassBitField: 0x08}
-	case reflect.Uint64:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFixed, Size: 8, ClassBitField: 0}
-	case reflect.Float32:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFloat, Size: 4, ClassBitField: 0}
-	case reflect.Float64:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFloat, Size: 8, ClassBitField: 0}
+	case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		dt, err = core.NewIntegerDatatype(uint32(v.Type().Elem().Size()), true) //nolint:gosec // G115: 1-8 bytes
+	case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		dt, err = core.NewIntegerDatatype(uint32(v.Type().Elem().Size()), false) //nolint:gosec // G115: 1-8 bytes
+	case reflect.Float32, reflect.Float64:
+		dt, err = core.NewFloatDatatype(uint32(v.Type().Elem().Size())) //nolint:gosec // G115: 4 or 8 bytes
 	default:
 		return nil, nil, fmt.Errorf("unsupported slice element type: %s", elemKind)
+	}
+	if err != nil {
+		return nil, nil, err
 	}
 
 	ds := &core.DataspaceMessage{

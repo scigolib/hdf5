@@ -3,6 +3,7 @@ package core
 import (
 	"testing"
 
+	"github.com/scigolib/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +29,7 @@ func TestApplyFilters_LZFPaddingRejectsOversizedChunk(t *testing.T) {
 		}},
 	}
 
-	_, err := fp.ApplyFilters([]byte{0x04, 'h', 'e', 'l', 'l', 'o'})
+	_, err := fp.ApplyFilters([]byte{0x04, 'h', 'e', 'l', 'l', 'o'}, utils.MaxChunkSize)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "exceeds maximum")
 }
@@ -43,7 +44,7 @@ func TestApplyFilters_LZFPaddingWithinCap(t *testing.T) {
 		}},
 	}
 
-	got, err := fp.ApplyFilters([]byte{0x04, 'h', 'e', 'l', 'l', 'o'})
+	got, err := fp.ApplyFilters([]byte{0x04, 'h', 'e', 'l', 'l', 'o'}, utils.MaxChunkSize)
 	require.NoError(t, err)
 	require.Len(t, got, 8)
 	require.Equal(t, []byte("hello\x00\x00\x00"), got)
