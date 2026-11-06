@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"math"
 	"testing"
 
@@ -13,6 +14,19 @@ import (
 // Tests of the validated dataset descriptor (ADR-004 §1). Each validation rule
 // cites the C check it mirrors; the error must wrap utils.ErrCorrupt so callers
 // can tell damaged metadata from a refused read (utils.ErrLimit).
+
+// newDatasetDescriptor validates hand-built messages and builds the
+// descriptor of a dataset without a filter pipeline or external storage, so
+// tests can exercise the validation without an object header.
+func newDatasetDescriptor(
+	r io.ReaderAt,
+	sb *Superblock,
+	datatype *DatatypeMessage,
+	dataspace *DataspaceMessage,
+	layout *DataLayoutMessage,
+) (*DatasetDescriptor, error) {
+	return buildDatasetDescriptor(r, sb, datatype, dataspace, layout, nil, nil)
+}
 
 func descTestSB() *Superblock {
 	return &Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian}
@@ -35,7 +49,7 @@ func TestDatasetDescriptor_RejectsZeroDatatypeSize(t *testing.T) {
 	dt := &DatatypeMessage{Class: DatatypeFloat, Size: 0}
 	layout := &DataLayoutMessage{Version: 3, Class: LayoutContiguous, DataAddress: 0}
 
-	_, err := newDatasetDescriptor(bytes.NewReader(make([]byte, 64)), descTestSB(), dt, simpleSpace(4), layout, nil)
+	_, err := newDatasetDescriptor(bytes.NewReader(make([]byte, 64)), descTestSB(), dt, simpleSpace(4), layout)
 	require.ErrorIs(t, err, utils.ErrCorrupt)
 	require.Contains(t, err.Error(), "datatype size is zero")
 }
@@ -45,7 +59,7 @@ func TestDatasetDescriptor_RejectsDataspaceOverflow(t *testing.T) {
 	layout := &DataLayoutMessage{Version: 3, Class: LayoutContiguous, DataAddress: 0}
 
 	_, err := newDatasetDescriptor(bytes.NewReader(nil), descTestSB(), float64Type(),
-		simpleSpace(1<<32, 1<<32), layout, nil)
+		simpleSpace(1<<32, 1<<32), layout)
 	require.ErrorIs(t, err, utils.ErrCorrupt)
 	require.Contains(t, err.Error(), "element count overflows")
 }
@@ -55,7 +69,7 @@ func TestDatasetDescriptor_RejectsStorageOverflow(t *testing.T) {
 	layout := &DataLayoutMessage{Version: 3, Class: LayoutContiguous, DataAddress: 0}
 
 	_, err := newDatasetDescriptor(bytes.NewReader(nil), descTestSB(), float64Type(),
-		simpleSpace(1<<61), layout, nil)
+		simpleSpace(1<<61), layout)
 	require.ErrorIs(t, err, utils.ErrCorrupt)
 	require.Contains(t, err.Error(), "dataset size overflow")
 }
@@ -65,7 +79,7 @@ func TestDatasetDescriptor_Contiguous(t *testing.T) {
 
 	t.Run("inside the file", func(t *testing.T) {
 		layout := &DataLayoutMessage{Version: 3, Class: LayoutContiguous, DataAddress: 32}
-		desc, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(12), layout, nil)
+		desc, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(12), layout)
 		require.NoError(t, err)
 		require.Equal(t, uint64(96), desc.StorageSize())
 		require.Equal(t, uint64(12), desc.NumElements())
@@ -76,7 +90,7 @@ func TestDatasetDescriptor_Contiguous(t *testing.T) {
 	t.Run("past the end of the file", func(t *testing.T) {
 		// H5Dcontig.c:408-411.
 		layout := &DataLayoutMessage{Version: 3, Class: LayoutContiguous, DataAddress: 40}
-		_, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(12), layout, nil)
+		_, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(12), layout)
 		require.ErrorIs(t, err, utils.ErrCorrupt)
 		require.Contains(t, err.Error(), "read beyond end of file")
 	})
@@ -87,7 +101,7 @@ func TestDatasetDescriptor_Contiguous(t *testing.T) {
 		// which nothing in the file bounds: the read limit refuses 8 TiB before
 		// allocating. (It used to be refused as "not allocated".)
 		layout := &DataLayoutMessage{Version: 3, Class: LayoutContiguous, DataAddress: undefinedAddress}
-		desc, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(1<<40), layout, nil)
+		desc, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(1<<40), layout)
 		require.NoError(t, err)
 		require.False(t, desc.ContiguousAllocated())
 
@@ -114,7 +128,7 @@ func TestDatasetDescriptor_CompactSizeMustMatch(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			layout := &DataLayoutMessage{Version: 3, Class: LayoutCompact, CompactData: make([]byte, tc.stored)}
-			_, err := newDatasetDescriptor(bytes.NewReader(nil), descTestSB(), float64Type(), simpleSpace(4), layout, nil)
+			_, err := newDatasetDescriptor(bytes.NewReader(nil), descTestSB(), float64Type(), simpleSpace(4), layout)
 			if tc.ok {
 				require.NoError(t, err)
 				return
@@ -146,7 +160,7 @@ func TestDatasetDescriptor_Chunked(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := newDatasetDescriptor(r, descTestSB(), float64Type(), tc.space, tc.layout, nil)
+			_, err := newDatasetDescriptor(r, descTestSB(), float64Type(), tc.space, tc.layout)
 			if tc.want == "" {
 				require.NoError(t, err)
 				return
@@ -162,13 +176,13 @@ func TestDatasetDescriptor_Chunked(t *testing.T) {
 		layout := chunkedLayout(1<<28, 8)
 		layout.Version = 4
 		layout.ChunkIndexType = ChunkIndexBT2
-		_, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(1<<30), layout, nil)
+		_, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(1<<30), layout)
 		require.ErrorIs(t, err, utils.ErrCorrupt)
 		require.Contains(t, err.Error(), "exceeds the maximum")
 	})
 
 	t.Run("chunk dims without element size", func(t *testing.T) {
-		desc, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(100, 200), chunkedLayout(10, 20, 8), nil)
+		desc, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(100, 200), chunkedLayout(10, 20, 8))
 		require.NoError(t, err)
 		require.Equal(t, []uint64{10, 20}, desc.ChunkDims())
 	})
@@ -180,7 +194,7 @@ func TestDatasetDescriptor_ResultSize(t *testing.T) {
 	t.Run("chunked over the read limit wraps ErrLimit", func(t *testing.T) {
 		// A sparse 8 MB chunked dataset in an empty file: legitimate, but more
 		// than the 1 MB limit given here.
-		desc, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(1<<20), chunkedLayout(1024, 8), nil)
+		desc, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(1<<20), chunkedLayout(1024, 8))
 		require.NoError(t, err)
 
 		_, err = desc.ResultSize(desc.NumElements(), 1, 1<<20)
@@ -199,7 +213,7 @@ func TestDatasetDescriptor_ResultSize(t *testing.T) {
 		// 1 Mi uint8 values: 1 MiB raw, 8 MiB as []float64. The larger of the
 		// two allocations is compared with the limit.
 		u8 := &DatatypeMessage{Class: DatatypeFixed, Size: 1}
-		desc, err := newDatasetDescriptor(r, descTestSB(), u8, simpleSpace(1<<20), chunkedLayout(4096, 1), nil)
+		desc, err := newDatasetDescriptor(r, descTestSB(), u8, simpleSpace(1<<20), chunkedLayout(4096, 1))
 		require.NoError(t, err)
 
 		_, err = desc.ResultSize(desc.NumElements(), ResultFloat64, 4<<20)
@@ -216,7 +230,7 @@ func TestDatasetDescriptor_ResultSize(t *testing.T) {
 
 	t.Run("selection larger than the dataset", func(t *testing.T) {
 		layout := &DataLayoutMessage{Version: 3, Class: LayoutCompact, CompactData: make([]byte, 32)}
-		desc, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(4), layout, nil)
+		desc, err := newDatasetDescriptor(r, descTestSB(), float64Type(), simpleSpace(4), layout)
 		require.NoError(t, err)
 
 		_, err = desc.ResultSize(5, ResultFloat64, utils.DefaultReadLimit)

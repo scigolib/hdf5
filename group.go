@@ -98,6 +98,9 @@ func (d *Dataset) Attributes() ([]*core.Attribute, error) {
 	if err != nil {
 		return nil, err
 	}
+	if header.AttributesErr != nil {
+		return nil, fmt.Errorf("dataset attributes: %w", header.AttributesErr)
+	}
 	return header.Attributes, nil
 }
 
@@ -135,6 +138,13 @@ func (d *Dataset) ReadAttribute(name string) (interface{}, error) {
 // Read reads the dataset values and returns them as float64 array.
 // Currently supports float64, float32, int32, int64 datatypes.
 // All values are converted to float64 for convenience.
+//
+// A dataset whose element type is an array (ClassArray) of a numeric base
+// returns the base values flattened in C order, the array dimensions
+// innermost, as h5dump prints them: Shape() × Datatype().ArrayDims values in
+// all. ReadSlice selects whole array elements by their dataspace
+// coordinates. Arrays of strings read through ReadStrings and arrays of
+// compounds through ReadCompound in the same order.
 func (d *Dataset) Read() ([]float64, error) {
 	desc, err := d.descriptor()
 	if err != nil {
@@ -234,6 +244,9 @@ func (g *Group) Attributes() ([]*core.Attribute, error) {
 	header, err := core.ReadObjectHeader(g.file.reader, g.address, g.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read object header: %w", err)
+	}
+	if header.AttributesErr != nil {
+		return nil, fmt.Errorf("group attributes: %w", header.AttributesErr)
 	}
 
 	// Ensure we return an empty slice instead of nil if no attributes exist.

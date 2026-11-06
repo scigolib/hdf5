@@ -139,13 +139,19 @@ func ParseDatatypeHeaderMessage(msg *HeaderMessage) (*DatatypeMessage, error) {
 // H5Oshared.c:95), so the caller gets a plain datatype. Errors on invalid bytes
 // wrap utils.ErrCorrupt; a datatype in the shared message heap is reported
 // with an error IsSOHMNotSupported recognizes.
+//
+// A committed datatype is decoded once per file and shared by every object
+// that refers to it (resolveSharedDatatype); callers must not modify it.
 func ResolveDatatypeHeaderMessage(r io.ReaderAt, sb *Superblock, msg *HeaderMessage) (*DatatypeMessage, error) {
-	body, err := messageBody(r, sb, msg)
-	if err != nil {
-		return nil, fmt.Errorf("datatype message: %w", err)
+	if msg.Flags&MsgFlagShared != 0 {
+		dt, err := resolveSharedDatatype(r, sb, msg.Data)
+		if err != nil {
+			return nil, fmt.Errorf("datatype message: shared message at 0x%x: %w", msg.Offset, err)
+		}
+		return dt, nil
 	}
 
-	dt, err := ParseDatatypeMessage(body)
+	dt, err := ParseDatatypeMessage(msg.Data)
 	if err != nil {
 		return nil, fmt.Errorf("datatype message at 0x%x: %w", msg.Offset, err)
 	}

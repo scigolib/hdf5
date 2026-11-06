@@ -46,6 +46,17 @@ type Superblock struct {
 	// These are only used when Version == 0
 	RootBTreeAddr uint64 // B-tree address for root group (v0 only)
 	RootHeapAddr  uint64 // Local heap address for root group (v0 only)
+
+	// shared caches the shared messages resolved in this file and bounds the
+	// work spent on them (shared_message.go). The superblock is the one object
+	// every read of a file carries, so the cache lives as long as the File.
+	shared sharedCache
+
+	// ExternalFiles opens the raw data files of datasets stored through an
+	// External File List (external_storage.go). Nil refuses every external
+	// file; the root package sets it when it opens a file by name, with the
+	// policy that decides which names may be opened.
+	ExternalFiles ExternalOpener
 }
 
 // minimumSuperblockSize returns the minimum on-disk size in bytes of the

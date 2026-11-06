@@ -28,6 +28,10 @@ type ObjectHeader struct {
 	Name       string
 	Attributes []*Attribute
 
+	// AttributesErr is the error that stopped the attributes from being read;
+	// Attributes is then nil. The header itself is valid without them.
+	AttributesErr error
+
 	// Times and AttrPhaseChange are the optional version-2 prefix fields,
 	// kept verbatim so a rewritten header keeps them (decoded at
 	// H5Ocache.c:404-418, encoded at :1030-1055): the access, modification,
@@ -72,6 +76,7 @@ const (
 	MsgFillValueOld   MessageType = 4  // Old fill value message (H5O_FILL_ID, H5Oprivate.h:211)
 	MsgFillValue      MessageType = 5  // Fill value message (H5O_FILL_NEW_ID, H5Oprivate.h:212)
 	MsgDataLayout     MessageType = 8  // Corrected: Data Layout is 0x0008
+	MsgExternalFiles  MessageType = 7  // External File List (H5O_EFL_ID, H5Oprivate.h:214)
 	MsgFilterPipeline MessageType = 11 // Filter Pipeline (compression, etc)
 	MsgAttribute      MessageType = 12
 	MsgName           MessageType = 13 // Corrected: Name is 0x000D
@@ -180,15 +185,12 @@ func readObjectHeader(r io.ReaderAt, address uint64, sb *Superblock, withAttribu
 		return header, nil
 	}
 
-	// Parse attributes from messages (both compact and dense)
-	attributes, err := ParseAttributesFromMessages(r, header.Messages, sb)
-	if err != nil {
-		// Don't fail the whole header read if attributes fail
-		// Attributes are optional - continue without them
-		_ = err
-	} else {
-		header.Attributes = attributes
-	}
+	// Parse attributes from messages (both compact and dense). A header whose
+	// attributes cannot be read still opens: C decodes attributes only when
+	// they are accessed (H5O__attr_decode runs from H5A iteration), so a bad
+	// attribute fails attribute access, not the object. The error is kept for
+	// the attribute accessors to return.
+	header.Attributes, header.AttributesErr = ParseAttributesFromMessages(r, header.Messages, sb)
 
 	return header, nil
 }

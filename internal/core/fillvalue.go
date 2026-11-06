@@ -2,7 +2,6 @@ package core
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 
 	"github.com/scigolib/hdf5/internal/utils"
@@ -233,8 +232,9 @@ func (f *FillValueMessage) copyValue(p []byte) error {
 
 // errFillUndefined is C's refusal to read unallocated contiguous storage whose
 // fill value is undefined while fill values would be written (H5Dio.c:256-260).
-// The file is valid; there is just no data to read.
-var errFillUndefined = errors.New("dataset storage is not allocated and its fill value is undefined: no data can be read")
+// The file is valid; there is just no data to read, which utils.ErrNoData
+// lets a caller match.
+var errFillUndefined = fmt.Errorf("dataset storage is not allocated and its fill value is undefined: %w", utils.ErrNoData)
 
 // FillUnallocated writes the dataset's fill value into dst, which stands for
 // storage the file does not have: unallocated contiguous storage, or the

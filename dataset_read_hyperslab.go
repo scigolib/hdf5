@@ -274,6 +274,15 @@ func (d *Dataset) readHyperslab(selection *HyperslabSelection, desc *core.Datase
 		src := &compactSource{data: desc.Layout().CompactData}
 		return readHyperslabRuns(selection, desc, src, limit)
 	case core.LayoutContiguous:
+		if efl := desc.ExternalFiles(); efl != nil {
+			// The external files, read through the same sieve as storage in
+			// the file; offsets are from the start of the dataset's bytes.
+			src := &contiguousSource{
+				r:       efl.Reader(d.file.sb.ExternalFiles),
+				storage: desc.StorageSize(),
+			}
+			return readHyperslabRuns(selection, desc, src, limit)
+		}
 		if !desc.ContiguousAllocated() {
 			return readHyperslabRuns(selection, desc, fillSource{desc: desc}, limit)
 		}
@@ -431,7 +440,11 @@ func readHyperslabRuns(
 		return []float64{}, nil
 	}
 
-	outSize, err := desc.ResultSize(nelmts, core.ResultFloat64, limit)
+	resultElemSize, err := core.Float64ResultSize(desc.Datatype())
+	if err != nil {
+		return nil, err
+	}
+	outSize, err := desc.ResultSize(nelmts, resultElemSize, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -565,7 +578,11 @@ func (d *Dataset) readHyperslabChunked(
 		return []float64{}, nil
 	}
 
-	outSize, err := desc.ResultSize(outputElements, core.ResultFloat64, limit)
+	resultElemSize, err := core.Float64ResultSize(desc.Datatype())
+	if err != nil {
+		return nil, err
+	}
+	outSize, err := desc.ResultSize(outputElements, resultElemSize, limit)
 	if err != nil {
 		return nil, err
 	}

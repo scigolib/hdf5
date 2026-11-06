@@ -21,19 +21,19 @@ func TestParseFilterPipelineMessage(t *testing.T) {
 			name:        "too short",
 			data:        []byte{0x01},
 			wantErr:     true,
-			errContains: "too short",
+			errContains: "ran off the end", // H5Opline.c:126-130 bounds the reads.
 		},
 		{
 			name:        "unsupported version 0",
 			data:        []byte{0x00, 0x01},
 			wantErr:     true,
-			errContains: "unsupported filter pipeline version",
+			errContains: "bad version number",
 		},
 		{
 			name:        "unsupported version 3",
 			data:        []byte{0x03, 0x01},
 			wantErr:     true,
-			errContains: "unsupported filter pipeline version",
+			errContains: "bad version number",
 		},
 		{
 			name:         "version 2 empty pipeline",
@@ -83,7 +83,7 @@ func TestParseFilterPipelineMessage(t *testing.T) {
 				offset := 8
 				binary.LittleEndian.PutUint16(d[offset:offset+2], uint16(FilterShuffle)) // filter ID
 				offset += 2
-				binary.LittleEndian.PutUint16(d[offset:offset+2], 7) // name length = 7 ("Shuffle")
+				binary.LittleEndian.PutUint16(d[offset:offset+2], 8) // name length: "Shuffle" plus NUL, padded to 8 as C requires for v1 (H5Opline.c:175-176)
 				offset += 2
 				binary.LittleEndian.PutUint16(d[offset:offset+2], 0) // flags
 				offset += 2
@@ -129,7 +129,7 @@ func TestParseFilterPipelineMessage(t *testing.T) {
 				return d
 			}(),
 			wantErr:     true,
-			errContains: "truncated",
+			errContains: "ran off the end",
 		},
 	}
 
@@ -195,7 +195,7 @@ func TestParseFilterPipelineMessage_Version1WithName(t *testing.T) {
 	offset := 8
 	binary.LittleEndian.PutUint16(data[offset:offset+2], uint16(FilterShuffle))
 	offset += 2
-	binary.LittleEndian.PutUint16(data[offset:offset+2], 10) // name length
+	binary.LittleEndian.PutUint16(data[offset:offset+2], 16) // name length: "MyFilter" plus NUL, padded to 16 as C requires for v1 (H5Opline.c:175-176)
 	offset += 2
 	binary.LittleEndian.PutUint16(data[offset:offset+2], 0) // flags
 	offset += 2
@@ -212,6 +212,6 @@ func TestParseFilterPipelineMessage_Version1WithName(t *testing.T) {
 	filter := got.Filters[0]
 	require.Equal(t, FilterShuffle, filter.ID)
 	require.Equal(t, "MyFilter", filter.Name)
-	require.Equal(t, uint16(10), filter.NameLength)
+	require.Equal(t, uint16(16), filter.NameLength)
 	require.Equal(t, []uint32{999}, filter.ClientData)
 }

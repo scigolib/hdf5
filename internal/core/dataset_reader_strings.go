@@ -24,8 +24,16 @@ func ReadDatasetStrings(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]
 // ReadStrings reads every element of a string dataset. Fixed-length strings
 // are decoded; variable-length strings are reported as unsupported here (the
 // vlen reader handles them).
+//
+// An array of strings reads as its strings flattened in C order, array
+// dimensions innermost (flattenArray), as for numeric arrays.
 func ReadStrings(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, limit uint64) ([]string, error) {
-	if !desc.datatype.IsString() {
+	base, count, err := flattenArray(desc.datatype)
+	if err != nil {
+		return nil, err
+	}
+
+	if !base.IsString() {
 		return nil, fmt.Errorf("datatype is not string: %s", desc.datatype)
 	}
 
@@ -33,12 +41,18 @@ func ReadStrings(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, limit u
 		return []string{}, nil
 	}
 
-	rawData, err := readRawData(r, sb, desc, ResultString, limit)
+	// No overflow: count is at most the array's 32-bit size.
+	rawData, err := readRawData(r, sb, desc, ResultString*count, limit)
 	if err != nil {
 		return nil, err
 	}
 
-	return convertToStrings(rawData, desc.datatype, desc.nelmts)
+	values, err := utils.SafeMultiply(desc.nelmts, count)
+	if err != nil {
+		return nil, fmt.Errorf("string data size overflow: %w", err)
+	}
+
+	return convertToStrings(rawData, base, values)
 }
 
 // convertToStrings converts raw bytes to string array based on string datatype.

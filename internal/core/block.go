@@ -160,6 +160,16 @@ func readContiguousDatasetData(r io.ReaderAt, sb *Superblock, desc *DatasetDescr
 		return nil, err
 	}
 
+	if efl := desc.ExternalFiles(); efl != nil {
+		// External storage (H5D__efl_readvv, H5Defl.c:530): the size passed
+		// the read limit above, as nothing in the files bounds it.
+		data := make([]byte, dataSize)
+		if _, err := efl.Reader(sb.ExternalFiles).ReadAt(data, 0); err != nil {
+			return nil, err
+		}
+		return data, nil
+	}
+
 	if !desc.ContiguousAllocated() {
 		data := make([]byte, dataSize)
 		if err := desc.FillUnallocated(data); err != nil {

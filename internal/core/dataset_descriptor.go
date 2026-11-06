@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 
 	"github.com/scigolib/hdf5/internal/utils"
 )
@@ -31,6 +32,10 @@ type DatasetDescriptor struct {
 	dataspace      *DataspaceMessage
 	layout         *DataLayoutMessage
 	filterPipeline *FilterPipelineMessage
+
+	// efl is the External File List: the storage lives in external raw data
+	// files instead of the HDF5 file (H5D_LOPS_EFL); nil for other datasets.
+	efl *ExternalFileList
 
 	// fill is the fill value message 0x0005, else 0x0004, else the default
 	// (H5Dint.c:1779-1829); never nil.
@@ -109,7 +114,12 @@ func NewDatasetDescriptor(r io.ReaderAt, header *ObjectHeader, sb *Superblock) (
 		return nil, fmt.Errorf("failed to parse fill value: %w", err)
 	}
 
-	d, err := newDatasetDescriptor(r, sb, datatype, dataspace, layout, pipeline)
+	efl, err := parseExternalFileMessage(r, sb, msgs.efl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse external file list: %w", err)
+	}
+
+	d, err := buildDatasetDescriptor(r, sb, datatype, dataspace, layout, pipeline, efl)
 	if err != nil {
 		return nil, err
 	}
@@ -146,6 +156,7 @@ func parseFillMessages(r io.ReaderAt, sb *Superblock, msgs *datasetMessages, dat
 type datasetMessages struct {
 	datatype, dataspace, layout, pipeline *HeaderMessage
 	fillNew, fillOld                      *HeaderMessage
+	efl                                   *HeaderMessage
 }
 
 // findDatasetMessages picks the first message of each dataset type and
@@ -167,6 +178,8 @@ func findDatasetMessages(header *ObjectHeader) (*datasetMessages, error) {
 			m.fillNew = firstMessage(m.fillNew, msg)
 		case MsgFillValueOld:
 			m.fillOld = firstMessage(m.fillOld, msg)
+		case MsgExternalFiles:
+			m.efl = firstMessage(m.efl, msg)
 		}
 	}
 
@@ -192,16 +205,32 @@ func firstMessage(found, msg *HeaderMessage) *HeaderMessage {
 	return msg
 }
 
-// newDatasetDescriptor validates parsed messages and builds the descriptor. It
-// is separate from NewDatasetDescriptor so tests can exercise the validation on
-// hand-built messages.
-func newDatasetDescriptor(
+// parseExternalFileMessage parses the External File List message of a
+// dataset, nil when the header has none. The list is used whenever the
+// header has one (H5Dlayout.c:455-469).
+func parseExternalFileMessage(r io.ReaderAt, sb *Superblock, msg *HeaderMessage) (*ExternalFileList, error) {
+	if msg == nil {
+		return nil, nil //nolint:nilnil // No message: no external storage, not an error.
+	}
+
+	body, err := messageBody(r, sb, msg)
+	if err != nil {
+		return nil, err
+	}
+
+	return ParseExternalFileList(r, sb, body)
+}
+
+// buildDatasetDescriptor validates parsed messages, including an External
+// File List when efl is not nil, and builds the descriptor.
+func buildDatasetDescriptor(
 	r io.ReaderAt,
 	sb *Superblock,
 	datatype *DatatypeMessage,
 	dataspace *DataspaceMessage,
 	layout *DataLayoutMessage,
 	pipeline *FilterPipelineMessage,
+	efl *ExternalFileList,
 ) (*DatasetDescriptor, error) {
 	if datatype == nil || dataspace == nil || layout == nil {
 		return nil, fmt.Errorf("%w: dataset descriptor needs datatype, dataspace and layout", utils.ErrCorrupt)
@@ -233,22 +262,27 @@ func newDatasetDescriptor(
 		dataspace:      dataspace,
 		layout:         layout,
 		filterPipeline: pipeline,
+		efl:            efl,
 		fill:           defaultFillValue(layout.Class),
 		nelmts:         nelmts,
 		elemSize:       elemSize,
 		dataBytes:      dataBytes,
 	}
 
-	switch layout.Class {
-	case LayoutContiguous:
+	switch {
+	case efl != nil:
+		// C runs the EFL init callback instead of the layout's own
+		// (H5Dlayout.c:469, H5D__efl_init).
+		err = d.validateExternal()
+	case layout.Class == LayoutContiguous:
 		err = d.validateContiguous(r, sb)
-	case LayoutCompact:
+	case layout.Class == LayoutCompact:
 		err = d.validateCompact()
-	case LayoutChunked:
+	case layout.Class == LayoutChunked:
 		if err = d.validateChunked(); err != nil {
 			err = fmt.Errorf("chunked layout (index at 0x%X): %w", layout.DataAddress, err)
 		}
-	case LayoutVirtual:
+	case layout.Class == LayoutVirtual:
 		err = fmt.Errorf("virtual dataset layout: %w", utils.ErrNotSupported)
 	default:
 		err = fmt.Errorf("%w: unknown layout class %d", utils.ErrCorrupt, layout.Class)
@@ -300,6 +334,36 @@ func (d *DatasetDescriptor) validateContiguous(r io.ReaderAt, sb *Superblock) er
 
 	if _, err := contigDataSize(r, sb, d.layout.DataAddress, d.nelmts, d.elemSize, "contiguous dataset storage"); err != nil {
 		return fmt.Errorf("%w: %w", utils.ErrCorrupt, err)
+	}
+
+	return nil
+}
+
+// validateExternal mirrors H5D__efl_init (H5Defl.c:177-217): the dataset's
+// nelmts × dt_size bytes must fit in the external storage, whose total size
+// must not overflow (H5O_efl_total_size); violations wrap utils.ErrCorrupt.
+// The layout's own address is ignored, as C ignores it.
+//
+// Deviation, stricter: C uses the external files whatever the layout class
+// (H5Dlayout.c:455-469), but its writer only creates them for contiguous
+// datasets (H5Pset_external makes the layout contiguous). An External File
+// List on any other layout is refused here as corrupt.
+func (d *DatasetDescriptor) validateExternal() error {
+	if d.layout.Class != LayoutContiguous {
+		return fmt.Errorf("%w: external file list on a dataset with layout class %d, not contiguous",
+			utils.ErrCorrupt, d.layout.Class)
+	}
+	if len(d.efl.Slots) == 0 {
+		return fmt.Errorf("%w: external file list has no slots in use", utils.ErrCorrupt)
+	}
+
+	total, err := d.efl.TotalSize()
+	if err != nil {
+		return err
+	}
+	if total != ExternalUnlimited && d.dataBytes > total {
+		return fmt.Errorf("%w: dataspace size %d exceeds external storage size %d (H5Defl.c:211-212)",
+			utils.ErrCorrupt, d.dataBytes, total)
 	}
 
 	return nil
@@ -392,10 +456,17 @@ func (d *DatasetDescriptor) FilterPipeline() *FilterPipelineMessage { return d.f
 
 // ContiguousAllocated reports whether the dataset is contiguous with storage
 // in the file; false for unallocated contiguous storage, which reads as the
-// fill value (FillUnallocated). Other layouts report true.
+// fill value (FillUnallocated). Other layouts report true, and so does
+// external storage, which C always treats as allocated
+// (H5D__efl_is_space_alloc, H5Defl.c:227-236).
 func (d *DatasetDescriptor) ContiguousAllocated() bool {
-	return d.layout.Class != LayoutContiguous || d.layout.DataAddress != undefinedAddress
+	return d.efl != nil || d.layout.Class != LayoutContiguous || d.layout.DataAddress != undefinedAddress
 }
+
+// ExternalFiles returns the dataset's External File List, or nil when its
+// storage is in the HDF5 file. Such a dataset is read through
+// ExternalFileList.Reader, never at the layout's address.
+func (d *DatasetDescriptor) ExternalFiles() *ExternalFileList { return d.efl }
 
 // Dims returns the dataspace dimensions (empty for scalar and null dataspaces).
 func (d *DatasetDescriptor) Dims() []uint64 { return d.dataspace.Dimensions }
@@ -492,7 +563,36 @@ func (d *DatasetDescriptor) CollectChunks(r io.ReaderAt, sb *Superblock) ([]Chun
 		}
 	}
 
+	if err := checkDistinctChunks(chunks); err != nil {
+		return nil, err
+	}
+
 	return chunks, nil
+}
+
+// checkDistinctChunks refuses an index that lists one chunk twice. The keys of
+// a chunk B-tree are strictly increasing: C finds a chunk by comparing its
+// offset with the keys around it (H5D__btree_cmp3, H5Dbtree.c:324-360), so a
+// coordinate has one entry at most. A duplicate would let the readers count a
+// chunk twice and decide that no chunk is missing, reading a never-written
+// chunk as zeros instead of the fill value (review-068 finding 3).
+//
+// Deviation, stricter: C does not check this on read; a lookup returns
+// whichever duplicate it reaches. Here it is utils.ErrCorrupt.
+func checkDistinctChunks(chunks []ChunkEntry) error {
+	keys := make([][]uint64, len(chunks))
+	for i := range chunks {
+		keys[i] = chunks[i].Key.Scaled
+	}
+	slices.SortFunc(keys, slices.Compare[[]uint64])
+
+	for i := 1; i < len(keys); i++ {
+		if slices.Equal(keys[i-1], keys[i]) {
+			return fmt.Errorf("%w: chunk B-tree lists the chunk at %v more than once", utils.ErrCorrupt, keys[i])
+		}
+	}
+
+	return nil
 }
 
 // ChunkBytes returns the byte size of one chunk (the product of the chunk
@@ -549,8 +649,10 @@ func (d *DatasetDescriptor) ResultSize(nelmts, resultElemSize, limit uint64) (in
 
 	// Unallocated contiguous storage was not checked against the file
 	// (H5Dcontig.c:399): it reads as the fill value, so like chunked data its
-	// size is bounded by nothing in the file, only by the read limit.
-	limited := d.layout.Class == LayoutChunked || !d.ContiguousAllocated() ||
+	// size is bounded by nothing in the file, only by the read limit. External
+	// storage is not in the file either, and bytes past the end of an external
+	// file read as zeros (H5Defl.c:376-381), so the files bound nothing.
+	limited := d.layout.Class == LayoutChunked || !d.ContiguousAllocated() || d.efl != nil ||
 		converted/maxFreeConversion > size
 	if limited && needed > limit {
 		return 0, fmt.Errorf("%w: reading %d elements needs %d bytes, more than the read limit of %d bytes; "+
@@ -627,15 +729,20 @@ func memberResultSize(dt *DatatypeMessage) uint64 {
 	case dt.Class == DatatypeArray && dt.Base != nil:
 		// A slice header plus one slot per element: a typed numeric slice costs
 		// at most 8 bytes per element, an []interface{} 16 plus the element's
-		// own value. Count is bounded by the 32-bit array size, so the product
-		// below cannot overflow uint64.
+		// own value. Count is capped by the 32-bit array size (each element
+		// takes at least one byte; decoding rejects a mismatch), so the
+		// product below cannot overflow uint64; the dimension product itself
+		// saturates instead of wrapping.
 		count := uint64(1)
 		for _, d := range dt.ArrayDims {
-			count *= uint64(d)
+			var err error
+			if count, err = utils.SafeMultiply(count, uint64(d)); err != nil {
+				count = math.MaxUint64
+				break
+			}
 		}
-		if dt.Base.Size > 0 && count > uint64(dt.Size)/uint64(dt.Base.Size) {
-			count = uint64(dt.Size) / uint64(dt.Base.Size) // Decoding rejects the mismatch.
-		}
+		perElem := max(uint64(dt.Base.Size), 1)
+		count = min(count, uint64(dt.Size)/perElem)
 		return compoundSlice + count*(compoundIface+memberResultSize(dt.Base))
 	default:
 		return compoundBoxed

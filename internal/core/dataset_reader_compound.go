@@ -45,12 +45,20 @@ func ReadDatasetCompound(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([
 // cost far more than their raw bytes, so their estimated size
 // (CompoundResultSize) is checked against the read limit for every layout,
 // and variable-length members are dereferenced under the same limit.
+//
+// An array of compounds reads as its records flattened in C order, array
+// dimensions innermost (flattenArray), one map per record.
 func ReadCompound(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, limit uint64) ([]CompoundValue, error) {
-	if !desc.datatype.IsCompound() {
+	base, count, err := flattenArray(desc.datatype)
+	if err != nil {
+		return nil, err
+	}
+
+	if !base.IsCompound() {
 		return nil, errors.New("not a compound datatype")
 	}
 
-	compoundType, err := ParseCompoundType(desc.datatype)
+	compoundType, err := ParseCompoundType(base)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse compound type: %w", err)
 	}
@@ -59,12 +67,23 @@ func ReadCompound(r io.ReaderAt, sb *Superblock, desc *DatasetDescriptor, limit 
 		return []CompoundValue{}, nil
 	}
 
-	rawData, err := readRawData(r, sb, desc, CompoundResultSize(compoundType), limit)
+	// A product that overflows is certainly over any limit.
+	resultElemSize, err := utils.SafeMultiply(CompoundResultSize(compoundType), count)
+	if err != nil {
+		resultElemSize = math.MaxUint64
+	}
+
+	rawData, err := readRawData(r, sb, desc, resultElemSize, limit)
 	if err != nil {
 		return nil, err
 	}
 
-	return parseCompoundDataWith(rawData, compoundType, desc.nelmts, newHeapReader(r, sb, limit))
+	records, err := utils.SafeMultiply(desc.nelmts, count)
+	if err != nil {
+		return nil, fmt.Errorf("compound data size overflow: %w", err)
+	}
+
+	return parseCompoundDataWith(rawData, compoundType, records, newHeapReader(r, sb, limit))
 }
 
 // parseCompoundData parses raw bytes into array of compound values, with the

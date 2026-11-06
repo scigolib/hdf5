@@ -53,18 +53,58 @@ type Filter struct {
 	ClientData    []uint32
 }
 
-// ParseFilterPipelineMessage parses filter pipeline message (type 0x000B).
+// Filter pipeline message constants (H5Opline.c, H5Zpublic.h).
+const (
+	pipelineVersion1 uint8 = 1 // H5O_PLINE_VERSION_1: padded names and client data.
+	pipelineVersion2 uint8 = 2 // H5O_PLINE_VERSION_2: no padding, names only for id >= 256.
+
+	// maxPipelineFilters is H5Z_MAX_NFILTERS (H5Zpublic.h:111).
+	maxPipelineFilters = 32
+
+	// filterReserved is H5Z_FILTER_RESERVED (H5Zpublic.h:93): filters below it
+	// are the library's own, and a version 2 message stores no name for them.
+	filterReserved FilterID = 256
+)
+
+// ParseFilterPipelineMessage decodes a filter pipeline message (type 0x000B)
+// as H5O__pline_decode does (H5Opline.c:109-255):
+//
+//	version 1: version, filter count, 6 reserved bytes; per filter: id, name
+//	           length (a multiple of 8, the padded name), flags, client data
+//	           count, the name, the client data and 4 bytes of padding after
+//	           an odd count;
+//	version 2: version, filter count; per filter: id, a name length only when
+//	           id >= 256 (H5Z_FILTER_RESERVED), flags, client data count, the
+//	           name unpadded, the client data unpadded.
+//
+// Every bound C checks is checked; a violation wraps utils.ErrCorrupt.
+// The name is read up to its NUL terminator, which must lie in the message
+// (H5Opline.c:192-197).
 func ParseFilterPipelineMessage(data []byte) (*FilterPipelineMessage, error) {
-	if len(data) < 2 {
-		return nil, errors.New("filter pipeline message too short")
+	c := pipelineCursor{data: data}
+
+	version, err := c.u8()
+	if err != nil {
+		return nil, err
+	}
+	if version < pipelineVersion1 || version > pipelineVersion2 {
+		return nil, fmt.Errorf("%w: bad version number %d for filter pipeline message (H5Opline.c:133)",
+			utils.ErrCorrupt, version)
 	}
 
-	version := data[0]
-	numFilters := data[1]
+	numFilters, err := c.u8()
+	if err != nil {
+		return nil, err
+	}
+	if numFilters > maxPipelineFilters {
+		return nil, fmt.Errorf("%w: filter pipeline message has %d filters, more than %d (H5Opline.c:139-147)",
+			utils.ErrCorrupt, numFilters, maxPipelineFilters)
+	}
 
-	// Support version 1 and 2.
-	if version < 1 || version > 2 {
-		return nil, fmt.Errorf("unsupported filter pipeline version: %d", version)
+	if version == pipelineVersion1 {
+		if err := c.skip(6); err != nil { // Reserved.
+			return nil, err
+		}
 	}
 
 	pipeline := &FilterPipelineMessage{
@@ -73,98 +113,117 @@ func ParseFilterPipelineMessage(data []byte) (*FilterPipelineMessage, error) {
 		Filters:    make([]Filter, 0, numFilters),
 	}
 
-	offset := 2
-
-	// Version 1 has 6 bytes reserved after num filters.
-	if version == 1 {
-		offset += 6
-	}
-
-	// Parse each filter.
 	for i := uint8(0); i < numFilters; i++ {
-		if offset+8 > len(data) {
-			return nil, fmt.Errorf("filter pipeline truncated at filter %d", i)
+		filter, err := c.filter(version)
+		if err != nil {
+			return nil, fmt.Errorf("filter %d: %w", i, err)
 		}
-
-		filter := Filter{}
-
-		// Filter ID (2 bytes).
-		filter.ID = FilterID(binary.LittleEndian.Uint16(data[offset : offset+2]))
-		offset += 2
-
-		// Name length (2 bytes) - for version 1, optional.
-		var nameLength uint16
-		if version == 1 {
-			nameLength = binary.LittleEndian.Uint16(data[offset : offset+2])
-			offset += 2
-		}
-		filter.NameLength = nameLength
-
-		// Flags (2 bytes).
-		filter.Flags = binary.LittleEndian.Uint16(data[offset : offset+2])
-		offset += 2
-
-		// Number of client data values (2 bytes).
-		filter.NumClientData = binary.LittleEndian.Uint16(data[offset : offset+2])
-		offset += 2
-
-		// Filter name (variable length, only in version 1).
-		if version == 1 && nameLength > 0 {
-			// Name is null-terminated and padded to 8-byte boundary.
-			//
-			// The padded length is computed in int on purpose: nameLength is a
-			// uint16 from the file, and 65535 rounds up to 65536, which does not
-			// fit in uint16. A wrapped zero would pass the bounds check below
-			// and the name slice would run past the message.
-			padded := int(nameLength)
-			if padded%8 != 0 {
-				padded += 8 - (padded % 8)
-			}
-
-			if offset+padded > len(data) {
-				return nil, fmt.Errorf("filter name truncated at filter %d", i)
-			}
-
-			// Extract name (up to first null).
-			nameBytes := data[offset : offset+int(nameLength)]
-			for idx, b := range nameBytes {
-				if b == 0 {
-					filter.Name = string(nameBytes[:idx])
-					break
-				}
-			}
-			if filter.Name == "" {
-				filter.Name = string(nameBytes)
-			}
-
-			offset += padded
-		}
-
-		// Client data (array of uint32).
-		if filter.NumClientData > 0 {
-			dataSize := int(filter.NumClientData) * 4
-			if offset+dataSize > len(data) {
-				return nil, fmt.Errorf("filter client data truncated at filter %d", i)
-			}
-
-			filter.ClientData = make([]uint32, filter.NumClientData)
-			for j := uint16(0); j < filter.NumClientData; j++ {
-				filter.ClientData[j] = binary.LittleEndian.Uint32(data[offset : offset+4])
-				offset += 4
-			}
-
-			// Version 1: client data is padded to 8-byte boundary.
-			if version == 1 {
-				if dataSize%8 != 0 {
-					offset += 8 - (dataSize % 8)
-				}
-			}
-		}
-
 		pipeline.Filters = append(pipeline.Filters, filter)
 	}
 
 	return pipeline, nil
+}
+
+// pipelineCursor reads a filter pipeline message with C's bounds checks
+// (H5_IS_BUFFER_OVERFLOW before every field).
+type pipelineCursor struct {
+	data []byte
+	off  int
+}
+
+// overflow is C's "ran off end of input buffer while decoding".
+func (c *pipelineCursor) overflow(n int) error {
+	return fmt.Errorf("%w: filter pipeline message ran off the end of its %d bytes reading %d bytes at %d",
+		utils.ErrCorrupt, len(c.data), n, c.off)
+}
+
+func (c *pipelineCursor) skip(n int) error {
+	if n > len(c.data)-c.off {
+		return c.overflow(n)
+	}
+	c.off += n
+	return nil
+}
+
+func (c *pipelineCursor) u8() (uint8, error) {
+	if err := c.skip(1); err != nil {
+		return 0, err
+	}
+	return c.data[c.off-1], nil
+}
+
+func (c *pipelineCursor) u16() (uint16, error) {
+	if err := c.skip(2); err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint16(c.data[c.off-2:]), nil
+}
+
+func (c *pipelineCursor) u32() (uint32, error) {
+	if err := c.skip(4); err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint32(c.data[c.off-4:]), nil
+}
+
+// filter decodes one filter description (H5Opline.c:166-241).
+func (c *pipelineCursor) filter(version uint8) (Filter, error) {
+	var f Filter
+
+	id, err := c.u16()
+	if err != nil {
+		return f, err
+	}
+	f.ID = FilterID(id)
+
+	if version == pipelineVersion1 || f.ID >= filterReserved {
+		if f.NameLength, err = c.u16(); err != nil {
+			return f, err
+		}
+		if version == pipelineVersion1 && f.NameLength%8 != 0 {
+			return f, fmt.Errorf("%w: filter name length %d is not a multiple of eight (H5Opline.c:175-176)",
+				utils.ErrCorrupt, f.NameLength)
+		}
+	}
+
+	if f.Flags, err = c.u16(); err != nil {
+		return f, err
+	}
+	if f.NumClientData, err = c.u16(); err != nil {
+		return f, err
+	}
+
+	if f.NameLength > 0 {
+		rest := c.data[c.off:]
+		end := bytes.IndexByte(rest, 0)
+		if end < 0 {
+			return f, fmt.Errorf("%w: filter name not null terminated (H5Opline.c:196-197)", utils.ErrCorrupt)
+		}
+		f.Name = string(rest[:end])
+		if err := c.skip(int(f.NameLength)); err != nil {
+			return f, err
+		}
+	}
+
+	if f.NumClientData > 0 {
+		// Bounded by the message before allocating: each value takes 4 bytes.
+		if int(f.NumClientData) > (len(c.data)-c.off)/4 {
+			return f, c.overflow(int(f.NumClientData) * 4)
+		}
+		f.ClientData = make([]uint32, f.NumClientData)
+		for j := range f.ClientData {
+			if f.ClientData[j], err = c.u32(); err != nil {
+				return f, err
+			}
+		}
+		if version == pipelineVersion1 && f.NumClientData%2 != 0 {
+			if err := c.skip(4); err != nil { // Padding (H5Opline.c:235-241).
+				return f, err
+			}
+		}
+	}
+
+	return f, nil
 }
 
 // ApplyFilters applies filter pipeline to decompress/decode chunk data.
@@ -386,20 +445,72 @@ func applyShuffle(data []byte, clientData []uint32) ([]byte, error) {
 	return result, nil
 }
 
-// applyFletcher32 verifies and strips Fletcher32 checksum.
+// applyFletcher32 verifies and strips the Fletcher32 checksum of a chunk, as
+// H5Z__filter_fletcher32 does on read (H5Zfletcher32.c:64-104): the last 4
+// bytes are the checksum, little-endian (UINT32DECODE), of the bytes before
+// them. C accepts the checksum and its pre-1.6.3 variant, whose bytes are
+// swapped within each 16-bit half (the "reversed" checksum, H5Zfletcher32.c:
+// 79-95), so files written by HDF5 1.6.2 and earlier still read. A mismatch,
+// or a chunk too short to hold a checksum, wraps utils.ErrCorrupt ("data
+// error detected by Fletcher32 checksum").
+//
+// C skips the check when error detection is disabled for the transfer
+// (H5Pset_edc_check, H5Z_FLAG_SKIP_EDC); this library has no such switch and
+// always verifies.
 func applyFletcher32(data []byte) ([]byte, error) {
-	if len(data) < 4 {
-		return nil, errors.New("data too short for Fletcher32 checksum")
+	if len(data) < fletcherLen {
+		return nil, fmt.Errorf("%w: %d bytes cannot hold a Fletcher32 checksum", utils.ErrCorrupt, len(data))
 	}
 
-	// Fletcher32 checksum is appended at the end (4 bytes).
-	// Checksum verification deferred to v0.11.0-RC (feature-complete release).
-	// Current implementation strips checksum without validation.
-	// In practice, file system and HDF5 library corruption is extremely rare.
-	// For production use, consider external file integrity checks (SHA256, etc.).
-	// Reference: https://docs.hdfgroup.org/hdf5/latest/group___h5_z.html
-	// Target version: v0.11.0-RC (comprehensive data integrity features)
-	return data[:len(data)-4], nil
+	n := len(data) - fletcherLen
+	stored := binary.LittleEndian.Uint32(data[n:])
+	sum := fletcher32(data[:n])
+	reversed := (sum&0x00FF00FF)<<8 | (sum&0xFF00FF00)>>8
+
+	if stored != sum && stored != reversed {
+		return nil, fmt.Errorf("%w: data error detected by Fletcher32 checksum: stored 0x%08X, computed 0x%08X",
+			utils.ErrCorrupt, stored, sum)
+	}
+
+	return data[:n], nil
+}
+
+// fletcherLen is FLETCHER_LEN, the size of the stored checksum
+// (H5Zfletcher32.c).
+const fletcherLen = 4
+
+// fletcher32 is H5_checksum_fletcher32 (H5checksum.c:94-136): 16-bit words
+// read big-endian, an odd last byte as the high half of a word, both sums
+// folded to 16 bits after every 360 words (the most that cannot overflow) and
+// once more at the end. The folding keeps 0xFFFF where a modulo would give 0;
+// the result must match C bit for bit.
+func fletcher32(data []byte) uint32 {
+	var sum1, sum2 uint32
+
+	p := data
+	for words := len(data) / 2; words > 0; {
+		block := min(words, 360)
+		words -= block
+		for ; block > 0; block-- {
+			sum1 += uint32(p[0])<<8 | uint32(p[1])
+			p = p[2:]
+			sum2 += sum1
+		}
+		sum1 = sum1&0xFFFF + sum1>>16
+		sum2 = sum2&0xFFFF + sum2>>16
+	}
+
+	if len(data)%2 == 1 {
+		sum1 += uint32(p[0]) << 8
+		sum2 += sum1
+		sum1 = sum1&0xFFFF + sum1>>16
+		sum2 = sum2&0xFFFF + sum2>>16
+	}
+
+	sum1 = sum1&0xFFFF + sum1>>16
+	sum2 = sum2&0xFFFF + sum2>>16
+
+	return sum2<<16 | sum1
 }
 
 // applyBZIP2 decompresses BZIP2-compressed data.
