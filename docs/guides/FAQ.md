@@ -152,7 +152,26 @@ arrDs, _ := fw.CreateDataset("/arrays", hdf5.ArrayFloat32, []uint64{10},
 
 enumDs, _ := fw.CreateDataset("/status", hdf5.EnumInt8, []uint64{5},
     hdf5.WithEnumValues([]string{"OK", "ERROR"}, []int64{0, 1}))
+
+// Delete a group and everything only it links to (as H5Ldelete does)
+fw.Delete("/experiments")
 ```
+
+A file can start with a user block for the application's own header, as `H5Pset_userblock` makes it
+in the C library (a MATLAB v7.3 file keeps its MAT header there):
+
+```go
+fw, err := hdf5.CreateForWrite("data.mat", hdf5.CreateTruncate, hdf5.WithUserBlock(512))
+if err != nil {
+    log.Fatal(err)
+}
+defer fw.Close()
+if err := fw.WriteUserBlock(header); err != nil { // up to 512 bytes; the rest stays zero
+    log.Fatal(err)
+}
+```
+
+`OpenForWrite` keeps the user block of an existing file untouched.
 
 **Current limitations**:
 - Some advanced filters

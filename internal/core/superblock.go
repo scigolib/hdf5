@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/scigolib/hdf5/internal/utils"
 )
@@ -565,8 +566,14 @@ func validateStoredBaseAddress(stored, size uint64, sizeKnown bool) error {
 //	Bytes 44-47: Superblock Checksum (CRC32)
 //
 // Parameters:
-//   - w: Writer (typically a FileWriter)
-//   - eofAddress: Current end-of-file address
+//   - w: Writer (typically a FileWriter), addressed relative to the base
+//     address: the superblock goes at its address 0
+//   - eofAddress: Current end-of-file address, relative to the base address
+//     (the allocator's end)
+//
+// The stored End-of-File Address is absolute: eofAddress plus the base
+// address, as the C library encodes rel_eof + base_addr
+// (H5Fsuper_cache.c:715, 749). Without a user block the two are the same.
 //
 // Returns error if write fails or if superblock version is not supported.
 func (sb *Superblock) WriteTo(w io.WriterAt, eofAddress uint64) error {
@@ -575,6 +582,10 @@ func (sb *Superblock) WriteTo(w io.WriterAt, eofAddress uint64) error {
 	if sb.Version != Version0 && sb.Version != Version2 && sb.Version != Version3 {
 		return fmt.Errorf("only superblock version 0, 2, and 3 are supported for writing, got version %d", sb.Version)
 	}
+	if eofAddress > math.MaxUint64-sb.BaseAddress {
+		return fmt.Errorf("end of file %d with base address %d overflows the address range", eofAddress, sb.BaseAddress)
+	}
+	eofAddress += sb.BaseAddress
 
 	// Dispatch to version-specific writer
 	switch sb.Version {

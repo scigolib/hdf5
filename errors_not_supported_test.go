@@ -1,8 +1,6 @@
 package hdf5
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -12,20 +10,6 @@ import (
 // so a caller must be able to tell them from damage with errors.Is
 // (ErrNotSupported, errors.go). Red before the v0.14.3 polish: each was a
 // plain errors.New/fmt.Errorf text that wrapped no sentinel.
-
-// TestNotSupported_OpenForWriteUserBlock: a file with a user block (a valid
-// HDF5 layout, the C library writes it with H5Pset_userblock) cannot be
-// opened for writing yet.
-func TestNotSupported_OpenForWriteUserBlock(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "twithub.h5")
-	data, err := os.ReadFile("testdata/hdf5_official/twithub.h5")
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(target, data, 0o600))
-
-	_, err = OpenForWrite(target, OpenReadWrite)
-	require.ErrorIs(t, err, ErrNotSupported)
-	require.NotErrorIs(t, err, ErrCorrupt)
-}
 
 // TestNotSupported_CommittedDatatypeData: the data of a dataset whose
 // datatype is committed (h5copytst_new.h5 /named_vl uses "/vl") cannot be

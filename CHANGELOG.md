@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- User blocks, as `H5Pset_userblock` writes them in the C library: `WithUserBlock(size)` reserves a
+  zeroed block of `size` bytes (0, or a power of two of at least 512) at the start of a new file, and
+  `FileWriter.WriteUserBlock(data)` writes the application's own header into it. A MATLAB v7.3 file,
+  for example, keeps its 128-byte MAT header there. The HDF5 data follows the block, every address is
+  relative to it, and h5dump, h5jam and h5unjam read the result.
+- `OpenForWrite` opens files with a user block (v0.14.3 refused them). The block is never touched;
+  `WithUserBlock` given to `OpenForWrite` must name the file's own size.
+
 ### Changed
 
 - `FileWriter.Delete` of a group that still has links deletes the group and everything only it links to,
@@ -20,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `OpenForWrite` refused a valid file holding a user-defined link (link types 64 to 255 other than
+  external links) as corrupt. Such links are now read as the C library reads them, kept unchanged, and
+  name no object.
 - Freeing a block of file space that overlaps space already free, or passes the end of the file, is
   refused, so a crafted file whose structures share space can no longer put overlapping blocks on the
   free list.

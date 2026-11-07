@@ -41,7 +41,7 @@ func TestWriteCov_InitializeFileWriter_InvalidMode(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "invalid_mode.h5")
 
-	_, err := initializeFileWriter(filename, CreateMode(999), 48)
+	_, err := initializeFileWriter(filename, CreateMode(999), 48, 0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid create mode")
 }
