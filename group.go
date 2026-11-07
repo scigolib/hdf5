@@ -182,7 +182,8 @@ func (d *Dataset) Read() ([]float64, error) {
 
 // ReadStrings reads string dataset values and returns them as string array.
 // Supports fixed-length strings (null-terminated, null-padded, space-padded).
-// Variable-length strings are not yet supported.
+// Variable-length strings are not read here: ReadVLenBytes returns each
+// one's bytes (string(b) gives the Go string).
 func (d *Dataset) ReadStrings() ([]string, error) {
 	desc, err := d.descriptor()
 	if err != nil {

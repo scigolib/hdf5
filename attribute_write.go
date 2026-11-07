@@ -49,10 +49,11 @@ const (
 //	ds.WriteAttribute("calibration", []float64{1.0, 0.0})
 //	ds.WriteAttribute("topics", []string{"camera", "lidar", "imu"})
 //
+// Writing a name the dataset already has replaces that attribute's value;
+// DeleteAttribute removes one.
+//
 // Limitations:
 //   - No compound types
-//   - Attributes cannot be modified after creation (write-once)
-//   - No attribute deletion
 func (ds *DatasetWriter) WriteAttribute(name string, value interface{}) error {
 	// The header is read from the file on every call: an earlier attribute
 	// call of this session may have changed it.

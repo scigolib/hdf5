@@ -71,10 +71,11 @@ type GroupWriter struct {
 //	group.WriteAttribute("description", "Temperature measurements")
 //	group.WriteAttribute("topics", []string{"camera", "lidar", "imu"})
 //
+// Writing a name the group already has replaces that attribute's value;
+// DeleteAttribute removes one.
+//
 // Limitations:
 //   - No compound types
-//   - Attributes cannot be modified after creation (write-once)
-//   - No attribute deletion
 func (g *GroupWriter) WriteAttribute(name string, value interface{}) error {
 	// Delegate to existing attribute writing infrastructure
 	// This reuses the same code path as DatasetWriter.WriteAttribute
