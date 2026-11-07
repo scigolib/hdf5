@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.15.0] - 2026-11-07
+
+This release adds user blocks, so files can carry an application header in front of the HDF5 data
+(a MATLAB v7.3 file keeps its MAT header there), and deletes groups together with what only they link
+to, as the C library does. It also fixes a v0.14.3 bug that could leave a file the C library refuses
+to open (see **Fixed**). No API was removed or changed its signature; one behaviour changed on purpose:
+`Delete` of a group that still has links now deletes it (see **Changed** for what to check).
+
 ### Added
 
 - User blocks, as `H5Pset_userblock` writes them in the C library: `WithUserBlock(size)` reserves a
@@ -29,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its count lowered. This works for all three forms a group keeps its links in (a symbol table, link
   messages, dense link storage), and the bytes freed match h5stat. A tree whose objects are named by
   more links than their reference counts is refused as `ErrCorrupt`, before anything is written.
+  **Upgrading**: code that relied on the refusal to keep a group's children safe must now check that
+  the group is empty before it calls `Delete`.
 - Documentation: README, the guides, the architecture overview and the rebalancing examples were
   checked against the code. Examples that did not compile were fixed, claims nobody measured were
   removed, and `WithSmartRebalancing` is now documented as what it has always been: a planned mode that
@@ -2269,4 +2279,4 @@ See [ROADMAP.md](ROADMAP.md) for detailed future plans:
 
 ---
 
-*Last Updated: 2026-10-21*
+*Last Updated: 2026-11-07*
