@@ -18,29 +18,34 @@ versions of this library keep reading; see **Files written by earlier versions**
 
 ### Security
 
+Advisory: [GHSA-8p77-6v32-rwf3](https://github.com/scigolib/hdf5/security/advisories/GHSA-8p77-6v32-rwf3)
+(incomplete fix for GHSA-8p88-h28q-w6m9; versions before 0.14.3).
+
 Crafted files could make the library allocate, read or loop far beyond the size of the file. v0.14.2 bounded
-whole-dataset reads; this release closes the same class of bug on every other path found:
+whole-dataset reads; this release closes the same class of bug on the other paths of earlier versions:
 
 - **Hyperslab reads (#75).** `ReadSlice` sized its buffer before any check: one changed byte in a 5,656-byte
   file made a 12-value read request 40.9 GB and abort the process. Every reader now works from one validated
   dataset descriptor, built once per dataset as the C library validates storage when it opens a dataset.
-- **Chunk indexes and group B-trees.** The v1 B-tree walk checks node levels, visited addresses and entry
-  counts. Every index walk (v1 and v2 B-tree, fixed and extensible array), the group B-tree walk with its
-  symbol table nodes, object header continuations and the fractal heap reader charge one byte budget: a walk
-  never reads more than the file holds. Before, overlapping blocks made a 73 KB file read 8.4 MB, and
-  larger parameters amounted to tens of gigabytes. Listing the chunks of an unallocated index no longer walks
-  its whole grid (a 2^40-chunk dataset hung), and `ChunkIteratorWithContext` honours cancellation inside the
-  walk.
-- **Object header continuations.** A continuation chain that loops back no longer hangs `Open`; a
-  536-byte file was enough.
-- **Decompression and conversion.** Deflate, bzip2 and LZF output is capped at the chunk size;
-  dereferenced variable-length data, compound results and array conversions count against the read limit.
-- **Shared datatypes.** A committed datatype referenced by many attributes is decoded once per file and
-  capped at 16 MiB; before, a 1 MiB file could need about 18 GiB.
-- **External raw data files** are no longer opened by default. A crafted file could name any path, for
-  example a key next to it. Reading them now needs `File.SetExternalFilePrefix`, and names resolve only
-  inside that directory (through `os.OpenRoot`); absolute names, `..` and links leading out are refused.
-  This is stricter than the C library, which opens names as given.
+- **Chunk index walk.** The version 1 B-tree that indexes chunks was walked without checking node levels or
+  visited addresses; a node referring back to itself recursed without bound. The walk now checks levels,
+  visited addresses and entry counts.
+- **Object header continuations.** A continuation chain that loops back was followed forever, allocating as it
+  went: a 536-byte file made `Open` grow to 625 MiB in 3 seconds without returning.
+- **Decompression and conversion.** Deflate and bzip2 output had no limit; deflate, bzip2 and LZF output is now
+  capped at the chunk size. Dereferenced variable-length data and compound results count against the read
+  limit.
+
+Every walk over linked file structures (B-trees of chunk indexes and groups, fixed and extensible arrays, object
+header continuations, fractal heaps) charges one byte budget and reads no more than the file holds; listing the
+chunks of an unallocated index no longer walks its whole grid, and `ChunkIteratorWithContext` honours
+cancellation inside the walk.
+
+The readers that are new in this release are bounded from the start: the HDF5 1.10+ chunk indexes, multi-level
+group B-trees, committed (shared) datatypes (decoded once per file, capped at 16 MiB) and external raw data
+files. External files are not opened by default: reading them needs `File.SetExternalFilePrefix`, and names
+resolve only inside that directory (through `os.OpenRoot`); absolute names, `..` and links leading out are
+refused. This is stricter than the C library, which opens names as given.
 
 Chunked datasets can legitimately be larger than the file (unwritten chunks read as the fill value), so they
 are bounded by a per-file read limit: `File.SetReadLimit` / `File.ReadLimit`, 4 GiB by default (less on
