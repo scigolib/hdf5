@@ -213,7 +213,7 @@ func TestLocalHeapGrowth_DeleteFreesMovedHeap(t *testing.T) {
 	fw.file.sb.Endianness.PutUint64(symTable[0:], meta.btreeAddr)
 	fw.file.sb.Endianness.PutUint64(symTable[8:], meta.heapAddr)
 	rec := &recordingFreer{}
-	require.NoError(t, fw.groupStructureRanges(symTable, fw.file.sb, rec.Free))
+	require.NoError(t, fw.groupStructureRanges(symTable, fw.file.sb, rec.Free, nil))
 
 	require.Contains(t, rec.calls, freeRange{meta.heapAddr, 32})
 	require.Contains(t, rec.calls, freeRange{heap.DataSegmentAddress, heap.DataSegmentSize})

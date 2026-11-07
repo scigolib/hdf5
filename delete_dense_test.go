@@ -363,13 +363,13 @@ func groupLinkInfo(t *testing.T, fw *FileWriter, path string) *core.LinkInfoMess
 	return nil
 }
 
-// TestDelete_NonEmptyLinkGroupsRefused: a group whose links are link
-// messages in its header (/c) or dense link storage (/g) is refused while it
-// has children, before anything is written, and every child stays readable
-// by h5dump and by this library. Red before the change: checkGroupEmpty
-// looked at symbol tables only, so both groups were deleted and their
-// children orphaned.
-func TestDelete_NonEmptyLinkGroupsRefused(t *testing.T) {
+// TestDelete_NonEmptyLinkGroupsWithSharedChildren: a group whose links are
+// link messages in its header (/c) or dense link storage (/g) is deleted
+// with its children, except the children another group also links to: they
+// stay readable by h5dump and by this library. (Before TASK-085 the delete
+// was refused; before that, checkGroupEmpty looked at symbol tables only, so
+// both groups were deleted and their children orphaned.)
+func TestDelete_NonEmptyLinkGroupsWithSharedChildren(t *testing.T) {
 	h5copy := h5tool(t, "h5copy")
 	h5repack := h5tool(t, "h5repack")
 	h5dump := h5tool(t, "h5dump")
@@ -381,37 +381,35 @@ func TestDelete_NonEmptyLinkGroupsRefused(t *testing.T) {
 	require.False(t, linfoC.HasFractalHeap(), "/c is not compact")
 	require.True(t, linfoG.HasFractalHeap(), "/g is not dense")
 
+	// One child of each group is also linked from the root.
+	require.NoError(t, fw.CreateHardLink("/sharedx", "/c/x"))
+	require.NoError(t, fw.CreateHardLink("/sharedd", "/g/d05"))
 	for _, path := range []string{"/c", "/g"} {
-		before := writerBytes(t, fw)
-		free0 := fw.writer.Allocator().FreeBlocks()
-		err := fw.Delete(path)
-		require.Error(t, err, path)
-		require.Contains(t, err.Error(), "non-empty group", path)
-		require.Equal(t, free0, fw.writer.Allocator().FreeBlocks(), "%s: the allocator changed", path)
-		require.True(t, bytes.Equal(before, writerBytes(t, fw)), "%s: the refused delete changed the file", path)
+		require.NoError(t, fw.Delete(path), path)
 	}
 	require.NoError(t, fw.Close())
 
-	out := runH5(t, h5dump, "--enable-error-stack", "-H", file)
-	children := make([]string, 0, 19)
-	children = append(children, "x", "y")
-	for i := range 17 {
-		children = append(children, fmt.Sprintf("d%02d", i))
-	}
-	for _, c := range children {
-		require.Contains(t, out, `DATASET "`+c+`"`)
-	}
+	out := runH5(t, h5dump, "--enable-error-stack", file)
+	require.Contains(t, out, `DATASET "sharedx"`)
+	require.Contains(t, out, `DATASET "sharedd"`)
+	require.NotContains(t, out, `GROUP "c"`)
+	require.NotContains(t, out, `GROUP "g"`)
 
 	f, err := Open(file)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, f.Close()) }()
-	var seen []string
-	f.Walk(func(path string, _ Object) { seen = append(seen, path) })
-	joined := strings.Join(seen, " ")
-	require.Contains(t, joined, "/c/x")
-	require.Contains(t, joined, "/c/y")
-	for i := range 17 {
-		require.Contains(t, joined, fmt.Sprintf("/g/d%02d", i))
+	values := map[string][]float64{}
+	f.Walk(func(path string, obj Object) {
+		if ds, ok := obj.(*Dataset); ok {
+			v, err := ds.Read()
+			require.NoError(t, err, path)
+			values[path] = v
+		}
+	})
+	require.Equal(t, []float64{1, 2}, values["/sharedx"])
+	require.Equal(t, []float64{5, 0}, values["/sharedd"])
+	for path := range values {
+		require.False(t, strings.HasPrefix(path, "/c/") || strings.HasPrefix(path, "/g/"), "%s survived", path)
 	}
 }
 

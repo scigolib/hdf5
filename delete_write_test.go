@@ -305,13 +305,14 @@ func TestDelete_ErrorCases(t *testing.T) {
 	})
 }
 
+// TestDelete_NonEmptyGroup: deleting a group with a child deletes both, as
+// H5Ldelete does (TASK-085; until v0.14.3 the delete was refused).
 func TestDelete_NonEmptyGroup(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "delete_nonempty.h5")
 
 	fw, err := hdf5.CreateForWrite(file, hdf5.CreateTruncate)
 	require.NoError(t, err)
-	defer func() { _ = fw.Close() }()
 
 	_, err = fw.CreateGroup("/parent")
 	require.NoError(t, err)
@@ -319,11 +320,19 @@ func TestDelete_NonEmptyGroup(t *testing.T) {
 	ds, err := fw.CreateDataset("/parent/child", hdf5.Int32, []uint64{3})
 	require.NoError(t, err)
 	require.NoError(t, ds.Write([]int32{1, 2, 3}))
+	ds, err = fw.CreateDataset("/other", hdf5.Int32, []uint64{1})
+	require.NoError(t, err)
+	require.NoError(t, ds.Write([]int32{4}))
 
-	// Trying to delete a non-empty group should fail.
-	err = fw.Delete("/parent")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "non-empty group")
+	require.NoError(t, fw.Delete("/parent"))
+	require.NoError(t, fw.Close())
+
+	f, err := hdf5.Open(file)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, f.Close()) }()
+	var paths []string
+	f.Walk(func(path string, _ hdf5.Object) { paths = append(paths, path) })
+	assert.Equal(t, []string{"/", "/other"}, paths)
 }
 
 func TestDelete_NestedGroup_BottomUp(t *testing.T) {
