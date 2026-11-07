@@ -3,7 +3,7 @@
 > **Strategic Advantage**: We have official HDF5 C library as reference implementation!
 > **Approach**: Port proven algorithms, not invent from scratch - Senior Go Developer mindset
 
-**Last Updated**: 2026-11-06 | **Current Version**: v0.14.3 | **Strategy**: HDF5 2.0.0 compatible → security hardened → C-library parity → v1.0.0 LTS | **Milestone**: v0.14.3 (reader and writer aligned with the C library) → v1.0.0 LTS (when ready, no date)
+**Last Updated**: 2026-11-07 | **Current Version**: v0.15.0 | **Strategy**: HDF5 2.0.0 compatible → security hardened → C-library parity → v1.0.0 LTS | **Milestone**: v0.15.0 (user blocks, deleting whole group trees) → v1.0.0 LTS (when ready, no date)
 
 ---
 
@@ -14,7 +14,7 @@ Build a **production-ready, pure Go HDF5 library** with full read/write capabili
 ### Key Advantages
 
 ✅ **Reference Implementation Available**
-- Official HDF5 C library at `D:\projects\scigolibs\hdf5c\src` (30+ years of development)
+- Official [HDF5 C library](https://github.com/HDFGroup/hdf5) (30+ years of development)
 - Well-documented algorithms and data structures
 - Proven edge case handling
 - Community knowledge base
@@ -30,7 +30,6 @@ Build a **production-ready, pure Go HDF5 library** with full read/write capabili
 - Direct code translation when appropriate
 - Existing bug fixes and optimizations
 - Clear implementation patterns
-- 10x productivity with go-senior-architect agent
 
 ---
 
@@ -83,9 +82,11 @@ v0.14.1 (BUGFIX - write compatibility, B-tree panic) ✅ RELEASED 2026-09-02
          ↓ (metadata bounds / security hardening)
 v0.14.2 (SECURITY - bound metadata-sized allocations, 32-bit builds) ✅ RELEASED 2026-10-21
          ↓ (maintenance continues)
-v0.14.3 (reader and writer aligned with the C library; sentinel errors, read limit, compound API)
+v0.14.3 (reader and writer aligned with the C library; sentinel errors, read limit, compound API) ✅ RELEASED 2026-11-06
+         ↓ (user blocks for MATLAB v7.3, deleting group trees)
+v0.15.0 (FEATURE - user blocks, recursive delete, user-defined links in OpenForWrite)
          ↓ (maintenance continues)
-v0.14.x (maintenance phase) → Stable maintenance, bug fixes, minor enhancements
+v0.15.x (maintenance phase) → Stable maintenance, bug fixes, minor enhancements
          ↓ (production validation)
 v1.0.0 LTS → Long-term support release (no date: it ships when it is ready)
 ```
@@ -156,11 +157,9 @@ v1.0.0 LTS → Long-term support release (no date: it ships when it is ready)
 
 **Why stable at v0.12.0?**: Feature complete + 98.2% official test suite validation + production quality. API proven stable through extensive testing. v1.0.0 = LTS guarantee.
 
-**See**: `docs/dev/notes/VERSIONING_STRATEGY.md` for complete strategy
-
 ---
 
-## 📊 Current Status (v0.14.3)
+## 📊 Current Status (v0.15.0)
 
 **Phase**: 🛡️ Stable Maintenance (monitoring, community support)
 **HDF5 2.0.0 Format Spec v4.0**: Complete! 🎉
@@ -181,7 +180,9 @@ v1.0.0 LTS → Long-term support release (no date: it ships when it is ready)
 - ✅ Attribute modification/deletion (RMW complete)
 - ✅ Advanced datatypes (arrays, enums, references, opaque)
 - ✅ Compression (GZIP, Shuffle, Fletcher32)
-- ✅ Links (hard links, soft links, external links - all complete)
+- ✅ Links (hard links, soft links, external links - all complete; user-defined links are kept unchanged)
+- ✅ **Deleting objects** as `H5Ldelete` does: a group goes with everything only it links to ✨ v0.15.0
+- ✅ **User blocks** (`WithUserBlock`, `WriteUserBlock`), e.g. for MATLAB v7.3 files; `OpenForWrite` keeps an existing block ✨ v0.15.0
 - ✅ Fractal heap with indirect blocks
 - ✅ Smart B-tree rebalancing (4 modes)
 - ✅ Compound datatypes (write support complete)
@@ -345,6 +346,24 @@ v1.0.0 LTS → Long-term support release (no date: it ships when it is ready)
 
 ---
 
+### **v0.15.0 - User Blocks and Group Trees** (2026-11)
+
+**Goal**: Write files other applications expect to find a header in front of, and delete as the C library does
+
+- ✅ User blocks on create (`WithUserBlock`, `WriteUserBlock`), as `H5Pset_userblock`: a MATLAB v7.3
+  file keeps its MAT header there. h5dump, h5jam and h5unjam read the result.
+- ✅ `OpenForWrite` opens files with a user block and never writes the block
+- ✅ `Delete` of a group deletes everything only it links to; objects linked from elsewhere keep their
+  data with the reference count lowered
+- ✅ `OpenForWrite` accepts files with user-defined links
+
+**Next (v0.15.x)**:
+- Files with a hard-link cycle (a link from a group back to an ancestor) open and walk; today `Open`
+  refuses them
+- The root group of a new file is created like every other group (same empty B-tree as the C library)
+
+---
+
 ### **v0.14.0+ - Future Enhancements** (2026-Q2+) [PLANNING]
 
 **Goal**: Community-driven improvements and advanced features
@@ -411,9 +430,8 @@ v1.0.0 LTS → Long-term support release (no date: it ships when it is ready)
 - Tools: h5dump, h5diff, h5stat
 
 **Development**:
-- CONTRIBUTING.md - How to contribute
-- docs/dev/ - Development documentation
-- Reference: `D:\projects\scigolibs\hdf5c\src` (HDF5 C library)
+- [CONTRIBUTING.md](CONTRIBUTING.md) - How to contribute
+- Reference: the [HDF5 C library](https://github.com/HDFGroup/hdf5) source
 
 ---
 
@@ -441,6 +459,6 @@ v1.0.0 LTS → Long-term support release (no date: it ships when it is ready)
 
 ---
 
-*Version 5.5 (Updated 2026-11-06)*
-*Current: v0.14.3 | Phase: Maintenance | Next: v0.15 (community-driven) | Target: v1.0.0 LTS (no date)*
+*Version 5.6 (Updated 2026-11-07)*
+*Current: v0.15.0 | Phase: Maintenance | Next: v0.15.x (hard-link cycles) | Target: v1.0.0 LTS (no date)*
 
