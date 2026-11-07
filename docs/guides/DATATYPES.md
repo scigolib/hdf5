@@ -1,22 +1,21 @@
 # Datatypes Guide
 
-> **Complete guide to HDF5 datatype mapping and Go type conversion**
+How HDF5 datatypes map to Go types, and how values are converted when read and written.
 
 ---
 
-## 📚 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Numeric Types](#numeric-types)
 - [String Types](#string-types)
 - [Compound Types](#compound-types)
 - [Type Conversion Rules](#type-conversion-rules)
-- [Unsupported Types](#unsupported-types)
 - [Best Practices](#best-practices)
 
 ---
 
-## 🎯 Overview
+## Overview
 
 HDF5 uses its own type system that maps to native types in different programming languages. This library provides automatic conversion between HDF5 types and Go types.
 
@@ -24,19 +23,19 @@ HDF5 uses its own type system that maps to native types in different programming
 
 | Category | HDF5 Class | Go Representation | Read | Write |
 |----------|------------|-------------------|------|-------|
-| **Fixed-point** | H5T_INTEGER | int8-64, uint8-64 | ✅ | ✅ |
-| **Floating-point** | H5T_FLOAT | float32, float64 | ✅ | ✅ |
-| **String** | H5T_STRING | string, []string | ✅ | ✅ |
-| **Compound** | H5T_COMPOUND | map[string]interface{} | ✅ | ✅ |
-| **Array** | H5T_ARRAY | [N]T (fixed arrays) | ✅ | ✅ |
-| **Enum** | H5T_ENUM | Named integer constants | ✅ | ✅ |
-| **Reference** | H5T_REFERENCE | uint64, [12]byte | ✅ | ✅ |
-| **Opaque** | H5T_OPAQUE | []byte with tag | ✅ | ✅ |
-| **Time** | H5T_TIME | - | ❌ | ❌ Deprecated |
+| **Fixed-point** | H5T_INTEGER | int8-64, uint8-64 | yes | yes |
+| **Floating-point** | H5T_FLOAT | float32, float64 | yes | yes |
+| **String** | H5T_STRING | string, []string | yes | yes |
+| **Compound** | H5T_COMPOUND | map[string]interface{} per element | yes | yes |
+| **Array** | H5T_ARRAY | base values, flattened | yes | yes |
+| **Enum** | H5T_ENUM | the base integer value | yes | yes |
+| **Reference** | H5T_REFERENCE | uint64, [12]byte | yes | yes |
+| **Opaque** | H5T_OPAQUE | []byte with tag | yes | yes |
+| **Time** | H5T_TIME | - | no | no |
 
 ---
 
-## 🔢 Numeric Types
+## Numeric Types
 
 ### Integer Types
 
@@ -185,7 +184,7 @@ data, err := ds.Read()  // Returns []float64 (native)
 
 ---
 
-## 📝 String Types
+## String Types
 
 ### Fixed-Length Strings
 
@@ -253,12 +252,12 @@ with h5py.File('vlen_strings.h5', 'w') as f:
 
 | Encoding | Status | Notes |
 |----------|--------|-------|
-| ASCII | ✅ Full | Standard ASCII (0-127) |
-| UTF-8 | ✅ Full | Unicode support |
+| ASCII | supported | Standard ASCII (0-127) |
+| UTF-8 | supported | Unicode support |
 
 ---
 
-## 🏗️ Compound Types
+## Compound Types
 
 Compound types are struct-like data with named fields (similar to C structs or Go structs).
 
@@ -278,7 +277,10 @@ Compound Type:
 
 **Reading Compound Data**:
 ```go
-compounds, err := ds.ReadCompound()  // Returns []map[string]interface{}
+compounds, err := ds.ReadCompound() // one map from member name to value per element
+if err != nil {
+    log.Fatal(err)
+}
 
 for i, record := range compounds {
     fmt.Printf("Record %d:\n", i)
@@ -293,6 +295,8 @@ for i, record := range compounds {
     fmt.Printf("  Location: %s\n", loc)
 }
 ```
+
+`ReadCompound` returns `[]core.CompoundValue`, a map type, so `record["name"]` works as shown.
 
 **Output**:
 ```
@@ -449,7 +453,7 @@ Compound Type:
   - "scores" : array of 5 × float64
 ```
 
-**Status**: ✅ Fully supported (including array fields within compounds).
+**Status**: supported, including array members of compounds.
 
 ### Creating Compounds in Python
 
@@ -480,7 +484,7 @@ with h5py.File('compounds.h5', 'w') as f:
 
 ---
 
-## 🔄 Type Conversion Rules
+## Type Conversion Rules
 
 ### Automatic Conversions
 
@@ -488,12 +492,12 @@ The library performs these conversions automatically:
 
 | From (HDF5) | To (Go) | Information Loss? |
 |-------------|---------|-------------------|
-| int32 | float64 | ✅ No (exact) |
-| int64 | float64 | ⚠️ Yes (> 2^53) |
-| float32 | float64 | ✅ No (promoted) |
-| float64 | float64 | ✅ No (exact) |
-| fixed string | string | ✅ No (padding removed) |
-| variable string | string | ✅ No (exact) |
+| int32 | float64 | No (exact) |
+| int64 | float64 | Yes, above 2^53 |
+| float32 | float64 | No (promoted) |
+| float64 | float64 | No (exact) |
+| fixed string | string | No (padding removed) |
+| variable string | string | No (exact) |
 
 ### Precision Considerations
 
@@ -509,8 +513,8 @@ The library performs these conversions automatically:
 // Converted to float64: 9223372036854776000 (rounded)
 // Lost precision: ~1000
 
-// For most scientific data, this is acceptable
-// If exact large integers needed, wait for v1.0.0 (direct int64 support)
+// If exact 64-bit integers are needed, Dataset.Read is not suitable:
+// read hyperslabs with ReadSlice or ReadHyperslab, which return the dataset's own type
 ```
 
 #### Float32 to Float64 Conversion
@@ -520,7 +524,7 @@ Float32 values are promoted to float64 without precision loss (but representatio
 ```go
 // float32 in HDF5: 3.14159265f (stored as 0x40490FDB)
 // Converted to float64: 3.1415927410125732 (0x400921FB60000000)
-//                       ^^^^^^^^ extra precision is not real data!
+//                       ^^^^^^^^ extra precision is not real data
 
 // For display, round appropriately:
 fmt.Printf("%.6f\n", value)  // 3.141593 (shows only 6 digits)
@@ -528,7 +532,7 @@ fmt.Printf("%.6f\n", value)  // 3.141593 (shows only 6 digits)
 
 ---
 
-## ✅ Best Practices
+## Best Practices
 
 ### 1. Check Dataset Type Before Reading
 
@@ -556,6 +560,10 @@ default:
 ### 2. Handle Type Assertions Safely
 
 ```go
+attrs, err := ds.Attributes()
+if err != nil {
+    log.Fatal(err)
+}
 for _, attr := range attrs {
     value, err := attr.ReadValue()
     if err != nil {
@@ -587,7 +595,7 @@ dt, _ := ds.Datatype()
 if dt.Class == hdf5.ClassInteger && dt.Size == 8 {
     log.Println("Warning: int64 dataset may lose precision when converted to float64")
     log.Println("Safe range: -2^53 to 2^53 (±9,007,199,254,740,992)")
-    log.Println("For exact int64 values, wait for v1.0.0")
+    // ReadSlice and ReadHyperslab return the dataset's own element type.
 }
 ```
 
@@ -607,57 +615,69 @@ Use compound types:
 
 Benefits:
 - Keeps related data together
-- More efficient storage
-- Easier to maintain consistency
+- One dataset and one set of dimensions instead of several
+- A record's fields cannot get out of step with each other
 
-### 5. Create Test Files in Pure Go
+### 5. Create Test Files in Go
 
-Generate test files using this library (no Python needed!):
+Test files with one dataset of each kind can be generated with this library:
 
 ```go
 package main
 
 import (
     "log"
+
     "github.com/scigolib/hdf5"
 )
 
 func main() {
-    // Create test file
-    fw, _ := hdf5.CreateForWrite("test_types.h5", hdf5.CreateTruncate)
-    defer fw.Close()
+    fw, err := hdf5.CreateForWrite("test_types.h5", hdf5.CreateTruncate)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer func() {
+        if err := fw.Close(); err != nil {
+            log.Fatal(err)
+        }
+    }()
 
-    // Test all supported types
-    fw.CreateDataset("/int32", hdf5.Int32, []uint64{3})
-    fw.CreateDataset("/int64", hdf5.Int64, []uint64{3})
-    fw.CreateDataset("/float32", hdf5.Float32, []uint64{3})
-    fw.CreateDataset("/float64", hdf5.Float64, []uint64{3})
+    // create is a small helper so the example stays short; real code
+    // handles each error where it needs to.
+    create := func(name string, dt hdf5.Datatype, dims []uint64, opts ...hdf5.DatasetOption) {
+        if _, err := fw.CreateDataset(name, dt, dims, opts...); err != nil {
+            log.Fatalf("%s: %v", name, err)
+        }
+    }
 
-    // Fixed-length strings
-    fw.CreateDataset("/strings_fixed", hdf5.StringFixed(10), []uint64{2})
+    create("/int32", hdf5.Int32, []uint64{3})
+    create("/int64", hdf5.Int64, []uint64{3})
+    create("/float32", hdf5.Float32, []uint64{3})
+    create("/float64", hdf5.Float64, []uint64{3})
 
-    // Arrays
-    fw.CreateDataset("/arrays", hdf5.ArrayFloat32, []uint64{10},
+    // Fixed-length strings of 10 bytes
+    create("/strings_fixed", hdf5.String, []uint64{2}, hdf5.WithStringSize(10))
+
+    // Arrays: ten elements, each a 3x3 array of float32
+    create("/arrays", hdf5.ArrayFloat32, []uint64{10},
         hdf5.WithArrayDims([]uint64{3, 3}))
 
     // Enums
-    fw.CreateDataset("/status", hdf5.EnumInt8, []uint64{5},
+    create("/status", hdf5.EnumInt8, []uint64{5},
         hdf5.WithEnumValues([]string{"OK", "ERROR"}, []int64{0, 1}))
-
-    // Write data, verify with h5dump!
 }
 ```
 
-**Pure Go workflow** - Write with this library, validate with h5dump or Python h5py!
+Check the result with `h5dump` or h5py.
 
 ---
 
-## 📚 Next Steps
+## Next Steps
 
-- **[Reading Data Guide](READING_DATA.md)** - How to use these types in practice
-- **[Troubleshooting](TROUBLESHOOTING.md)** - Common type-related issues
-- **[Examples](../../examples/)** - Code examples with different datatypes
+- [Reading Data Guide](READING_DATA.md): how to use these types in practice
+- [Troubleshooting](TROUBLESHOOTING.md): common type-related issues
+- [Examples](../../examples/): code examples with different datatypes
 
 ---
 
-*Last Updated: 2025-11-13*
+*Last Updated: 2026-11-07*

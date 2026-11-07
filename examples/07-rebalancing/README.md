@@ -1,80 +1,74 @@
 # Rebalancing Examples
 
-This directory contains working examples demonstrating HDF5 B-tree rebalancing strategies.
+Runnable programs for the B-tree rebalancing options of dense attribute storage.
 
 ## Examples
 
-### default/ - Default (No Rebalancing)
+### default/ - No rebalancing
 
-**Use Case**: Append-only workloads, small files, maximum write performance
+Use it for append-only workloads and small files.
 
 ```bash
 go run ./default
 ```
 
-**What it demonstrates**:
-- No rebalancing (`WithBTreeRebalancing(false)`); without the option, every delete rebalances, as the HDF5 C library does for version 2 B-trees
-- Fastest deletion (0% overhead)
-- B-tree may become sparse after many deletions
+What it shows:
+- `WithBTreeRebalancing(false)`: deletes do not rebalance. Without any option, every delete
+  rebalances, as the HDF5 C library does for version 2 B-trees
+- The B-tree may become sparse after many deletions
 
 ---
 
-### lazy/ - Lazy Rebalancing
+### lazy/ - Lazy rebalancing
 
-**Use Case**: Batch deletion workloads, medium/large files (100-500MB)
+Use it for batch deletions.
 
 ```bash
 go run ./lazy
 ```
 
-**What it demonstrates**:
-- Lazy (batch) rebalancing mode
-- 10-100x faster than immediate rebalancing
-- Occasional pauses (100-500ms) during batch processing
-- Tuning parameters: threshold, max delay, batch size
+What it shows:
+- Lazy (batch) rebalancing: nodes are rebalanced once a threshold is reached
+- The tuning parameters: threshold, maximum delay, batch size
 
 ---
 
-### incremental/ - Incremental Rebalancing
+### incremental/ - Incremental rebalancing
 
-**Use Case**: Large files (>500MB), continuous operations, zero-pause requirement
+Use it for large files and long-running processes that delete continuously.
 
 ```bash
 go run ./incremental
 ```
 
-**What it demonstrates**:
-- Incremental (background) rebalancing mode
-- ZERO user-visible pause (all rebalancing in background)
-- Progress monitoring via callback
-- Tuning parameters: budget, interval
+What it shows:
+- Incremental rebalancing in a background goroutine, within a time budget
+- Progress reporting
+- The tuning parameters: budget, interval
 
 ---
 
-### smart/ - Smart Rebalancing (Auto-Tuning)
-
-**Use Case**: Unknown workloads, mixed operations, want auto-pilot mode
+### smart/ - Smart rebalancing (not implemented)
 
 ```bash
 go run ./smart
 ```
 
-**What it demonstrates**:
-- Smart (auto-tuning) rebalancing mode
-- Automatic workload pattern detection
-- Automatic mode selection and switching
-- Explainability (confidence scores, reasoning)
+`WithSmartRebalancing` is a planned mode and has no effect yet: the program runs with the default
+rebalancing and only shows the planned API.
 
 ---
 
-## Quick Comparison
+## Comparison
 
-| Example | Mode | Overhead | Pause Time | Use Case |
-|---------|------|----------|------------|----------|
-| **default/** | None | 0% | None | Append-only, small files |
-| **lazy/** | Lazy (batch) | ~2% | 100-500ms batches | Batch deletions |
-| **incremental/** | Incremental (background) | ~4% | None (background) | Large files, continuous ops |
-| **smart/** | Smart (auto) | ~6% | Varies | Unknown workloads |
+| Example | Mode | Pauses | Use case |
+|---------|------|--------|----------|
+| default/ | none | none | append-only, small files |
+| lazy/ | lazy (batch) | short, per batch | batch deletions |
+| incremental/ | incremental (background) | none | large files, continuous deletes |
+| smart/ | not implemented (default rebalancing) | — | — |
+
+Measure your workload with the benchmarks in `btree_rebalancing_bench_test.go`.
 
 ---
 
@@ -102,31 +96,26 @@ done
 - `default-output.h5` - File with no rebalancing
 - `lazy-output.h5` - File with lazy rebalancing
 - `incremental-output.h5` - File with incremental rebalancing
-- `smart-output.h5` - File with smart rebalancing
+- `smart-output.h5` - File written with the default rebalancing
 
-All files are valid HDF5 and can be opened with:
-- `h5dump` (C library tool)
-- Python `h5py`
-- This library's `hdf5.Open()`
+All files are valid HDF5 and can be opened with `h5dump`, h5py, or this library's `hdf5.Open()`.
 
 ---
 
-## Performance Tips
+## Choosing a mode
 
-1. **Start with default** (`./default`) unless you know you need rebalancing
-2. **Use lazy** (`./lazy`) for batch deletion workloads (10-100x faster)
-3. **Use incremental** (`./incremental`) for large files where pauses are unacceptable
-4. **Use smart** (`./smart`) only if workload is truly unknown
+1. Keep the default unless deletes are frequent enough to measure
+2. Use lazy (`./lazy`) for batch deletions
+3. Use incremental (`./incremental`) for large files where pauses matter
 
 ---
 
 ## Further Reading
 
-- **[Performance Tuning Guide](../../docs/guides/performance-tuning.md)**: Comprehensive guide with benchmarks, recommendations, troubleshooting
-- **[Rebalancing API Reference](../../docs/guides/rebalancing-api.md)**: Complete API documentation
-- **[FAQ](../../docs/guides/FAQ.md)**: Common questions
+- [Performance tuning guide](../../docs/guides/PERFORMANCE_TUNING.md)
+- [Rebalancing API reference](../../docs/guides/REBALANCING_API.md)
+- [FAQ](../../docs/guides/FAQ.md)
 
 ---
 
-**Version**: v0.11.3-beta
-**Last Updated**: 2025-11-02
+**Last Updated**: 2026-11-07
