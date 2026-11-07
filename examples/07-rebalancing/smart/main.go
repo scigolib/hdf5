@@ -1,7 +1,11 @@
-// Example 4: Smart Rebalancing (Auto-Tuning)
+// Example 4: Smart Rebalancing (Auto-Tuning) — NOT IMPLEMENTED YET
+//
+// WithSmartRebalancing is accepted and has no effect: this program runs with
+// the default rebalancing (on every delete). It shows the planned API only;
+// the mode selection it describes below does not happen.
 //
 // This example demonstrates smart (auto-tuning) rebalancing mode.
-// Smart rebalancing automatically:
+// Smart rebalancing, once implemented, would automatically:
 //   - Detects workload patterns (inserts, deletes, batch size, etc.)
 //   - Selects optimal rebalancing mode (none, lazy, or incremental)
 //   - Switches modes as workload changes (optional)
@@ -28,6 +32,9 @@ func main() {
 	fmt.Println("Example 4: Smart Rebalancing (Auto-Tuning)")
 	fmt.Println("===========================================")
 	fmt.Println()
+	fmt.Println("NOTE: smart rebalancing is not implemented yet. WithSmartRebalancing is")
+	fmt.Println("accepted and has no effect; this run uses the default rebalancing.")
+	fmt.Println()
 
 	// Create file with SMART rebalancing enabled
 	//
@@ -53,7 +60,7 @@ func main() {
 	}
 	defer fw.Close()
 
-	fmt.Println("✅ Created file with SMART rebalancing:")
+	fmt.Println("Created file with the planned SMART options (no effect yet):")
 	fmt.Println("   - Auto-detect: ENABLED")
 	fmt.Println("   - Auto-switch: ENABLED")
 	fmt.Println("   - Min file size: 10 MB")

@@ -1,10 +1,10 @@
 # Reading Data Guide
 
-> **Comprehensive guide to reading datasets, attributes, and navigating HDF5 files**
+Reading datasets and attributes, and navigating HDF5 files.
 
 ---
 
-## 📚 Table of Contents
+## Table of Contents
 
 - [Opening Files](#opening-files)
 - [Navigating File Structure](#navigating-file-structure)
@@ -17,7 +17,7 @@
 
 ---
 
-## 🗂️ Opening Files
+## Opening Files
 
 ### Basic File Opening
 
@@ -36,9 +36,9 @@ func main() {
     if err != nil {
         log.Fatalf("Failed to open file: %v", err)
     }
-    defer file.Close()  // Always close files!
+    defer file.Close() // always close files
 
-    fmt.Printf("File opened successfully\n")
+    fmt.Printf("File opened\n")
     fmt.Printf("Superblock version: %d\n", file.SuperblockVersion())
 }
 ```
@@ -76,7 +76,7 @@ if err != nil {
 
 ---
 
-## 🚶 Navigating File Structure
+## Navigating File Structure
 
 ### Walking the Entire File
 
@@ -86,25 +86,25 @@ The `Walk()` method traverses all objects in the file:
 file.Walk(func(path string, obj hdf5.Object) {
     switch v := obj.(type) {
     case *hdf5.Group:
-        fmt.Printf("📁 Group: %s (%d children)\n",
+        fmt.Printf("group:   %s (%d children)\n",
             path, len(v.Children()))
 
     case *hdf5.Dataset:
-        fmt.Printf("📊 Dataset: %s\n", path)
+        fmt.Printf("dataset: %s\n", path)
 
     default:
-        fmt.Printf("❓ Unknown: %s\n", path)
+        fmt.Printf("other:   %s\n", path)
     }
 })
 ```
 
-**Output example**:
+Output for a small file (the path strings depend on the file):
 ```
-📁 Group: / (3 children)
-📊 Dataset: /temperature
-📁 Group: /experiments/ (2 children)
-📊 Dataset: /experiments/trial1
-📊 Dataset: /experiments/trial2
+group:   / (3 children)
+dataset: /temperature
+group:   /experiments (2 children)
+dataset: /experiments/trial1
+dataset: /experiments/trial2
 ```
 
 ### Exploring Groups
@@ -157,7 +157,7 @@ if dataset != nil {
 
 ---
 
-## 📊 Reading Datasets
+## Reading Datasets
 
 ### Numeric Datasets
 
@@ -166,7 +166,7 @@ The library automatically converts numeric data to `float64` for convenience:
 ```go
 file.Walk(func(path string, obj hdf5.Object) {
     if ds, ok := obj.(*hdf5.Dataset); ok {
-        // Read as float64 (works for int32, int64, float32, float64)
+        // Read as float64 (works for integers of every width, float32 and float64)
         data, err := ds.Read()
         if err != nil {
             log.Printf("Error reading %s: %v", path, err)
@@ -184,11 +184,10 @@ file.Walk(func(path string, obj hdf5.Object) {
 })
 ```
 
-**Supported numeric types**:
-- `int32` → `float64`
-- `int64` → `float64`
-- `float32` → `float64`
-- `float64` → `float64`
+Supported numeric types: signed and unsigned integers of 8, 16, 32 and 64 bits, `float32` and
+`float64`, all converted to `float64`. An `int64` or `uint64` above 2^53 loses precision in the
+conversion; `ReadSlice` and `ReadHyperslab` return the dataset's own type instead (see the
+[Datatypes Guide](DATATYPES.md)).
 
 ### String Datasets
 
@@ -304,7 +303,7 @@ above instead of parsing it.
 
 ---
 
-## 🏷️ Reading Attributes
+## Reading Attributes
 
 Attributes are metadata attached to groups and datasets. Attributes can contain
 any HDF5 datatype including integers, floats, fixed-length strings, and
@@ -406,7 +405,7 @@ for _, attr := range attrs {
 
 ---
 
-## 👥 Working with Groups
+## Working with Groups
 
 ### Group Hierarchy
 
@@ -467,7 +466,7 @@ fmt.Printf("  Datasets: %d\n", datasetCount)
 
 ---
 
-## 🔄 Datatypes and Type Conversion
+## Datatypes and Type Conversion
 
 ### Automatic Type Conversion
 
@@ -479,9 +478,9 @@ The library automatically converts HDF5 types to Go types:
 | H5T_STD_I64LE/BE | float64 | int64 |
 | H5T_IEEE_F32LE/BE | float64 | float32 |
 | H5T_IEEE_F64LE/BE | float64 | float64 |
-| H5T_STRING (fixed) | string | string |
-| H5T_STRING (variable) | string | string |
-| H5T_COMPOUND | map[string]interface{} | CompoundValue |
+| H5T_STRING (fixed) | use ReadStrings | string |
+| H5T_STRING (variable) | use ReadStrings | string |
+| H5T_COMPOUND | use ReadCompound | CompoundValue (a map) |
 
 ### Handling Different Layouts
 
@@ -515,7 +514,7 @@ data, err := ds.Read()
 if err != nil {
     log.Fatalf("Decompression error: %v", err)
 }
-// data is already decompressed!
+// data is already decompressed
 ```
 
 Decoded filters: deflate (1), shuffle (2), Fletcher32 (3, verified), BZIP2 (307) and LZF
@@ -570,7 +569,7 @@ name heaps of External File Lists). The godoc of `SetReadLimit` lists everything
 
 ---
 
-## ❌ Error Handling
+## Error Handling
 
 ### Common Errors and How to Handle Them
 
@@ -670,7 +669,7 @@ func processHDF5File(filename string) error {
 
 ---
 
-## ⚡ Performance Tips
+## Performance Tips
 
 ### 1. Close Files Promptly
 
@@ -682,7 +681,7 @@ defer file.Close()
 // Bad: Manual close may be forgotten
 file, _ := hdf5.Open("data.h5")
 // ... lots of code ...
-file.Close()  // Easy to forget!
+file.Close()  // easy to forget
 ```
 
 ### 2. Avoid Repeated Walks
@@ -749,7 +748,7 @@ type DatasetData struct {
     Path string
     Values []float64
 }
-var allData []DatasetData  // Can use lots of memory!
+var allData []DatasetData // can use a lot of memory
 
 file.Walk(func(path string, obj hdf5.Object) {
     if ds, ok := obj.(*hdf5.Dataset); ok {
@@ -761,7 +760,7 @@ file.Walk(func(path string, obj hdf5.Object) {
 
 ### 5. Reuse File Handles (Concurrency)
 
-**Note**: Current version is not thread-safe. Each goroutine should have its own file handle:
+Separate `File` values are independent; one `File` used from several goroutines needs the caller's synchronization. Giving each goroutine its own file handle needs none:
 
 ```go
 // For concurrent processing, open multiple handles
@@ -799,7 +798,7 @@ func processFileConcurrently(filename string) {
 
 ---
 
-## 📖 Complete Examples
+## Complete Examples
 
 ### Example 1: Data Analysis
 
@@ -887,14 +886,14 @@ func main() {
         log.Fatal(err)
     }
 
-    fmt.Println("=== File Metadata ===")
+    fmt.Println("File metadata")
     for _, attr := range attrs {
         value, _ := attr.ReadValue()
         fmt.Printf("%s: %v\n", attr.Name, value)
     }
 
     // Extract dataset metadata
-    fmt.Println("\n=== Dataset Metadata ===")
+    fmt.Println("\nDataset metadata")
     file.Walk(func(path string, obj hdf5.Object) {
         if ds, ok := obj.(*hdf5.Dataset); ok {
             fmt.Printf("\n%s:\n", path)
@@ -927,7 +926,7 @@ func main() {
 
 ---
 
-## 📚 Next Steps
+## Next Steps
 
 - **[Datatypes Guide](DATATYPES.md)** - Detailed type mapping and conversion
 - **[Troubleshooting](TROUBLESHOOTING.md)** - Solutions to common problems
@@ -936,4 +935,4 @@ func main() {
 
 ---
 
-*Last Updated: 2025-11-13*
+*Last Updated: 2026-11-07*

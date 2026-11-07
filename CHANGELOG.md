@@ -15,9 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zeroed block of `size` bytes (0, or a power of two of at least 512) at the start of a new file, and
   `FileWriter.WriteUserBlock(data)` writes the application's own header into it. A MATLAB v7.3 file,
   for example, keeps its 128-byte MAT header there. The HDF5 data follows the block, every address is
-  relative to it, and h5dump, h5jam and h5unjam read the result.
-- `OpenForWrite` opens files with a user block (v0.14.3 refused them). The block is never touched;
-  `WithUserBlock` given to `OpenForWrite` must name the file's own size.
+  relative to it, and h5dump, h5jam and h5unjam read the result. The size is also kept in the new
+  `FileWriteConfig.UserBlock` field.
+- `OpenForWrite` opens files with a user block (v0.14.3 refused them). The library never changes the
+  block; `WriteUserBlock` writes into it when the application asks. `WithUserBlock` given to
+  `OpenForWrite` must name the file's own size.
 
 ### Changed
 
@@ -27,9 +29,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its count lowered. This works for all three forms a group keeps its links in (a symbol table, link
   messages, dense link storage), and the bytes freed match h5stat. A tree whose objects are named by
   more links than their reference counts is refused as `ErrCorrupt`, before anything is written.
+- Documentation: README, the guides, the architecture overview and the rebalancing examples were
+  checked against the code. Examples that did not compile were fixed, claims nobody measured were
+  removed, and `WithSmartRebalancing` is now documented as what it has always been: a planned mode that
+  is accepted and has no effect.
 
 ### Fixed
 
+- A group whose links moved into dense storage while the file was being written (the ninth link of a
+  group that keeps its links as link messages, e.g. after an external link was added) left a file the
+  C library could not open, and the next link added in the same session failed. The new name index
+  leaf was written at its used size while a full node was allocated, so the file could end before its
+  end-of-file address. Version 2 B-tree leaves are now written as whole nodes, zero after the checksum,
+  as the C library writes them. The conversion arrived in v0.14.3; the same B-tree writer serves dense
+  attribute storage, whose leaf is now written as a whole node too. A file v0.14.3 wrote this way is
+  refused as truncated (`end-of-file address N is beyond the file size M`) by the C library and by this
+  library; what it lacks is the zero tail of that leaf, so extending it with zeros to the address in
+  the message repairs it (on Linux and macOS: `truncate -s N file.h5`). When a file is opened for
+  writing, a version 2 B-tree whose node would reach past the end of the file, or whose node size is
+  above 16 MiB, is refused as corrupt, since its leaf is rewritten as a whole node.
 - `OpenForWrite` refused a valid file holding a user-defined link (link types 64 to 255 other than
   external links) as corrupt. Such links are now read as the C library reads them, kept unchanged, and
   name no object.

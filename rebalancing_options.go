@@ -213,23 +213,19 @@ func IncrementalProgressCallback(callback func(structures.RebalancingProgress)) 
 }
 
 // ============================================
-// Smart Rebalancing Options (Phase 3!)
+// Smart Rebalancing Options (not implemented)
 // ============================================
 
-// WithSmartRebalancing enables smart (auto-tuning) rebalancing mode.
+// WithSmartRebalancing is the planned auto-tuning rebalancing mode, which
+// would choose between no, lazy and incremental rebalancing from the
+// observed workload.
 //
-// Smart rebalancing automatically detects workload patterns and selects
-// the optimal rebalancing mode (none, lazy, or incremental) based on:
-//   - File size
-//   - Operation patterns (delete ratio, batch size)
-//   - Resource constraints (CPU, memory limits)
+// It is not implemented: the option and its SmartOption values are accepted
+// and have no effect, so a writer given it rebalances as it would without
+// it (on every delete, the default). Use WithLazyRebalancing or
+// WithIncrementalRebalancing to choose a mode.
 //
-// This is the "auto-pilot" mode for scientific data workflows.
-//
-// IMPORTANT: This is OPTIONAL and must be explicitly enabled.
-// By default (no options), NO rebalancing is performed (like C library).
-//
-// Example:
+// Example of the planned API:
 //
 //	fw := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 //	    hdf5.WithSmartRebalancing(

@@ -1,23 +1,22 @@
 # Quick Start Guide
 
-Get started with the HDF5 Go library in minutes.
+Small programs that read and write HDF5 files with this library.
 
 ---
 
-## 📦 Installation
+## Installation
 
 ```bash
 go get github.com/scigolib/hdf5
 ```
 
-**Requirements**:
+Requirements:
 - Go 1.25 or later
-- No CGo dependencies
-- No external libraries required
+- No cgo and no external libraries
 
 ---
 
-## 🚀 Your First HDF5 Program
+## Your First HDF5 Program
 
 ### 1. Reading an HDF5 File
 
@@ -68,27 +67,28 @@ func main() {
     file.Walk(func(path string, obj hdf5.Object) {
         switch v := obj.(type) {
         case *hdf5.Group:
-            fmt.Printf("📁 Group: %s (%d children)\n",
+            fmt.Printf("group:   %s (%d children)\n",
                 path, len(v.Children()))
 
         case *hdf5.Dataset:
-            fmt.Printf("📊 Dataset: %s\n", path)
+            fmt.Printf("dataset: %s\n", path)
 
         default:
-            fmt.Printf("❓ Unknown: %s\n", path)
+            fmt.Printf("other:   %s\n", path)
         }
     })
 }
 ```
 
-**Example output**:
+Output for a file with a root dataset and one group of three datasets (the exact path strings
+depend on the file):
 ```
-📁 Group: / (2 children)
-📊 Dataset: /temperature
-📁 Group: /experiments/ (3 children)
-📊 Dataset: /experiments/trial1
-📊 Dataset: /experiments/trial2
-📊 Dataset: /experiments/trial3
+group:   / (2 children)
+dataset: /temperature
+group:   /experiments (3 children)
+dataset: /experiments/trial1
+dataset: /experiments/trial2
+dataset: /experiments/trial3
 ```
 
 ### 3. Exploring Groups
@@ -123,9 +123,11 @@ func main() {
 
 ---
 
-## 📊 Reading Dataset Values
+## Reading Dataset Values
 
-The library can read dataset values for common datatypes:
+`Dataset.Read` returns numeric data as `[]float64`: every integer and floating-point value is
+converted. Strings are read with `ReadStrings` and compound data with `ReadCompound`. The dataset's
+datatype class tells which one to call:
 
 ```go
 package main
@@ -144,60 +146,48 @@ func main() {
     }
     defer file.Close()
 
-    // Walk and read datasets
     file.Walk(func(path string, obj hdf5.Object) {
-        if ds, ok := obj.(*hdf5.Dataset); ok {
-            // Read dataset data
-            data, err := ds.Read()
+        ds, ok := obj.(*hdf5.Dataset)
+        if !ok {
+            return
+        }
+        dt, err := ds.Datatype()
+        if err != nil {
+            log.Printf("%s: %v", path, err)
+            return
+        }
+
+        switch dt.Class {
+        case hdf5.ClassInteger, hdf5.ClassFloat:
+            values, err := ds.Read()
             if err != nil {
-                fmt.Printf("Error reading %s: %v\n", path, err)
+                log.Printf("%s: %v", path, err)
                 return
             }
+            fmt.Printf("%s: %d numeric values, first: %v\n", path, len(values), values[:min(10, len(values))])
 
-            fmt.Printf("Dataset %s:\n", path)
-
-            // Data type depends on HDF5 datatype
-            switch v := data.(type) {
-            case []int32:
-                fmt.Printf("  Type: int32, Count: %d\n", len(v))
-                fmt.Printf("  Values: %v\n", v[:min(10, len(v))])
-
-            case []int64:
-                fmt.Printf("  Type: int64, Count: %d\n", len(v))
-                fmt.Printf("  Values: %v\n", v[:min(10, len(v))])
-
-            case []float32:
-                fmt.Printf("  Type: float32, Count: %d\n", len(v))
-                fmt.Printf("  Values: %v\n", v[:min(10, len(v))])
-
-            case []float64:
-                fmt.Printf("  Type: float64, Count: %d\n", len(v))
-                fmt.Printf("  Values: %v\n", v[:min(10, len(v))])
-
-            case []string:
-                fmt.Printf("  Type: string, Count: %d\n", len(v))
-                fmt.Printf("  Values: %v\n", v[:min(10, len(v))])
-
-            default:
-                fmt.Printf("  Type: %T (not yet fully supported)\n", v)
+        case hdf5.ClassString:
+            values, err := ds.ReadStrings()
+            if err != nil {
+                log.Printf("%s: %v", path, err)
+                return
             }
+            fmt.Printf("%s: %d strings, first: %q\n", path, len(values), values[:min(10, len(values))])
+
+        default:
+            fmt.Printf("%s: datatype class %s, see the Reading Data guide\n", path, dt.Class)
         }
     })
 }
-
-func min(a, b int) int {
-    if a < b {
-        return a
-    }
-    return b
-}
 ```
+
+`min` is a built-in function since Go 1.21.
 
 ---
 
-## 📖 Complete Example
+## Complete Example
 
-Here's a complete program that analyzes an HDF5 file:
+A program that counts the groups and datasets of a file and prints its structure:
 
 ```go
 package main
@@ -229,7 +219,7 @@ func main() {
     defer file.Close()
 
     // Print file info
-    fmt.Printf("=== HDF5 File Analysis ===\n")
+    fmt.Printf("HDF5 file analysis\n")
     fmt.Printf("File: %s\n", *filename)
     fmt.Printf("Superblock version: %d\n\n", file.SuperblockVersion())
 
@@ -270,10 +260,10 @@ func main() {
         switch v := obj.(type) {
         case *hdf5.Group:
             if path != "/" {
-                fmt.Printf("%s📁 %s/\n", indent, v.Name())
+                fmt.Printf("%s%s/\n", indent, v.Name())
             }
         case *hdf5.Dataset:
-            fmt.Printf("%s📊 %s\n", indent, v.Name())
+            fmt.Printf("%s%s\n", indent, v.Name())
         }
     })
 }
@@ -287,155 +277,183 @@ go build -o analyze
 
 ---
 
-## 🧪 Creating Test Files
+## Creating Test Files
 
-You can create test HDF5 files directly in pure Go (no Python needed!):
+Test files can be created in Go, without h5py:
 
 ```go
 package main
 
 import (
     "log"
+
     "github.com/scigolib/hdf5"
 )
 
 func main() {
-    // Create a new HDF5 file
     fw, err := hdf5.CreateForWrite("test.h5", hdf5.CreateTruncate)
     if err != nil {
         log.Fatal(err)
     }
-    defer fw.Close()
+    defer func() {
+        if err := fw.Close(); err != nil {
+            log.Fatal(err)
+        }
+    }()
 
-    // Create datasets with different types
-    dsInt, _ := fw.CreateDataset("/integers", hdf5.Int32, []uint64{100})
-    dsFloat, _ := fw.CreateDataset("/floats", hdf5.Float64, []uint64{50})
-    dsStr, _ := fw.CreateDataset("/strings", hdf5.StringFixed(10), []uint64{2})
+    // Datasets of different types. A fixed-length string dataset needs its string size.
+    dsInt, err := fw.CreateDataset("/integers", hdf5.Int32, []uint64{100})
+    if err != nil {
+        log.Fatal(err)
+    }
+    dsFloat, err := fw.CreateDataset("/floats", hdf5.Float64, []uint64{50})
+    if err != nil {
+        log.Fatal(err)
+    }
+    dsStr, err := fw.CreateDataset("/strings", hdf5.String, []uint64{2}, hdf5.WithStringSize(10))
+    if err != nil {
+        log.Fatal(err)
+    }
 
-    // Write data
     integers := make([]int32, 100)
     for i := range integers {
         integers[i] = int32(i)
     }
-    dsInt.WriteInt32(integers)
+    if err := dsInt.Write(integers); err != nil {
+        log.Fatal(err)
+    }
 
     floats := make([]float64, 50)
     for i := range floats {
         floats[i] = float64(i) * 0.5
     }
-    dsFloat.Write(floats)
+    if err := dsFloat.Write(floats); err != nil {
+        log.Fatal(err)
+    }
 
-    dsStr.WriteStrings([]string{"hello", "world"})
+    if err := dsStr.Write([]string{"hello", "world"}); err != nil {
+        log.Fatal(err)
+    }
 
-    // Create groups
-    grp, _ := fw.CreateGroup("/experiments")
-    grp.CreateDataset("trial1", hdf5.Int32, []uint64{5})
-    grp.CreateDataset("trial2", hdf5.Int32, []uint64{5})
-
-    // Nested groups
-    subgrp, _ := fw.CreateGroup("/experiments/subgroup")
-    dsResult, _ := subgrp.CreateDataset("result", hdf5.Int32, []uint64{1})
-    dsResult.WriteInt32([]int32{42})
+    // Groups, including nested ones, are created from the file; a dataset in a
+    // group is addressed by its full path.
+    if _, err := fw.CreateGroup("/experiments"); err != nil {
+        log.Fatal(err)
+    }
+    if _, err := fw.CreateDataset("/experiments/trial1", hdf5.Int32, []uint64{5}); err != nil {
+        log.Fatal(err)
+    }
+    if _, err := fw.CreateGroup("/experiments/subgroup"); err != nil {
+        log.Fatal(err)
+    }
+    dsResult, err := fw.CreateDataset("/experiments/subgroup/result", hdf5.Int32, []uint64{1})
+    if err != nil {
+        log.Fatal(err)
+    }
+    if err := dsResult.Write([]int32{42}); err != nil {
+        log.Fatal(err)
+    }
 
     log.Println("Created test.h5")
 }
 ```
 
-**Pure Go workflow** - Create files with this library, verify with h5dump or Python h5py!
+Check the result with `h5dump test.h5` or h5py.
 
 ---
 
-## ❓ Common Questions
+## Common Questions
 
-### Q: Can I read dataset values?
-**A**: **Yes!** The library supports reading:
-- ✅ Integers (int32, int64)
-- ✅ Floats (float32, float64)
-- ✅ Strings (fixed-length and variable-length)
-- ✅ Compound types (struct-like data)
-- ✅ Compressed datasets (GZIP)
-- ✅ Chunked datasets
+### Can I read dataset values?
+Yes. The library reads:
+- integers and floating-point numbers (`Read` returns `[]float64`)
+- fixed-length and variable-length strings (`ReadStrings`)
+- compound types (`ReadCompound`)
+- chunked, compact and contiguous datasets, with GZIP, Shuffle, Fletcher32, LZF and BZIP2 filters
 
-### Q: Can I write HDF5 files?
-**A**: Yes! Write support advancing rapidly - contiguous/chunked datasets, all datatypes, groups, attributes (compact & dense), compression (GZIP/Shuffle), dense storage RMW complete. See [ROADMAP.md](../../ROADMAP.md) for details.
+### Can I write HDF5 files?
+Yes: contiguous, chunked and compact datasets, groups, attributes (compact and dense storage),
+GZIP, Shuffle, Fletcher32 and LZF filters, links, user blocks, and modification of existing files.
+See the README "Current Status" section and [ROADMAP.md](../../ROADMAP.md).
 
-### Q: Does it require CGo?
-**A**: **No!** This is a pure Go implementation with zero C dependencies. Works on all Go-supported platforms.
+### Does it require cgo?
+No. The library is pure Go and works on every platform Go supports.
 
-### Q: What HDF5 versions are supported?
-**A**: The library supports HDF5 format with superblock v0, v2, and v3 (covering HDF5 1.0 through HDF5 2.0.0).
+### What HDF5 versions are supported?
+Superblock versions 0, 2 and 3, which covers files written by HDF5 1.0 through 2.0.0.
 
-### Q: What datatypes are supported?
-**A**: Fully supported:
-- Fixed-point integers (int8-64, uint8-64)
-- Floating-point (float32, float64, FP8, bfloat16)
+### What datatypes are supported?
+- Fixed-point integers (8 to 64 bits, signed and unsigned)
+- Floating point (float32, float64, FP8, bfloat16)
 - Fixed-length and variable-length strings
-- Compound types (struct-like)
-- Arrays (fixed-size)
-- Enums (named integers)
-- References (object/region)
-- Opaque (binary blobs)
+- Compound types
+- Arrays
+- Enums
+- References (object and region)
+- Opaque
 
-Not supported: H5T_TIME (deprecated in HDF5 spec)
+H5T_TIME is not supported.
 
-### Q: What compression formats work?
-**A**: Currently:
-- ✅ GZIP/Deflate (most common), Shuffle, Fletcher32, LZF, BZIP2
-- ❌ SZIP (4), N-bit (5), Scale-offset (6), Blosc, LZ4, Zstd
+### What compression formats work?
+- Supported: GZIP (deflate), Shuffle, Fletcher32, LZF, BZIP2
+- Not supported: SZIP (4), N-bit (5), Scale-offset (6) and third-party filters such as Blosc, LZ4 and Zstd
 
 A dataset that uses an unsupported filter fails with an error that wraps `hdf5.ErrNotSupported`;
 earlier versions returned the undecoded bytes as values.
 
-### Q: Is it thread-safe?
-**A**: Currently, each `File` instance should be used from a single goroutine. Thread-safe concurrent access and SWMR mode are planned for v0.14.0+.
+### Is it thread-safe?
+Separate `File` values are independent. One `File` used from several goroutines needs the caller's
+synchronization. There is no SWMR (single writer, multiple readers) mode and no parallel I/O.
 
-### Q: What about performance?
-**A**: The library uses buffer pooling and efficient memory management. Performance is within 2-3x of the C library for most operations.
-
----
-
-## 📚 Next Steps
-
-- **[Architecture Overview](../architecture/OVERVIEW.md)** - How the library works internally
-- **[ROADMAP.md](../../ROADMAP.md)** - Future plans and write support timeline
-- **[Examples](../../examples/)** - More comprehensive examples:
-  - `01-basic/` - Basic file opening
-  - `02-list-objects/` - Listing file structure
-  - `03-read-dataset/` - Reading dataset values
-  - `04-vlen-strings/` - Variable-length strings
-  - `05-comprehensive/` - Complete file analysis
-
-- **[API Reference](https://pkg.go.dev/github.com/scigolib/hdf5)** - Full GoDoc documentation
+### What about performance?
+The library pools buffers and reads only the chunks a selection needs. It has not been compared
+with the C library in a published benchmark. Measure your own workload; the benchmarks in the
+repository are `release_bench_test.go` and `btree_rebalancing_bench_test.go`.
 
 ---
 
-## 🐛 Troubleshooting
+## Next Steps
+
+- [Architecture Overview](../architecture/OVERVIEW.md): how the library is built
+- [ROADMAP.md](../../ROADMAP.md): what comes next
+- [Examples](../../examples/):
+  - `01-basic/`: opening a file
+  - `02-list-objects/`: listing the file structure
+  - `03-read-dataset/`: reading dataset values
+  - `04-vlen-strings/`: variable-length strings
+  - `05-comprehensive/`: a complete file analysis
+  - `06-write-dataset/`: writing datasets
+  - `07-rebalancing/`: B-tree rebalancing strategies
+- [API reference](https://pkg.go.dev/github.com/scigolib/hdf5): GoDoc
+
+---
+
+## Troubleshooting
 
 ### "not an HDF5 file" error
 ```go
 file, err := hdf5.Open("data.h5")
 if err != nil {
-    // Check error message
     log.Printf("Error: %v", err)
 }
 ```
 
-**Solutions**:
-- Verify file exists and is readable
-- Check file is valid HDF5 (try with `h5dump -H file.h5` if HDF5 tools installed)
-- Ensure file isn't corrupted
-- Check file permissions
+Check that:
+- the file exists and is readable
+- it is valid HDF5 (`h5dump -H file.h5`, if the HDF5 tools are installed)
+- it is not truncated or corrupted
 
 ### "unsupported superblock version" error
 
-**Solution**: Your HDF5 file uses a format version we don't support yet (v1). Please file an issue at https://github.com/scigolib/hdf5/issues with:
-- HDF5 file (if shareable)
-- Output of `h5dump -H yourfile.h5`
-- How the file was created (tool/library used)
+The file uses a superblock version this library does not read (it reads 0, 2 and 3). Open an issue
+at https://github.com/scigolib/hdf5/issues with the file (if it can be shared), the output of
+`h5dump -H yourfile.h5` and the tool that created it.
 
 ### "unsupported datatype" error
 
-**Solution**: Your dataset uses a datatype we haven't implemented yet. Currently supported: int32, int64, float32, float64, strings, compounds. Please file an issue with details.
+The dataset uses a datatype the library does not read. `errors.Is(err, hdf5.ErrNotSupported)`
+tells unsupported features from damaged files. The supported datatypes are listed above and in
+[DATATYPES.md](DATATYPES.md). Open an issue with the output of `h5dump -H` for the dataset.
 
 ### Reading compressed data fails
 
@@ -446,38 +464,23 @@ if err != nil {
 
 ---
 
-## 🚀 Production Readiness
+## Status
 
-**Current Status: Production-ready for reading and writing HDF5 files**
-
-✅ **Ready for production use** if your files contain:
-- Standard datatypes (int, float, string, compound, arrays, enums)
-- GZIP compression
-- Superblock v0, v2, or v3 (HDF5 2.0.0 compatible)
-- Object header v2
-
-**Production Status**:
-- ✅ Full read/write support
-- ✅ All datatypes including compound
-- ✅ Soft/external links supported
-- ✅ Named datatypes (committed datatypes) supported
-- ✅ Official HDF5 test suite: 379 of 383 valid files
-
-See [README.md](../../README.md) for full feature list.
+The supported features, the validation against the official HDF5 test suite (379 of 383 valid
+files) and the limitations are listed in the README "Current Status" section:
+[README.md](../../README.md).
 
 ---
 
-### 📚 Next Steps
+## Further Reading
 
-After completing this quick start, explore:
-
-- **[Installation Guide](INSTALLATION.md)** - Detailed installation and platform support
-- **[Reading Data](READING_DATA.md)** - Complete guide to datasets, attributes, and datatypes
-- **[Datatypes Guide](DATATYPES.md)** - HDF5 to Go type mapping details
-- **[Troubleshooting](TROUBLESHOOTING.md)** - Solutions to common problems
-- **[FAQ](FAQ.md)** - Frequently asked questions
-- **[Examples](../../examples/)** - 5 comprehensive examples with detailed documentation
+- [Installation Guide](INSTALLATION.md): installation and platform support
+- [Reading Data](READING_DATA.md): datasets, attributes and partial reads
+- [Datatypes Guide](DATATYPES.md): how HDF5 types map to Go types
+- [Troubleshooting](TROUBLESHOOTING.md): common problems
+- [FAQ](FAQ.md): frequently asked questions
+- [Examples](../../examples/): seven runnable programs
 
 ---
 
-*Last Updated: 2025-11-13*
+*Last Updated: 2026-11-07*

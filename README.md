@@ -135,7 +135,7 @@ if err := ds.WriteAttribute("units", "K"); err != nil {
 ## Performance Tuning
 
 When many attributes are deleted, the B-trees that index them can become sparse: space is wasted and
-lookups slow down. The library offers four rebalancing strategies.
+lookups slow down. The library offers three rebalancing strategies.
 
 ### 1. Immediate (default) and none
 
@@ -192,20 +192,10 @@ defer fw.Close() // stops the background goroutine
 
 Use it for large files and long-running processes that delete continuously.
 
-### 4. Smart rebalancing
+### Smart rebalancing (planned)
 
-Watches the workload and chooses one of the modes above.
-
-```go
-fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
-    hdf5.WithSmartRebalancing(
-        hdf5.SmartAutoDetect(true),
-        hdf5.SmartAutoSwitch(true),
-    ),
-)
-```
-
-Use it when the workload is not known in advance.
+`WithSmartRebalancing` is the planned mode that would choose between the modes above from the observed
+workload. It is not implemented yet: the option is accepted and has no effect.
 
 ### Comparison
 
@@ -215,7 +205,6 @@ Use it when the workload is not known in advance.
 | Immediate (default) | highest for batch deletions | none | few deletions |
 | Lazy | low, batched | short, per batch | batch deletions |
 | Incremental | low, in the background | none | large files, continuous deletes |
-| Smart | that of the chosen mode | varies | unknown workloads |
 
 Measure your own workload with the benchmarks in `btree_rebalancing_bench_test.go`. Details: the
 [performance tuning guide](docs/guides/PERFORMANCE_TUNING.md), the

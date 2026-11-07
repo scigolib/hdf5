@@ -1,10 +1,10 @@
 # Troubleshooting Guide
 
-> **Solutions to common problems when using the HDF5 Go library**
+Solutions to common problems when using the HDF5 Go library.
 
 ---
 
-## 📚 Table of Contents
+## Table of Contents
 
 - [File Opening Issues](#file-opening-issues)
 - [Reading Data Issues](#reading-data-issues)
@@ -16,7 +16,7 @@
 
 ---
 
-## 📂 File Opening Issues
+## File Opening Issues
 
 ### Problem: "not an HDF5 file" Error
 
@@ -148,7 +148,7 @@ ls -lh yourfile.h5
 
 **Possible Causes**:
 1. Empty file
-2. Objects we don't support yet (external links, virtual datasets)
+2. Objects this library does not support (virtual datasets)
 3. Corrupt file structure
 
 **Debugging**:
@@ -173,7 +173,7 @@ for i, child := range root.Children() {
 
 ---
 
-## 📊 Reading Data Issues
+## Reading Data Issues
 
 ### Problem: "unsupported datatype" Error
 
@@ -357,14 +357,14 @@ for _, w := range f.Warnings() {
 **Solution**:
 
 ```go
-strings, err := ds.ReadStrings()
+values, err := ds.ReadStrings()
 if err != nil {
     log.Printf("String read error: %v", err)
     return
 }
 
 // Check for encoding issues
-for i, str := range strings {
+for i, str := range values {
     // Trim any null bytes or spaces
     clean := strings.TrimRight(str, "\x00 ")
 
@@ -423,7 +423,7 @@ with h5py.File('original.h5', 'r') as f_in:
 
 ---
 
-## 🔄 Type and Conversion Issues
+## Type and Conversion Issues
 
 ### Problem: Precision Loss with Large Integers
 
@@ -434,7 +434,7 @@ with h5py.File('original.h5', 'r') as f_in:
 **Example**:
 ```go
 // HDF5 int64: 9223372036854775807
-// Read as float64: 9223372036854776000  (rounded!)
+// Read as float64: 9223372036854776000  (rounded)
 ```
 
 **Solution**:
@@ -454,7 +454,7 @@ for i, v := range data {
 }
 ```
 
-**Future**: Direct int64 reading will be available in v1.0.0.
+`ReadSlice` and `ReadHyperslab` return the dataset's own element type, so they keep exact 64-bit integers.
 
 ### Problem: Type Assertion Panic
 
@@ -504,7 +504,7 @@ default:
 
 ---
 
-## ⚡ Performance Issues
+## Performance Issues
 
 ### Problem: Slow File Opening
 
@@ -617,7 +617,7 @@ h5repack -f GZIP=3 input.h5 output.h5  # Level 3 instead of 9
 
 ---
 
-## 💻 Installation Issues
+## Installation Issues
 
 ### Problem: "command not found: go"
 
@@ -678,7 +678,7 @@ go mod tidy
 
 ---
 
-## 🔍 Debugging Tips
+## Debugging Tips
 
 ### Enable Verbose Error Messages
 
@@ -688,8 +688,8 @@ file, err := hdf5.Open("data.h5")
 if err != nil {
     fmt.Printf("Failed to open file: %v\n", err)
 
-    // Print full error chain (if using errors.Wrap)
-    fmt.Printf("Full error: %+v\n", err)
+    // Print the full error text, including wrapped causes
+    fmt.Printf("Full error: %v\n", err)
     return
 }
 defer file.Close()
@@ -780,7 +780,7 @@ func main() {
 
 ---
 
-## 📞 Getting Help
+## Getting Help
 
 ### Before Asking for Help
 
@@ -852,7 +852,7 @@ GROUP "/" {
 
 ---
 
-## 📚 Related Guides
+## Related Guides
 
 - **[Installation Guide](INSTALLATION.md)** - Setup and verification
 - **[Reading Data Guide](READING_DATA.md)** - Comprehensive reading guide
@@ -861,4 +861,4 @@ GROUP "/" {
 
 ---
 
-*Last Updated: 2025-11-13*
+*Last Updated: 2026-11-07*
