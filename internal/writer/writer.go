@@ -3,7 +3,10 @@ package writer
 import (
 	"fmt"
 	"io"
+	"math"
 	"os"
+
+	"github.com/scigolib/hdf5/internal/utils"
 )
 
 // FileWriter wraps an os.File for writing HDF5 files.
@@ -13,10 +16,24 @@ import (
 // - End-of-file tracking
 // - Flush control
 //
+// Addresses are relative to the file's base address: the size of its user
+// block, 0 when it has none. The writer adds the base before every I/O call,
+// as the HDF5 VFD does (H5FDint.c:267, "addr + file->base_addr"), so the
+// allocator, the encoders and every caller work in HDF5 addresses only. The
+// bytes before the base belong to the application (WriteUserBlock).
+//
 // Thread-safety: Not thread-safe. Caller must synchronize access.
 type FileWriter struct {
 	file      *os.File   // Underlying OS file
-	allocator *Allocator // Space allocation tracker
+	allocator *Allocator // Space allocation tracker (relative addresses)
+	base      uint64     // Base address: the user block size
+}
+
+// ValidUserBlockSize reports whether size is a user block size the C library
+// accepts: 0, or a power of two of at least 512 (H5Pset_userblock,
+// H5Pfcpl.c:321-329).
+func ValidUserBlockSize(size uint64) bool {
+	return size == 0 || (size >= 512 && size&(size-1) == 0)
 }
 
 // CreateMode specifies the file creation/opening behavior.
@@ -56,6 +73,49 @@ const (
 //   - FileWriter ready for use
 //   - Error if file creation fails
 func NewFileWriter(filename string, mode CreateMode, initialOffset uint64) (*FileWriter, error) {
+	return NewFileWriterWithUserBlock(filename, mode, initialOffset, 0)
+}
+
+// NewFileWriterWithUserBlock is NewFileWriter for a file with a user block of
+// userBlock bytes (ValidUserBlockSize): the block is written as zeros at the
+// start of the file, and every address after it is relative to its end, as
+// the C library sets the base address to the user block size
+// (H5Fsuper.c:1194-1204). initialOffset stays relative.
+func NewFileWriterWithUserBlock(filename string, mode CreateMode, initialOffset, userBlock uint64) (*FileWriter, error) {
+	if !ValidUserBlockSize(userBlock) {
+		return nil, fmt.Errorf("user block size %d: must be 0 or a power of two of at least 512", userBlock)
+	}
+	if userBlock > math.MaxInt64 {
+		return nil, fmt.Errorf("user block size %d: past the largest file offset", userBlock)
+	}
+	w, err := newFileWriter(filename, mode, initialOffset)
+	if err != nil {
+		return nil, err
+	}
+	if userBlock == 0 {
+		return w, nil
+	}
+	// The file is new and empty: extending it to the block size reads back
+	// as zeros without holding the block in memory (C only reserves the
+	// space, H5Fsuper.c:1197-1199).
+	if err := w.file.Truncate(int64(userBlock)); err != nil {
+		closeErr := w.Close()
+		return nil, fmt.Errorf("reserve the user block of %d bytes: %w", userBlock, joinClose(err, closeErr))
+	}
+	w.base = userBlock
+	return w, nil
+}
+
+// joinClose returns err, with closeErr appended when closing failed too.
+func joinClose(err, closeErr error) error {
+	if closeErr == nil {
+		return err
+	}
+	return fmt.Errorf("%w (close: %w)", err, closeErr)
+}
+
+// newFileWriter creates the file of NewFileWriter.
+func newFileWriter(filename string, mode CreateMode, initialOffset uint64) (*FileWriter, error) {
 	var osFile *os.File
 	var err error
 
@@ -112,6 +172,33 @@ func NewFileWriter(filename string, mode CreateMode, initialOffset uint64) (*Fil
 //	addr, _ := fw.Allocate(1024)
 //	fw.WriteAt(newData, int64(addr))
 func OpenFileWriter(filename string, mode CreateMode, initialOffset uint64) (*FileWriter, error) {
+	return OpenFileWriterWithBase(filename, mode, initialOffset, 0)
+}
+
+// OpenFileWriterWithBase is OpenFileWriter for a file whose base address is
+// base (its superblock's position, the user block size): addresses are
+// relative to it, so the allocator starts at the file size minus the base.
+// initialOffset is relative.
+func OpenFileWriterWithBase(filename string, mode CreateMode, initialOffset, base uint64) (*FileWriter, error) {
+	w, err := openFileWriter(filename, mode, initialOffset+base)
+	if err != nil {
+		return nil, err
+	}
+	if base == 0 {
+		return w, nil
+	}
+	end := w.allocator.EndOfFile()
+	if end < base {
+		closeErr := w.Close()
+		return nil, joinClose(fmt.Errorf("file of %d bytes ends before its base address %d", end, base), closeErr)
+	}
+	w.base = base
+	w.allocator = NewAllocator(end - base)
+	return w, nil
+}
+
+// openFileWriter opens the file of OpenFileWriter; initialOffset is absolute.
+func openFileWriter(filename string, mode CreateMode, initialOffset uint64) (*FileWriter, error) {
 	var osFile *os.File
 	var err error
 
@@ -218,8 +305,13 @@ func (w *FileWriter) WriteAt(data []byte, offset int64) (int, error) {
 		return 0, nil // Nothing to write
 	}
 
+	abs, err := w.absolute(offset)
+	if err != nil {
+		return 0, fmt.Errorf("write at address %d: %w", offset, err)
+	}
+
 	// Use os.File.WriteAt which handles seeking internally
-	n, err := w.file.WriteAt(data, offset)
+	n, err := w.file.WriteAt(data, abs)
 	if err != nil {
 		return n, fmt.Errorf("write at address %d failed: %w", offset, err)
 	}
@@ -229,6 +321,47 @@ func (w *FileWriter) WriteAt(data []byte, offset int64) (int, error) {
 	}
 
 	return n, nil
+}
+
+// absolute returns the file offset of the relative address offset: offset
+// plus the base, refusing a negative offset and a sum past the int64 range.
+func (w *FileWriter) absolute(offset int64) (int64, error) {
+	if offset < 0 {
+		return 0, fmt.Errorf("negative address %d", offset)
+	}
+	if w.base > math.MaxInt64 || uint64(offset) > math.MaxInt64-w.base {
+		return 0, fmt.Errorf("address %d with base %d overflows the file offset range", offset, w.base)
+	}
+	return offset + int64(w.base), nil
+}
+
+// Base returns the file's base address: the size of its user block, 0 when
+// it has none.
+func (w *FileWriter) Base() uint64 {
+	return w.base
+}
+
+// WriteUserBlock writes data at the start of the user block, the bytes
+// before the base address that HDF5 leaves to the application. It refuses a
+// file without a user block and data longer than the block.
+func (w *FileWriter) WriteUserBlock(data []byte) error {
+	if w.file == nil {
+		return fmt.Errorf("writer is closed")
+	}
+	if w.base == 0 {
+		return fmt.Errorf("the file has no user block")
+	}
+	if uint64(len(data)) > w.base {
+		return fmt.Errorf("%d bytes do not fit the user block of %d bytes", len(data), w.base)
+	}
+	n, err := w.file.WriteAt(data, 0)
+	if err != nil {
+		return fmt.Errorf("write user block: %w", err)
+	}
+	if n != len(data) {
+		return fmt.Errorf("incomplete user block write: wrote %d of %d bytes", n, len(data))
+	}
+	return nil
 }
 
 // WriteAtAddress writes data at a specific address (convenience method with uint64 address).
@@ -244,8 +377,12 @@ func (w *FileWriter) ReadAt(buf []byte, addr int64) (int, error) {
 	if w.file == nil {
 		return 0, fmt.Errorf("writer is closed")
 	}
+	abs, err := w.absolute(addr)
+	if err != nil {
+		return 0, fmt.Errorf("read at address %d: %w", addr, err)
+	}
 
-	return w.file.ReadAt(buf, addr)
+	return w.file.ReadAt(buf, abs)
 }
 
 // EndOfFile returns the current end-of-file address.
@@ -279,6 +416,7 @@ func (w *FileWriter) Close() error {
 
 // File returns the underlying *os.File.
 // Use with caution - direct file operations may break allocation tracking.
+// Its offsets are absolute: they include the base address (Base).
 // Primarily for reading operations or advanced use cases.
 func (w *FileWriter) File() *os.File {
 	return w.file
@@ -297,8 +435,14 @@ func (w *FileWriter) File() *os.File {
 //
 //	reader := fw.Reader()
 //	oh, err := core.ReadObjectHeader(reader, addr, sb)
+//
+// Its addresses are relative to the base address, as the read side's are
+// (utils.NewBaseReader); with no user block it is the file itself.
 func (w *FileWriter) Reader() io.ReaderAt {
-	return w.file
+	if w.base == 0 {
+		return w.file
+	}
+	return utils.NewBaseReader(w.file, w.base)
 }
 
 // Allocator returns the space allocator.
@@ -334,7 +478,8 @@ func (w *FileWriter) WriteAtWithAllocation(data []byte) (uint64, error) {
 }
 
 // Seek implements io.Seeker interface for compatibility.
-// Note: HDF5 uses absolute addressing, so seeking is rarely needed.
+// Its offsets are absolute file offsets, like File's: they include the base
+// address. HDF5 addresses go through WriteAt and ReadAt.
 func (w *FileWriter) Seek(offset int64, whence int) (int64, error) {
 	if w.file == nil {
 		return 0, fmt.Errorf("writer is closed")

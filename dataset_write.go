@@ -628,8 +628,9 @@ type WriteOption func(*FileWriteConfig)
 
 // FileWriteConfig holds configuration for file creation.
 type FileWriteConfig struct {
-	SuperblockVersion uint8 // HDF5 superblock version (0, 2, or 3)
-	BTreeRebalancing  bool  // Enable B-tree rebalancing after deletions (default: true)
+	SuperblockVersion uint8  // HDF5 superblock version (0, 2, or 3)
+	BTreeRebalancing  bool   // Enable B-tree rebalancing after deletions (default: true)
+	UserBlock         uint64 // User block size in bytes (0: none; see WithUserBlock)
 }
 
 // WithSuperblockVersion sets the HDF5 superblock version.
@@ -681,6 +682,46 @@ func WithBTreeRebalancing(enable bool) WriteOption {
 	return func(cfg *FileWriteConfig) {
 		cfg.BTreeRebalancing = enable
 	}
+}
+
+// WithUserBlock reserves a user block of size bytes at the start of a new
+// file, as H5Pset_userblock does in the C library: the HDF5 data starts
+// after it, and the block is free for the application's own header (a
+// MATLAB v7.3 file keeps its 128-byte MAT header there). Write it with
+// FileWriter.WriteUserBlock; the rest of the block is zeroed.
+//
+// The size is 0 (no user block, the default) or a power of two of at least
+// 512; CreateForWrite fails on any other size.
+//
+// OpenForWrite keeps the user block of an existing file as it is; given
+// there, the size must be the file's own (0 accepts any).
+//
+// Example:
+//
+//	fw, err := hdf5.CreateForWrite("data.mat", hdf5.CreateTruncate, hdf5.WithUserBlock(512))
+//	if err != nil {
+//	    return err
+//	}
+//	defer fw.Close()
+//	err = fw.WriteUserBlock(header) // up to 512 bytes
+func WithUserBlock(size uint64) WriteOption {
+	return func(cfg *FileWriteConfig) {
+		cfg.UserBlock = size
+	}
+}
+
+// WriteUserBlock writes data at the start of the file's user block (see
+// WithUserBlock). It fails when the file has no user block or data is longer
+// than the block, and writes nothing then. The bytes are written as given:
+// the library never reads or changes the user block.
+func (fw *FileWriter) WriteUserBlock(data []byte) error {
+	if fw.writer == nil {
+		return fmt.Errorf("write user block: file writer is closed")
+	}
+	if err := fw.writer.WriteUserBlock(data); err != nil {
+		return fmt.Errorf("write user block: %w", err)
+	}
+	return nil
 }
 
 // CreateForWrite creates a new HDF5 file for writing.
@@ -738,7 +779,7 @@ func CreateForWrite(filename string, mode CreateMode, opts ...interface{}) (*Fil
 	}
 
 	// Map CreateMode to writer.CreateMode and create basic writer
-	fw, err := initializeFileWriter(filename, mode, superblockSize)
+	fw, err := initializeFileWriter(filename, mode, superblockSize, cfg.UserBlock)
 	if err != nil {
 		return nil, err
 	}
@@ -762,7 +803,7 @@ func CreateForWrite(filename string, mode CreateMode, opts ...interface{}) (*Fil
 		Version:        cfg.SuperblockVersion, // Use configured version
 		OffsetSize:     8,
 		LengthSize:     8,
-		BaseAddress:    0,
+		BaseAddress:    fw.Base(), // the user block size (H5Fsuper.c:1194)
 		RootGroup:      rootInfo.groupAddr,
 		Endianness:     binary.LittleEndian,
 		SuperExtension: 0,
@@ -2263,7 +2304,7 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 
 	// Step 1: open the file for reading and refuse what cannot be written
 	// before anything is written.
-	f, err := openReadSideForWrite(filename)
+	f, err := openReadSideForWrite(filename, cfg.UserBlock)
 	if err != nil {
 		return nil, err
 	}
@@ -2280,7 +2321,10 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 		superblockSize = 96 // v0
 	}
 
-	fw, err := writer.OpenFileWriter(filename, writerMode, superblockSize)
+	// The writer adds the file's base address (its user block size) to every
+	// address, as the read side does (utils.NewBaseReader); the block itself
+	// is never written.
+	fw, err := writer.OpenFileWriterWithBase(filename, writerMode, superblockSize, f.sb.BaseAddress)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("failed to create writer: %w", err), f.Close())
 	}
@@ -2301,9 +2345,9 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 
 // openReadSideForWrite opens filename for reading and refuses, before anything
 // is written, a file this library cannot modify: object headers without a valid
-// checksum (structures of earlier hdf5-go releases, legacy_repair.go) and files
-// with a user block, whose base address the write path does not apply yet.
-func openReadSideForWrite(filename string) (*File, error) {
+// checksum (structures of earlier hdf5-go releases, legacy_repair.go), and a
+// user block size given with WithUserBlock that is not the file's own.
+func openReadSideForWrite(filename string, userBlock uint64) (*File, error) {
 	f, err := Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
@@ -2314,9 +2358,9 @@ func openReadSideForWrite(filename string) (*File, error) {
 	if err := refuseUnrepairableHeaders(f); err != nil {
 		return nil, errors.Join(err, f.Close())
 	}
-	if base := f.sb.BaseAddress; base != 0 {
+	if base := f.sb.BaseAddress; userBlock != 0 && userBlock != base {
 		return nil, errors.Join(
-			fmt.Errorf("opening a file with a user block (base address %d) for writing: %w", base, ErrNotSupported),
+			fmt.Errorf("WithUserBlock(%d): the file's user block is %d bytes, and an existing file keeps its block", userBlock, base),
 			f.Close())
 	}
 	return f, nil
@@ -2886,7 +2930,9 @@ func (fw *FileWriter) GetIncrementalRebalancingProgress() (structures.Rebalancin
 }
 
 // initializeFileWriter creates and initializes a new FileWriter with the given mode.
-func initializeFileWriter(filename string, mode CreateMode, superblockSize uint64) (*writer.FileWriter, error) {
+// A user block of userBlock bytes (0 for none) is checked before the file is
+// created, so a refused size never truncates an existing file.
+func initializeFileWriter(filename string, mode CreateMode, superblockSize, userBlock uint64) (*writer.FileWriter, error) {
 	var writerMode writer.CreateMode
 	switch mode {
 	case CreateTruncate:
@@ -2898,7 +2944,7 @@ func initializeFileWriter(filename string, mode CreateMode, superblockSize uint6
 	}
 
 	// Superblock size passed from caller (48 for v2, 96 for v0)
-	fw, err := writer.NewFileWriter(filename, writerMode, superblockSize)
+	fw, err := writer.NewFileWriterWithUserBlock(filename, writerMode, superblockSize, userBlock)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create writer: %w", err)
 	}

@@ -1,8 +1,6 @@
 package hdf5
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -46,22 +44,6 @@ func TestOpenUserBlockFiles(t *testing.T) {
 			require.NotZero(t, f.Superblock().RootGroup)
 		})
 	}
-}
-
-// TestOpenForWriteRefusesUserBlock pins the scope: the write path addresses the
-// file absolutely, so it must refuse a file with a user block rather than write
-// at the wrong offsets.
-func TestOpenForWriteRefusesUserBlock(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "twithub.h5")
-
-	data, err := os.ReadFile("testdata/hdf5_official/twithub.h5")
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(target, data, 0o600))
-
-	_, err = OpenForWrite(target, OpenReadWrite)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "user block")
 }
 
 // TestOpenUserBlockFileData reads a dataset from a user-block file, proving the
