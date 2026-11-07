@@ -1,6 +1,6 @@
 # HDF5 Go Library
 
-> **Pure Go implementation of the HDF5 file format** - No CGo required
+A pure Go implementation of the HDF5 file format: read and write HDF5 files without the C library or cgo.
 
 [![Release](https://img.shields.io/github/v/release/scigolib/hdf5?include_prereleases&style=flat-square&logo=github&color=blue&label=version)](https://github.com/scigolib/hdf5/releases)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/scigolib/hdf5?style=flat-square&logo=go)](https://go.dev)
@@ -12,24 +12,32 @@
 [![Stars](https://img.shields.io/github/stars/scigolib/hdf5?style=flat-square&logo=github)](https://github.com/scigolib/hdf5/stargazers)
 [![Discussions](https://img.shields.io/github/discussions/scigolib/hdf5?style=flat-square&logo=github&label=discussions)](https://github.com/scigolib/hdf5/discussions)
 
-A modern, pure Go library for reading and writing HDF5 files without CGo dependencies. HDF5 2.0.0 compatible, production-ready read/write support.
+HDF5 is the file format behind much of scientific data: h5py and PyTables output, MATLAB v7.3 `.mat`
+files, NetCDF-4, instrument and simulation data. This library lets a Go program read such files and
+write new ones that the HDF5 C library and the tools built on it (h5dump, h5py) read back. A Go binary
+built with it needs no C toolchain and no HDF5 installation, on any platform Go supports.
 
 ---
 
-## ✨ Features
+## Features
 
-- ✅ **Pure Go** - No CGo, no C dependencies, cross-platform
-- ✅ **Modern Design** - Built with Go 1.25+ best practices
-- ✅ **HDF5 2.0.0 Compatibility** - Read/Write: v0, v2, v3 superblocks | Format Spec v4.0 with checksum validation
-- ✅ **Full Dataset Reading** - Compact, contiguous, chunked layouts with GZIP
-- ✅ **Rich Datatypes** - Integers, floats, strings (fixed/variable), compounds
-- ✅ **Memory Efficient** - Buffer pooling and smart memory management
-- ✅ **Production Ready** - Read support feature-complete
-- ✍️ **Comprehensive Write Support** - Datasets, groups, attributes + Smart Rebalancing!
+- **Pure Go**: no cgo and no C dependencies; cross-compiles like any Go program.
+- **HDF5 2.0.0 file format**: superblock versions 0, 2 and 3 with checksum validation, read and write.
+- **Datasets**: compact, contiguous and chunked layouts; GZIP, Shuffle, Fletcher32 and LZF filters;
+  partial reads by hyperslab and chunk-by-chunk iteration for data larger than memory.
+- **Datatypes**: integers, floating point (including FP8 and bfloat16), fixed and variable-length
+  strings, arrays, enums, compounds, references, opaque.
+- **Groups, attributes and links**: both group formats, compact and dense attribute storage, hard,
+  soft and external links.
+- **Modifying existing files**: add, change and delete datasets, groups and attributes in place.
+- **Checked against the C library**: the official HDF5 test files are read in CI, and files this
+  library writes are read back by `h5dump`.
+- **Hardened for untrusted files**: sizes and addresses read from a file are checked against the file
+  before memory is allocated; the memory one read may use is capped (`File.SetReadLimit`).
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -37,7 +45,7 @@ A modern, pure Go library for reading and writing HDF5 files without CGo depende
 go get github.com/scigolib/hdf5
 ```
 
-### Basic Usage
+### Read a file
 
 ```go
 package main
@@ -45,68 +53,94 @@ package main
 import (
     "fmt"
     "log"
+
     "github.com/scigolib/hdf5"
 )
 
 func main() {
-    // Open HDF5 file
     file, err := hdf5.Open("data.h5")
     if err != nil {
         log.Fatal(err)
     }
     defer file.Close()
 
-    // Walk through file structure
+    // List every group and dataset, and read the datasets' values.
     file.Walk(func(path string, obj hdf5.Object) {
         switch v := obj.(type) {
         case *hdf5.Group:
-            fmt.Printf("📁 %s (%d children)\n", path, len(v.Children()))
+            fmt.Printf("group   %s (%d children)\n", path, len(v.Children()))
         case *hdf5.Dataset:
-            fmt.Printf("📊 %s\n", path)
+            values, err := v.Read() // numeric data as []float64
+            if err != nil {
+                log.Printf("%s: %v", path, err)
+                return
+            }
+            units, _ := v.ReadAttribute("units") // nil error only if the attribute exists
+            fmt.Printf("dataset %s: %d values, units %v\n", path, len(values), units)
         }
     })
 }
 ```
 
-**Output**:
-```
-📁 / (2 children)
-📊 /temperature
-📁 /experiments/ (3 children)
+### Write a file
+
+```go
+fw, err := hdf5.CreateForWrite("results.h5", hdf5.CreateTruncate)
+if err != nil {
+    log.Fatal(err)
+}
+defer fw.Close()
+
+if _, err := fw.CreateGroup("/run1"); err != nil {
+    log.Fatal(err)
+}
+ds, err := fw.CreateDataset("/run1/temperature", hdf5.Float64, []uint64{4})
+if err != nil {
+    log.Fatal(err)
+}
+if err := ds.Write([]float64{293.1, 293.4, 293.9, 294.2}); err != nil {
+    log.Fatal(err)
+}
+if err := ds.WriteAttribute("units", "K"); err != nil {
+    log.Fatal(err)
+}
 ```
 
-[More examples →](examples/)
+`hdf5.OpenForWrite` opens an existing file to add, change or delete objects. More in
+[examples](examples/) and the [Quick Start guide](docs/guides/QUICKSTART.md).
 
 ---
 
-## 📚 Documentation
+## Documentation
 
-### Getting Started
-- **[Installation Guide](docs/guides/INSTALLATION.md)** - Install and verify the library
-- **[Quick Start Guide](docs/guides/QUICKSTART.md)** - Get started in 5 minutes
-- **[Reading Data](docs/guides/READING_DATA.md)** - Comprehensive guide to reading datasets and attributes
+### Getting started
+- [Installation](docs/guides/INSTALLATION.md): install and verify the library
+- [Quick Start](docs/guides/QUICKSTART.md): first programs that read and write files
+- [Reading Data](docs/guides/READING_DATA.md): datasets, attributes, partial reads
 
 ### Reference
-- **[Datatypes Guide](docs/guides/DATATYPES.md)** - HDF5 to Go type mapping
-- **[Troubleshooting](docs/guides/TROUBLESHOOTING.md)** - Common issues and solutions
-- **[FAQ](docs/guides/FAQ.md)** - Frequently asked questions
-- **[API Reference](https://pkg.go.dev/github.com/scigolib/hdf5)** - GoDoc documentation
+- [Datatypes](docs/guides/DATATYPES.md): how HDF5 types map to Go types
+- [Troubleshooting](docs/guides/TROUBLESHOOTING.md): common errors and what they mean
+- [FAQ](docs/guides/FAQ.md)
+- [API reference](https://pkg.go.dev/github.com/scigolib/hdf5) on pkg.go.dev
 
 ### Advanced
-- **[Architecture Overview](docs/architecture/OVERVIEW.md)** - How it works internally
-- **[Performance Tuning](docs/guides/PERFORMANCE_TUNING.md)** - B-tree rebalancing strategies for optimal performance
-- **[Rebalancing API](docs/guides/REBALANCING_API.md)** - Complete API reference for rebalancing options
-- **[Examples](examples/)** - Working code examples (7 examples with detailed documentation)
+- [Architecture overview](docs/architecture/OVERVIEW.md): how the library is built
+- [Performance tuning](docs/guides/PERFORMANCE_TUNING.md): B-tree rebalancing strategies
+- [Rebalancing API](docs/guides/REBALANCING_API.md): the rebalancing options in detail
+- [Examples](examples/): seven runnable programs
 
 ---
 
-## ⚡ Performance Tuning
+## Performance Tuning
 
-When deleting many attributes, B-trees can become **sparse** (wasted disk space, slower searches). This library offers **4 rebalancing strategies**:
+When many attributes are deleted, the B-trees that index them can become sparse: space is wasted and
+lookups slow down. The library offers four rebalancing strategies.
 
-### 1. Default (Immediate) and None
+### 1. Immediate (default) and none
 
-**Default: every delete rebalances, as in the C library. `WithBTreeRebalancing(false)` skips it: fast deletions, but the B-tree may become sparse**
+By default every delete rebalances, as in the C library. `WithBTreeRebalancing(false)` skips
+rebalancing: deletes are faster, but the B-tree may become sparse.
 
 The HDF5 C library merges and redistributes version 2 B-tree nodes on every delete
 (`H5B2__remove_internal`, `H5B2internal.c`); only its version 1 B-tree never rebalances (`H5B.c`).
@@ -124,13 +158,11 @@ fw, err = hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 )
 ```
 
-**Use "none" for**: Append-only workloads, small files (<100MB)
+Use "none" for append-only workloads and small files.
 
----
+### 2. Lazy rebalancing
 
-### 2. Lazy Rebalancing (10-100x faster than immediate)
-
-**Batch processing: rebalances when threshold reached**
+Rebalances in batches, once a threshold is reached.
 
 ```go
 fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
@@ -141,36 +173,28 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 )
 ```
 
-**Use for**: Batch deletion workloads, medium/large files (100-500MB)
+Use it for batch deletions. Overhead is low, with occasional pauses while a batch is rebalanced.
 
-**Performance**: low overhead, with occasional pauses while a batch is rebalanced
+### 3. Incremental rebalancing
 
----
-
-### 3. Incremental Rebalancing (ZERO pause)
-
-**Background processing: rebalances in background goroutine**
+Rebalances in a background goroutine within a time budget.
 
 ```go
 fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
-    hdf5.WithLazyRebalancing(),  // Prerequisite!
+    hdf5.WithLazyRebalancing(), // required by incremental mode
     hdf5.WithIncrementalRebalancing(
         hdf5.IncrementalBudget(100*time.Millisecond),
         hdf5.IncrementalInterval(5*time.Second),
     ),
 )
-defer fw.Close()  // Stops background goroutine
+defer fw.Close() // stops the background goroutine
 ```
 
-**Use for**: Large files (>500MB), continuous operations, TB-scale data
+Use it for large files and long-running processes that delete continuously.
 
-**Performance**: rebalancing runs in the background, with **no user-visible pause**
+### 4. Smart rebalancing
 
----
-
-### 4. Smart Rebalancing (Auto-Pilot)
-
-**Auto-tuning: library detects workload and selects optimal mode**
+Watches the workload and chooses one of the modes above.
 
 ```go
 fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
@@ -181,252 +205,184 @@ fw, err := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate,
 )
 ```
 
-**Use for**: Unknown workloads, mixed operations, research environments
+Use it when the workload is not known in advance.
 
-**Performance**: adapts the mode to the observed workload
+### Comparison
 
----
+| Mode | Deletion cost | Pauses | Use case |
+|------|---------------|--------|----------|
+| None (`WithBTreeRebalancing(false)`) | lowest (no rebalancing) | none | append-only, small files |
+| Immediate (default) | highest for batch deletions | none | few deletions |
+| Lazy | low, batched | short, per batch | batch deletions |
+| Incremental | low, in the background | none | large files, continuous deletes |
+| Smart | that of the chosen mode | varies | unknown workloads |
 
-### Performance Comparison
-
-| Mode | Deletion cost | Pause Time | Use Case |
-|------|---------------|------------|----------|
-| **None** (`WithBTreeRebalancing(false)`) | lowest (no rebalancing) | None | Append-only, small files |
-| **Immediate** (default) | highest for batch deletions | None | Few deletions |
-| **Lazy** | low, batched | Short batches | Batch deletions |
-| **Incremental** | low, in the background | None (background) | Large files, continuous ops |
-| **Smart** | depends on the selected mode | Varies | Unknown workloads |
-
-Measure your own workload with the benchmarks in `btree_rebalancing_bench_test.go`.
-
-**Learn more**:
-- **[Performance Tuning Guide](docs/guides/PERFORMANCE_TUNING.md)**: Comprehensive guide with benchmarks, recommendations, troubleshooting
-- **[Rebalancing API Reference](docs/guides/REBALANCING_API.md)**: Complete API documentation
-- **[Examples](examples/07-rebalancing/)**: 4 working examples demonstrating each mode
+Measure your own workload with the benchmarks in `btree_rebalancing_bench_test.go`. Details: the
+[performance tuning guide](docs/guides/PERFORMANCE_TUNING.md), the
+[rebalancing API reference](docs/guides/REBALANCING_API.md) and the
+[rebalancing examples](examples/07-rebalancing/).
 
 ---
 
-## 🎯 Current Status
+## Current Status
 
-**HDF5 2.0.0 ready; library packages have 82–95% test coverage (v0.15.0).**
+v0.15.0. Library packages have 82–95% test coverage.
 
-### ✅ Fully Implemented
-- **File Structure**:
-  - Superblock parsing (v0, v2, v3) with checksum validation (CRC32)
-  - Object headers v1 (legacy HDF5 < 1.8) with continuations
-  - Object headers v2 (modern HDF5 >= 1.8) with continuations
-  - Groups (traditional symbol tables + modern object headers)
-  - B-trees (leaf + non-leaf nodes for large files)
-  - Local heaps (string storage)
-  - Global Heap (variable-length data)
-  - Fractal heap (direct blocks for dense attributes) ✨ NEW
+### Reading
+- **File structure**:
+  - Superblocks v0, v2 and v3 with checksum validation (CRC32)
+  - Object headers v1 (HDF5 before 1.8) and v2 (HDF5 1.8 and later), with continuation chunks
+  - Groups in both formats: symbol tables, and link messages or dense link storage
+  - Version 1 and version 2 B-trees, local heaps, the global heap, fractal heaps
+  - Files with a user block in front of the HDF5 data (e.g. MATLAB v7.3)
 
-- **Dataset Reading**:
-  - Compact layout (data in object header)
-  - Contiguous layout (sequential storage)
-  - Chunked layout with B-tree indexing
-  - GZIP/Deflate compression
-  - LZF compression (h5py/PyTables compatible) ✨ NEW
-  - Filter pipeline for compressed data
+- **Datasets**:
+  - Compact, contiguous and chunked layouts (every chunk index type)
+  - External raw data files, opt-in with `File.SetExternalFilePrefix`
+  - Filters: GZIP (deflate), Shuffle, Fletcher32, LZF (h5py and PyTables), BZIP2
+  - Partial reads: hyperslab selection with stride and block; only the chunks a selection needs are read
+  - `ChunkIterator` for datasets larger than memory
 
-- **Datatypes** (Read + Write):
-  - **Basic types**: int8-64, uint8-64, float32/64
-  - **AI/ML types**: FP8 (E4M3, E5M2), bfloat16 - IEEE 754 compliant ✨ NEW
-  - **Strings**: Fixed-length (null/space/null-padded), variable-length (via Global Heap)
-  - **Advanced types**: Arrays, Enums, References (object/region), Opaque
-  - **Compound types**: Struct-like with nested members
+- **Datatypes** (read and write):
+  - Integers (8 to 64 bits, signed and unsigned), float32 and float64
+  - FP8 (E4M3, E5M2) and bfloat16
+  - Strings: fixed-length (null-terminated, null-padded, space-padded) and variable-length
+  - Arrays, enums, compounds (nested), object and region references, opaque
 
-- **Attributes**:
-  - Compact attributes (in object header) ✨ NEW
-  - Dense attributes (fractal heap foundation) ✨ NEW
-  - Attribute reading for groups and datasets ✨ NEW
-  - Full attribute API (Group.Attributes(), Dataset.Attributes()) ✨ NEW
+- **Attributes**: compact and dense storage, on groups and datasets (`Attributes`, `ReadAttribute`)
 
-- **Navigation**: Full file tree traversal via Walk()
+- **Navigation**: the whole tree with `File.Walk`
 
-- **Code Quality**:
-  - Test coverage: 82–95% per library package (target: >70%) ✅
-  - Lint issues: 0 (34+ linters) ✅
-  - TODO items: 0 (all resolved) ✅
-  - Official HDF5 test suite: 379 of 383 valid files ✅
+- **Errors**: callers can tell damage from unsupported features with `errors.Is`: `ErrCorrupt`,
+  `ErrNotSupported`, `ErrLimit`, `ErrNoData`, `ErrNeedsRepack`; `File.Warnings` reports what the reader
+  tolerated
 
-- **Security** ✨ NEW:
-  - 4 CVEs fixed (CVE-2025-7067, CVE-2025-6269, CVE-2025-2926, CVE-2025-44905) ✅
-  - Overflow protection throughout (SafeMultiply, buffer validation) ✅
-  - Security limits: 1GB chunks, 64MB attributes, 16MB strings ✅
-  - 39 security test cases, all passing ✅
+- **Security**: sizes, counts and addresses read from the file are checked against the file before
+  memory is allocated, and one read is capped by `File.SetReadLimit`. Reported vulnerabilities and
+  their fixes are published as [security advisories](https://github.com/scigolib/hdf5/security/advisories);
+  see [SECURITY.md](SECURITY.md) to report one
 
-### ✍️ Write Support - Feature Complete!
-**Production-ready write support with all features!** ✅
+### Writing
 
-**Dataset Operations**:
-- ✅ Create datasets (all layouts: contiguous, chunked, compact)
-- ✅ Write data (all datatypes including compound)
-- ✅ Dataset resizing with unlimited dimensions
-- ✅ Variable-length datatypes: strings, ragged arrays
-- ✅ Compression (GZIP, Shuffle, Fletcher32)
-- ✅ Array and enum datatypes
-- ✅ References and opaque types
-- ✅ Attribute writing (dense & compact storage)
-- ✅ Attribute modification/deletion
-- ✅ Deleting objects as `H5Ldelete` does: a group goes with everything only it links to, and an object
-  linked from elsewhere keeps its data ✨ v0.15.0
+**Datasets and attributes**:
+- Create datasets in every layout (contiguous, chunked, compact) and write every datatype above
+- Resize datasets with unlimited dimensions
+- Variable-length strings and ragged arrays
+- Filters: GZIP, Shuffle, Fletcher32, LZF
+- Write, modify and delete attributes (compact and dense storage)
+- Delete objects as `H5Ldelete` does: a group goes with everything only it links to, and an object
+  also linked from elsewhere keeps its data (v0.15.0)
 
-**File Layout**:
-- ✅ User blocks (`WithUserBlock`, `WriteUserBlock`), as `H5Pset_userblock` writes them: room for the
-  application's own header in front of the HDF5 data, e.g. the MAT header of a MATLAB v7.3 file ✨ v0.15.0
-- ✅ `OpenForWrite` modifies files with a user block and never touches the block ✨ v0.15.0
+**File layout**:
+- Superblock version 0 (most compatible), 2 (default) or 3 (`WithSuperblockVersion`)
+- User blocks (`WithUserBlock`, `WriteUserBlock`), as `H5Pset_userblock` writes them: room for the
+  application's own header in front of the HDF5 data, such as the MAT header of a MATLAB v7.3 file
+  (v0.15.0)
+- `OpenForWrite` modifies existing files, including files with a user block, and never touches the
+  block (v0.15.0)
 
 **Links**:
-- ✅ Hard links (full support)
-- ✅ Soft links (symbolic references - full support)
-- ✅ External links (cross-file references - full support)
-- ✅ User-defined links are read and kept unchanged when a file is modified
+- Hard, soft and external links
+- User-defined links are read and kept unchanged when a file is modified
 
-**Read Enhancements**:
-- ✅ Hyperslab selection (data slicing) - 10-250x faster!
-- ✅ Efficient partial dataset reading
-- ✅ Stride and block support
-- ✅ Chunk-aware reading (reads ONLY needed chunks)
-- ✅ **ChunkIterator API** - Memory-efficient iteration over large datasets
+### Validation
 
-**Validation**:
-- ✅ Official HDF5 Test Suite: 379 of 383 valid files (the other 4 need the family or multi file driver, or
+- Official HDF5 test suite: 379 of 383 valid files (the other 4 need the family or multi file driver, or
   are truncated and refused by the C library as well; 50 files of the suite are deliberately invalid or need
   unsupported drivers and are skipped)
-- ✅ Files written by this library are read back by the C library's h5dump (`c-interop` CI job)
+- Files written by this library are read back by the C library's `h5dump` in CI (`c-interop` job)
 
-**Future Enhancements**:
-- ✅ LZF filter (read + write, Pure Go) ✨ NEW
-- ✅ BZIP2 filter (read only, stdlib)
-- ⚠️ Filters without a decoder here: SZIP (4, needs libaec), N-bit (5), Scale-offset (6) and third-party
+### Limitations
+
+- Filters without a decoder here: SZIP (4, needs libaec), N-bit (5), Scale-offset (6) and third-party
   filters. A dataset that uses one fails with an error that wraps `ErrNotSupported`; earlier versions
   returned the undecoded bytes as values
-- ⚠️ Thread-safety with mutexes + SWMR mode
-- ⚠️ Parallel I/O
+- A file whose groups form a hard-link cycle (a link back to an ancestor group) is refused by `Open`;
+  planned for v0.15.x
+- No SWMR (single writer, multiple readers) mode and no parallel I/O. Separate `File` values are
+  independent; one `File` used from several goroutines needs the caller's synchronization
 
-### ❌ Planned Features
-
-**Next Steps** - See [ROADMAP.md](ROADMAP.md) for complete timeline and versioning strategy.
+See [ROADMAP.md](ROADMAP.md) for what comes next.
 
 ---
 
-## 🔧 Development
+## Development
 
 ### Requirements
 - Go 1.25 or later
-- No external dependencies for the library
+- The library has no dependencies outside the Go standard library; tests use testify, and the C
+  interoperability tests use the HDF5 command-line tools when they are installed
 
-### Building
+### Building and testing
 
 ```bash
-# Clone repository
 git clone https://github.com/scigolib/hdf5.git
 cd hdf5
 
-# Run tests
-go test ./...
-
-# Build examples
-go build ./examples/...
-
-# Build tools
-go build ./cmd/...
-```
-
-### Testing
-
-```bash
-# Run all tests
-go test ./...
-
-# Run with race detector
-go test -race ./...
-
-# Run with coverage
+go build ./...                # library, examples and tools
+go test ./...                 # all tests
+go test -race ./...           # race detector (needs cgo, e.g. on Linux or WSL)
 go test -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out
 ```
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
-Contributions are welcome! This is an early-stage project and we'd love your help.
+Contributions are welcome: bug reports with a sample file, fixes, documentation, and files from your
+own field that the library should read. Before a pull request:
 
-**Before contributing**:
-1. Read [CONTRIBUTING.md](CONTRIBUTING.md) - Git workflow and development guidelines
-2. Check [open issues](https://github.com/scigolib/hdf5/issues)
-3. Review the [Architecture Overview](docs/architecture/OVERVIEW.md)
-
-**Ways to contribute**:
-- 🐛 Report bugs
-- 💡 Suggest features
-- 📝 Improve documentation
-- 🔧 Submit pull requests
-- ⭐ Star the project
+1. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and the code standards
+2. Check the [open issues](https://github.com/scigolib/hdf5/issues)
+3. Look at the [architecture overview](docs/architecture/OVERVIEW.md)
 
 ---
 
-## 🗺️ Comparison with Other Libraries
+## Other Go HDF5 Libraries
 
-| Feature | This Library | gonum/hdf5 | go-hdf5/hdf5 |
-|---------|-------------|------------|--------------|
-| Pure Go | ✅ Yes | ❌ CGo wrapper | ✅ Yes |
-| Reading | ✅ Full | ✅ Full | ❌ Limited |
-| Writing | ✅ Full | ✅ Full | ❌ No |
-| HDF5 1.8+ | ✅ Yes | ⚠️ Limited | ❌ No |
-| Advanced Datatypes | ✅ All | ✅ Yes | ❌ No |
-| Test Suite Validation | ✅ 379 of 383 valid files | ⚠️ Unknown | ❌ No |
-| Maintained | ✅ Active | ⚠️ Slow | ❌ Inactive |
-| Thread-safe | ⚠️ User must sync* | ⚠️ Conditional | ❌ No |
-
-\* Different `File` instances are independent. Concurrent access to same `File` requires user synchronization (standard Go practice). Full thread-safety with mutexes + SWMR mode planned for future releases.
+| | This library | [gonum/hdf5](https://github.com/gonum/hdf5) | [go-hdf5/hdf5](https://github.com/go-hdf5/hdf5) |
+|---|---|---|---|
+| Implementation | pure Go, read and write | cgo bindings to the HDF5 C library | pure Go |
+| Needs the C library installed | no | yes | no |
+| Repository | active | last change July 2021 | archived (last change 2018) |
 
 ---
 
-## 📖 HDF5 Resources
+## HDF5 Resources
 
-- [HDF5 Format Specification](https://docs.hdfgroup.org/documentation/hdf5/latest/_f_m_t3.html)
-- [Official HDF5 Library](https://github.com/HDFGroup/hdf5)
-- [HDF Group](https://www.hdfgroup.org/)
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- [HDF5 File Format Specification](https://docs.hdfgroup.org/documentation/hdf5/latest/_f_m_t3.html)
+- [HDF5 C library](https://github.com/HDFGroup/hdf5)
+- [The HDF Group](https://www.hdfgroup.org/)
 
 ---
 
-## 🙏 Acknowledgments
+## License
 
-- The HDF Group for the HDF5 format specification
-- gonum/hdf5 for inspiration
-- All contributors to this project
-
-### Special Thanks
-
-**Professor Ancha Baranova** - This project would not have been possible without her invaluable help and support. Her assistance was crucial in bringing this library to life.
+MIT License; see [LICENSE](LICENSE).
 
 ---
 
-## 📞 Support
+## Acknowledgments
 
-- 📖 [Documentation](docs/) - Architecture and guides
-- 🐛 [Issue Tracker](https://github.com/scigolib/hdf5/issues)
-- 💬 [Discussions](https://github.com/scigolib/hdf5/discussions) - Community Q&A and announcements
-- 🌐 [HDF Group Forum](https://forum.hdfgroup.org/t/pure-go-hdf5-library-production-release-with-hdf5-2-0-0-compatibility/13584) - Official HDF5 community discussion
+- The HDF Group, for the HDF5 format, its specification and the C library this implementation is
+  checked against
+- gonum/hdf5, which came first
+- Everyone who reported issues and contributed code
 
----
-
-**Status**: Stable - HDF5 2.0.0 compatible with security hardening
+**Professor Ancha Baranova**: this project would not have been possible without her help and support.
 
 ---
 
-*Built with ❤️ by the HDF5 Go community*
-*Recognized by [HDF Group Forum](https://forum.hdfgroup.org/t/pure-go-hdf5-library-production-release-with-hdf5-2-0-0-compatibility/13584)* ⭐
+## Support
 
+- [Documentation](docs/): guides and architecture
+- [Issue tracker](https://github.com/scigolib/hdf5/issues): bugs and feature requests
+- [Discussions](https://github.com/scigolib/hdf5/discussions): questions and announcements
+- [HDF Group forum thread](https://forum.hdfgroup.org/t/pure-go-hdf5-library-production-release-with-hdf5-2-0-0-compatibility/13584)
+  about this library
+
+---
 
 ## Star History
 
