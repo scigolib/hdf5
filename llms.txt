@@ -1,0 +1,31 @@
+# scigolib/hdf5
+
+> Pure Go library to read and write HDF5 files, without cgo and without the HDF5 C library. Import path `github.com/scigolib/hdf5`, Go 1.25 or later, latest release v0.15.0. It reads superblock versions 0, 2 and 3 and every common dataset layout (compact, contiguous, chunked) with GZIP, Shuffle, Fletcher32, LZF and BZIP2 filters, partial reads by hyperslab and chunk-by-chunk iteration for data larger than memory, attributes, groups and links; it writes files that the C library's h5dump reads back, and modifies existing files in place.
+
+- Numeric datasets are read with `Dataset.Read()` as `[]float64`, flattened in row-major order; strings, compounds and variable-length data have their own read methods.
+- Errors are classified with `errors.Is`: `ErrCorrupt`, `ErrNotSupported`, `ErrLimit`, `ErrNoData`, `ErrNeedsRepack`. For untrusted files set `File.SetReadLimit`.
+- Not supported: SZIP, N-bit and scale-offset filters, SWMR, parallel I/O, the family and multi file drivers.
+
+## Docs
+
+- [AGENTS.md](https://github.com/scigolib/hdf5/blob/main/AGENTS.md): instructions for code that uses the library: recipes for reading, writing and modifying files, error handling, type mapping, limitations
+- [README.md](https://github.com/scigolib/hdf5/blob/main/README.md): overview, features, quick start, status
+- [Quick Start](https://github.com/scigolib/hdf5/blob/main/docs/guides/QUICKSTART.md): first programs that read and write files
+- [Reading Data](https://github.com/scigolib/hdf5/blob/main/docs/guides/READING_DATA.md): datasets, attributes, partial reads
+- [Datatypes](https://github.com/scigolib/hdf5/blob/main/docs/guides/DATATYPES.md): how HDF5 types map to Go types
+- [Troubleshooting](https://github.com/scigolib/hdf5/blob/main/docs/guides/TROUBLESHOOTING.md): common errors and what they mean
+- [FAQ](https://github.com/scigolib/hdf5/blob/main/docs/guides/FAQ.md): frequently asked questions
+- [Installation](https://github.com/scigolib/hdf5/blob/main/docs/guides/INSTALLATION.md): install and verify the library
+- [API reference](https://pkg.go.dev/github.com/scigolib/hdf5): generated from the doc comments
+- [Performance tuning](https://github.com/scigolib/hdf5/blob/main/docs/guides/PERFORMANCE_TUNING.md): B-tree rebalancing strategies for files with many deletions
+- [Architecture overview](https://github.com/scigolib/hdf5/blob/main/docs/architecture/OVERVIEW.md): how the library is built
+- [CHANGELOG.md](https://github.com/scigolib/hdf5/blob/main/CHANGELOG.md): version history and upgrade notes
+- [SECURITY.md](https://github.com/scigolib/hdf5/blob/main/SECURITY.md): reporting a vulnerability, handling untrusted files, published advisories
+
+## Optional
+
+- [CONTRIBUTING.md](https://github.com/scigolib/hdf5/blob/main/CONTRIBUTING.md): workflow, quality gates and test policy for changing the library
+- [ROADMAP.md](https://github.com/scigolib/hdf5/blob/main/ROADMAP.md): what comes next
+- [UPSTREAM.md](https://github.com/scigolib/hdf5/blob/main/UPSTREAM.md): the HDF5 C library commit and format specification version the code is compared against
+- [Examples](https://github.com/scigolib/hdf5/tree/main/examples): runnable programs
+- [Rebalancing API](https://github.com/scigolib/hdf5/blob/main/docs/guides/REBALANCING_API.md): the B-tree rebalancing options in detail

@@ -130,6 +130,10 @@ if err := ds.WriteAttribute("units", "K"); err != nil {
 - [Rebalancing API](docs/guides/REBALANCING_API.md): the rebalancing options in detail
 - [Examples](examples/): seven runnable programs
 
+### For programs and AI agents
+- [AGENTS.md](AGENTS.md): recipes, error model and limitations for code that uses the library
+- [llms.txt](llms.txt): index of the documentation for language-model tools
+
 ---
 
 ## Performance Tuning
@@ -311,8 +315,8 @@ cd hdf5
 go build ./...                # library, examples and tools
 go test ./...                 # all tests
 go test -race ./...           # race detector (needs cgo, e.g. on Linux or WSL)
-go test -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out
+go test -coverprofile=tmp/coverage.out ./...   # tmp/ is ignored by git
+go tool cover -html=tmp/coverage.out
 ```
 
 ---
