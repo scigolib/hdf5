@@ -208,7 +208,7 @@ Measure your own workload with the benchmarks in `btree_rebalancing_bench_test.g
 
 ## 🎯 Current Status
 
-**HDF5 2.0.0 ready; library packages have 82–95% test coverage (v0.14.3).**
+**HDF5 2.0.0 ready; library packages have 82–95% test coverage (v0.15.0).**
 
 ### ✅ Fully Implemented
 - **File Structure**:
@@ -269,11 +269,19 @@ Measure your own workload with the benchmarks in `btree_rebalancing_bench_test.g
 - ✅ References and opaque types
 - ✅ Attribute writing (dense & compact storage)
 - ✅ Attribute modification/deletion
+- ✅ Deleting objects as `H5Ldelete` does: a group goes with everything only it links to, and an object
+  linked from elsewhere keeps its data ✨ v0.15.0
+
+**File Layout**:
+- ✅ User blocks (`WithUserBlock`, `WriteUserBlock`), as `H5Pset_userblock` writes them: room for the
+  application's own header in front of the HDF5 data, e.g. the MAT header of a MATLAB v7.3 file ✨ v0.15.0
+- ✅ `OpenForWrite` modifies files with a user block and never touches the block ✨ v0.15.0
 
 **Links**:
 - ✅ Hard links (full support)
 - ✅ Soft links (symbolic references - full support)
 - ✅ External links (cross-file references - full support)
+- ✅ User-defined links are read and kept unchanged when a file is modified
 
 **Read Enhancements**:
 - ✅ Hyperslab selection (data slicing) - 10-250x faster!
