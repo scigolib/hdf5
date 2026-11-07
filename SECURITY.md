@@ -2,339 +2,136 @@
 
 ## Supported Versions
 
-HDF5 Go Library is currently in beta. We provide security updates for the following versions:
+Fixes go into the latest release only. The library is pre-1.0, and older versions are not patched.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.9.0-beta | :white_check_mark: |
-| < 0.9.0 | :x:                |
+| Version | Supported |
+| ------- | --------- |
+| 0.15.x (latest: v0.15.0) | yes |
+| earlier than 0.15 | no, upgrade to the latest release |
 
-Future stable releases (v1.0+) will follow semantic versioning with LTS support.
+Versions v0.9.0-beta through v0.13.9 are retracted in `go.mod`: they wrote files that no HDF5 tool
+can open. Do not use them.
 
 ## Reporting a Vulnerability
 
-We take security seriously. If you discover a security vulnerability in HDF5 Go Library, please report it responsibly.
+Please do not open a public GitHub issue for a security vulnerability.
 
-### How to Report
+Report it privately through GitHub:
+https://github.com/scigolib/hdf5/security/advisories/new
 
-**DO NOT** open a public GitHub issue for security vulnerabilities.
+The report goes to the maintainers only. Include:
 
-Instead, please report security issues by:
+- what the problem is and what it allows (a crash, a hang, unbounded memory use, wrong data, a file
+  that is read outside its bounds);
+- a file that triggers it, or the steps to build one; a small file is best;
+- the versions you tested;
+- a fix, if you have one.
 
-1. **Private Security Advisory** (preferred):
-   https://github.com/scigolib/hdf5/security/advisories/new
+We acknowledge a report within a few days, tell you what we found, and agree a disclosure date with
+you. A fix is released first and the advisory published after it, with credit to the reporter unless
+you prefer not to be named.
 
-2. **Email** to maintainers:
-   Create a private GitHub issue or contact via discussions
+Bugs that are not security problems (a file that fails to open, wrong values) belong in the
+[issue tracker](https://github.com/scigolib/hdf5/issues).
 
-### What to Include
+## Threat Model
 
-Please include the following information in your report:
+An HDF5 file is a graph of structures that point at each other, and every size, count and address in
+it is data the file's author chose. A hostile or damaged file can claim a result of any size, point a
+structure at itself, or declare more entries than it holds. Go cannot recover from a failed
+allocation: the process ends. So the library treats the file as untrusted input and aims for one
+outcome on any input: an error, never a panic, a hang or a fatal allocation.
 
-- **Description** of the vulnerability
-- **Steps to reproduce** the issue (include malicious HDF5 test file if applicable)
-- **Affected versions** (which versions are impacted)
-- **Potential impact** (DoS, information disclosure, code execution, etc.)
-- **Suggested fix** (if you have one)
-- **Your contact information** (for follow-up questions)
+## How the Library Handles Untrusted Files
 
-### Response Timeline
+These are the checks in the code today.
 
-- **Initial Response**: Within 48-72 hours
-- **Triage & Assessment**: Within 1 week
-- **Fix & Disclosure**: Coordinated with reporter
+- **Sizes and addresses are checked against the file** before memory is allocated. Metadata blocks
+  (object header chunks, heaps, global heap collections, chunks) are limited to 1 GiB, an attribute
+  to 64 MiB and a string element to 16 MiB (`internal/utils/overflow.go`). A larger claim, or one
+  that reaches past the end of the file, is an error, not an allocation.
+- **Reads are capped.** Some results are not bounded by the file: a chunked dataset can be larger than
+  its file, because chunks never written read as the fill value. The memory one dataset read may
+  allocate for such data is capped at 4 GiB (512 MiB on 32-bit platforms) by default. Change it with
+  `File.SetReadLimit`; a read over the cap fails with an error that wraps `ErrLimit`. The same cap
+  covers the shared-message metadata kept per file. `File.ReadLimit` returns the current value.
+- **Decompression is bounded by the chunk.** A filter pipeline may not produce more bytes than the
+  chunk size the dataset layout declares, so a small compressed chunk cannot expand without limit.
+  Output past the bound is an error that wraps `ErrCorrupt`.
+- **Hyperslab selections are bounded.** A selection of more than 1 billion elements is refused;
+  `ChunkIterator` reads a large dataset one chunk at a time.
+- **Cycles are refused.** A group that links back to an ancestor, or a structure that points at
+  itself, makes `Open` fail with an error instead of recursing without end. Groups nested deeper
+  than 4096 levels are refused when a file is opened for writing.
+- **External raw data files are off by default.** A dataset can name files outside the HDF5 file as
+  its storage. Reading them is refused unless the program calls `File.SetExternalFilePrefix`, and
+  then only names that stay inside that directory are opened.
+- **Unsupported is told from damaged.** Valid HDF5 that the library cannot read (for example the SZIP
+  filter) wraps `ErrNotSupported`; invalid metadata wraps `ErrCorrupt`. `File.Warnings` lists what
+  the reader tolerated.
 
-We aim to:
-1. Acknowledge receipt within 72 hours
-2. Provide an initial assessment within 1 week
-3. Work with you on a coordinated disclosure timeline
-4. Credit you in the security advisory (unless you prefer to remain anonymous)
+Reading never writes to the file and never runs code from it.
 
-## Security Considerations for HDF5 Parsing
+### What the library does not do
 
-HDF5 files are complex binary formats. This library parses untrusted binary data, which introduces security risks.
+- It does not limit the file size or the time a read takes. A file can be large, and a read can be
+  slow. Programs that accept uploads should check the size before `Open` and run the read under a
+  deadline or in a separate process.
+- It does not validate the meaning of names. Group and dataset names are arbitrary strings from the
+  file (they may contain `..` or `/`). The library never uses them as file system paths, apart from
+  the opt-in external storage above. A program that does must sanitize them itself.
+- One `File` is not safe for use from several goroutines without the caller's synchronization.
 
-### 1. Malicious HDF5 Files
+### Recommended use with untrusted files
 
-**Risk**: Crafted HDF5 files can exploit parsing vulnerabilities.
-
-**Attack Vectors**:
-- Integer overflow in chunk sizes, dataset dimensions, or buffer allocations
-- Buffer overflow when reading superblock, object headers, or data
-- Infinite loops in B-tree traversal or group iteration
-- Resource exhaustion via deeply nested groups or massive datasets
-- Compression bomb attacks (GZIP decompression)
-
-**Mitigation in Library**:
-- ✅ Bounds checking on all size fields
-- ✅ Validation of HDF5 signatures and magic numbers
-- ✅ Sanity checks on dimension sizes and offsets
-- ✅ Resource limits on decompression
-- 🔄 Ongoing fuzzing and security testing (planned for v1.0)
-
-**User Recommendations**:
 ```go
-// ❌ BAD - Don't trust untrusted HDF5 files without validation
-file, _ := hdf5.Open(userUploadedFile)
-
-// ✅ GOOD - Validate file size and structure first
-if fileSize > maxAllowedSize {
-    return errors.New("file too large")
-}
-file, err := hdf5.Open(trustedFile)
+file, err := hdf5.Open(path)
 if err != nil {
-    // Parsing failed - potentially malicious file
-    return err
-}
-```
-
-### 2. Integer Overflow Vulnerabilities
-
-**Risk**: HDF5 uses various integer sizes (8/16/32/64-bit) for sizes and offsets. Overflow can lead to incorrect buffer allocations.
-
-**Example Attack**:
-```
-Chunk size: 0xFFFFFFFFFFFFFFFF (uint64)
-After cast to int: -1 or overflow
-Result: Small buffer allocated, large data read → buffer overflow
-```
-
-**Mitigation**:
-- All size fields validated before use
-- Safe integer conversions with overflow checks
-- Maximum reasonable limits enforced
-
-**Current Limits**:
-- Max dataset dimensions: 2^31 per dimension
-- Max chunk size: 2GB
-- Max string length: 1GB
-
-### 3. Compression Vulnerabilities
-
-**Risk**: GZIP compression can be exploited via compression bombs (small compressed size, huge decompressed size).
-
-**Example Attack**:
-```
-Compressed chunk: 1 KB
-Decompressed size claim: 10 GB
-Result: Memory exhaustion, DoS
-```
-
-**Mitigation**:
-- Decompression ratio limits enforced
-- Memory allocation limits
-- Streaming decompression with size validation
-
-**Current Limits**:
-- Max decompression ratio: 1000:1
-- Max decompressed chunk: 2GB
-
-### 4. Resource Exhaustion
-
-**Risk**: HDF5 files can contain deeply nested structures or large numbers of objects.
-
-**Attack Vectors**:
-- Deeply nested groups (stack overflow)
-- Millions of datasets (memory exhaustion)
-- Circular references in object headers (infinite loops)
-
-**Mitigation**:
-- Recursion depth limits (max 1000 levels)
-- Object count limits during traversal
-- Cycle detection in structure traversal
-
-### 5. Path Traversal
-
-**Risk**: Group names and dataset paths could contain `..` or absolute paths.
-
-**Mitigation**:
-- Path validation and sanitization
-- No filesystem operations based on HDF5 internal names
-- User responsible for validating extracted paths
-
-**User Best Practices**:
-```go
-// ❌ BAD - Don't use HDF5 paths directly for filesystem operations
-datasetName := dataset.Name() // Could be "../../etc/passwd"
-os.Create(datasetName)
-
-// ✅ GOOD - Sanitize and validate paths
-safeName := filepath.Base(dataset.Name())
-if !isValidName(safeName) {
-    return errors.New("invalid dataset name")
-}
-```
-
-## Security Best Practices for Users
-
-### Input Validation
-
-Always validate HDF5 files from untrusted sources:
-
-```go
-// Validate file size before opening
-fileInfo, err := os.Stat(filename)
-if err != nil || fileInfo.Size() > maxAllowedSize {
-    return errors.New("invalid file")
-}
-
-// Open with error handling
-file, err := hdf5.Open(filename)
-if err != nil {
-    // File failed validation - potentially malicious
-    log.Printf("Failed to open HDF5 file: %v", err)
+    // errors.Is(err, hdf5.ErrCorrupt): damaged or hostile file
+    // errors.Is(err, hdf5.ErrNotSupported): valid, but not readable here
     return err
 }
 defer file.Close()
+
+file.SetReadLimit(256 << 20) // at most 256 MiB for one dataset read
 ```
 
-### Resource Limits
+Check every error. A parsing failure on a file from an unknown source is the expected result of a
+hostile file, not a reason to retry.
 
-Set limits when processing untrusted files:
+## Testing
 
-```go
-// Limit dataset sizes
-dataset, err := file.OpenDataset("/data")
-if err != nil {
-    return err
-}
+- **Fuzzing.** Go native fuzz targets exist for the file reader (`FuzzOpenFile`) and for the parsers
+  of datatype, dataspace, attribute, fill value and shared messages, chunk indexes, B-trees, global
+  and fractal heaps, external file lists and the Fletcher32 filter (`go test -run=^$ -fuzz=FuzzX`;
+  list them with `grep -rn "func Fuzz" --include=*_test.go .`). CI runs two of them for 60 seconds on
+  every push (`FuzzOpenFile`, `FuzzParseAttributeMessage`), as a job that does not block merging.
+  Crashers found by fuzzing are kept as regression inputs under `testdata/fuzz`.
+- **Corrupted files.** The test suite includes corruption corpora and per-structure tests that damage
+  one field at a time (sizes, counts, addresses, checksums) and expect an error.
+- **Official test files.** The HDF Group's test files are read in CI.
+- **Interoperability.** Files this library writes are read back by the C library's `h5dump` in CI
+  (the `c-interop` job).
+- **Static analysis.** `golangci-lint` runs on every push with the configuration in `.golangci.yml`,
+  which includes `gosec`, `errcheck` and `errorlint`.
 
-dims := dataset.Dataspace().Dims()
-totalElements := 1
-for _, dim := range dims {
-    totalElements *= dim
-}
+`govulncheck` and automated dependency updates are not part of CI today. The library has no
+dependencies outside the Go standard library; `github.com/stretchr/testify` is used by tests only.
 
-if totalElements > maxAllowedElements {
-    return errors.New("dataset too large")
-}
-```
+## Disclosure History
 
-### Error Handling
+Published security advisories are listed at
+https://github.com/scigolib/hdf5/security/advisories. Fixes are also recorded under **Security** in
+[CHANGELOG.md](CHANGELOG.md).
 
-Always check errors - parsing failures may indicate malicious files:
+| Advisory | Severity | Summary | Affected | Fixed in | Published |
+| -------- | -------- | ------- | -------- | -------- | --------- |
+| [GHSA-8p88-h28q-w6m9](https://github.com/scigolib/hdf5/security/advisories/GHSA-8p88-h28q-w6m9) | high | A corrupt HDF5 file can request a multi-terabyte allocation and abort the Go process | before 0.14.2 | 0.14.2 | 2026-10-21 |
+| [GHSA-8p77-6v32-rwf3](https://github.com/scigolib/hdf5/security/advisories/GHSA-8p77-6v32-rwf3) | high | Crafted HDF5 files can exhaust memory or hang the reading process (incomplete fix for GHSA-8p88-h28q-w6m9) | before 0.14.3 | 0.14.3 | 2026-11-07 |
 
-```go
-// ❌ BAD - Ignoring errors
-file, _ := hdf5.Open(filename)
-dataset, _ := file.OpenDataset("/data")
-data, _ := dataset.Read()
+Neither advisory has a CVE identifier.
 
-// ✅ GOOD - Proper error handling
-file, err := hdf5.Open(filename)
-if err != nil {
-    return fmt.Errorf("file open failed: %w", err)
-}
-defer file.Close()
+## Bug Bounty
 
-dataset, err := file.OpenDataset("/data")
-if err != nil {
-    return fmt.Errorf("dataset open failed: %w", err)
-}
-
-data, err := dataset.Read()
-if err != nil {
-    return fmt.Errorf("read failed: %w", err)
-}
-```
-
-## Known Security Considerations
-
-### 1. Binary Parsing Vulnerabilities
-
-**Status**: Active mitigation via bounds checking and validation.
-
-**Risk Level**: Medium to High
-
-**Description**: Parsing binary HDF5 format involves reading sizes, offsets, and pointers from untrusted data. Malformed files can trigger buffer overflows or integer overflows.
-
-**Mitigation**:
-- All reads bounds-checked
-- Integer overflow checks before allocations
-- Signature validation at all structure boundaries
-
-### 2. Compression Bomb (ZIP Bomb)
-
-**Status**: Partially mitigated.
-
-**Risk Level**: Medium
-
-**Description**: GZIP-compressed chunks with extreme compression ratios can exhaust memory.
-
-**Mitigation**:
-- Decompression ratio limits (1000:1)
-- Streaming decompression with size checks
-- 🔄 **TODO (v1.0)**: Additional memory limits and monitoring
-
-### 3. B-tree Parsing
-
-**Status**: Active development and testing.
-
-**Risk Level**: Medium
-
-**Description**: B-tree structures index large datasets. Malformed B-trees can cause infinite loops or crashes.
-
-**Mitigation**:
-- Cycle detection in tree traversal
-- Maximum depth limits
-- Node validation at each level
-
-### 4. Dependency Security
-
-HDF5 Go Library has minimal dependencies:
-
-- `github.com/stretchr/testify` (dev only) - Testing
-- `golang.org/x/sys` (optional) - Platform-specific optimizations
-
-**Monitoring**:
-- 🔄 Dependabot enabled (when repository goes public)
-- 🔄 Weekly dependency audit (planned)
-- ✅ No C dependencies (pure Go)
-
-## Security Testing
-
-### Current Testing
-
-- ✅ Unit tests with malformed data
-- ✅ Integration tests with real HDF5 files
-- ✅ Linting with 34+ security-focused linters
-
-### Planned for v1.0
-
-- 🔄 Fuzzing with go-fuzz or libFuzzer
-- 🔄 Static analysis with gosec
-- 🔄 SAST/DAST scanning in CI
-- 🔄 Comparison testing against HDF5 C library
-
-## Security Disclosure History
-
-No security vulnerabilities have been reported or fixed yet (project is in beta).
-
-When vulnerabilities are addressed, they will be listed here with:
-- **CVE ID** (if assigned)
-- **Affected versions**
-- **Fixed in version**
-- **Severity** (Critical/High/Medium/Low)
-- **Credit** to reporter
-
-## Security Contact
-
-- **GitHub Security Advisory**: https://github.com/scigolib/hdf5/security/advisories/new
-- **Public Issues** (for non-sensitive bugs): https://github.com/scigolib/hdf5/issues
-- **Discussions**: https://github.com/scigolib/hdf5/discussions
-
-## Bug Bounty Program
-
-HDF5 Go Library does not currently have a bug bounty program. We rely on responsible disclosure from the security community.
-
-If you report a valid security vulnerability:
-- ✅ Public credit in security advisory (if desired)
-- ✅ Acknowledgment in CHANGELOG
-- ✅ Our gratitude and recognition in README
-- ✅ Priority review and quick fix
-
----
-
-**Thank you for helping keep HDF5 Go Library secure!** 🔒
-
-*Security is a journey, not a destination. We continuously improve our security posture with each release.*
+There is no bug bounty program. A reporter is credited in the advisory and in the CHANGELOG entry for
+the fix.
