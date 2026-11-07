@@ -235,8 +235,28 @@ func parseLinkValue(data []byte, offset int, lm *LinkMessage, sb *Superblock) er
 	case LinkTypeExternal:
 		return parseExternalLinkValue(data, offset, lm)
 	default:
-		return fmt.Errorf("unsupported link type: %d", lm.Type)
+		// Types from H5L_TYPE_UD_MIN (64) up are user-defined links: a 2-byte
+		// length and that many bytes (H5O__link_decode, H5Olink.c:239-262).
+		// They name no object here. Types 2 to 63 are unknown.
+		if lm.Type < LinkTypeExternal {
+			return fmt.Errorf("unknown link type: %d", lm.Type)
+		}
+		return parseUserDefinedLinkValue(data, offset, lm)
 	}
+}
+
+// parseUserDefinedLinkValue keeps the value of a user-defined link as it is
+// encoded, its 2-byte length included, so the message re-encodes unchanged.
+func parseUserDefinedLinkValue(data []byte, offset int, lm *LinkMessage) error {
+	if offset+2 > len(data) {
+		return errors.New("link message truncated (missing user-defined link length)")
+	}
+	end := offset + 2 + int(binary.LittleEndian.Uint16(data[offset:]))
+	if end > len(data) {
+		return fmt.Errorf("user-defined link data of %d bytes passes the end of the %d-byte message", end-offset-2, len(data))
+	}
+	lm.LinkValue = append([]byte(nil), data[offset:end]...)
+	return nil
 }
 
 // parseHardLinkValue reads hard link value (object address).
