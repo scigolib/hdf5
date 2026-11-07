@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `FileWriter.Delete` of a group that still has links deletes the group and everything only it links to,
+  as `H5Ldelete` does in the C library, instead of refusing. Each hard link of a freed group lowers the
+  reference count of the object it names; an object another link still names keeps its storage with
+  its count lowered. This works for all three forms a group keeps its links in (a symbol table, link
+  messages, dense link storage), and the bytes freed match h5stat. A tree whose objects are named by
+  more links than their reference counts is refused as `ErrCorrupt`, before anything is written.
+
+### Fixed
+
+- Freeing a block of file space that overlaps space already free, or passes the end of the file, is
+  refused, so a crafted file whose structures share space can no longer put overlapping blocks on the
+  free list.
+
 ## [v0.14.3] - 2026-11-06
 
 This release completes the security work of v0.14.2 (GHSA-8p88-h28q-w6m9) and brings the reader and the

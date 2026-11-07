@@ -356,6 +356,13 @@ func (a *Allocator) ValidateNoOverlaps() error {
 //
 // Errors:
 //   - "cannot free zero bytes": Size must be greater than 0
+//   - the block passes the end of the file, or overlaps space already free:
+//     the allocator is left unchanged (CheckFree's checks for one block)
+//
+// The C library trusts its callers here (H5MF_xfree, H5MF.c:1055-1228). The
+// blocks freed here come from file metadata (ADR-003): a crafted file whose
+// structures share space would otherwise put overlapping blocks on the free
+// list, and two later allocations would get the same bytes.
 //
 // Thread Safety:
 //   - NOT thread-safe: Do not call concurrently
@@ -369,6 +376,9 @@ func (a *Allocator) ValidateNoOverlaps() error {
 func (a *Allocator) Free(offset, size uint64) error {
 	if size == 0 {
 		return fmt.Errorf("cannot free zero bytes")
+	}
+	if err := a.CheckFree([]FreeBlock{{Offset: offset, Size: size}}); err != nil {
+		return err
 	}
 
 	// Remove from the allocated blocks list. A block not tracked exactly (a
@@ -401,7 +411,7 @@ func (a *Allocator) Free(offset, size uint64) error {
 // of the file, overlaps no free block and no other block of ranges. A caller
 // that frees several blocks as one operation (Delete) checks them first, so a
 // bad range refuses the whole operation before anything is written or freed;
-// Free itself trusts its caller, as H5MF_xfree does.
+// Free runs the same check for its one block.
 //
 // The C library has no such check: H5MF_xfree (H5MF.c:1055-1228) refuses only
 // temporary file space and hands the section to the free-space manager. Here
