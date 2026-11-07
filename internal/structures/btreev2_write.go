@@ -853,7 +853,15 @@ func decodeRecord(buf []byte, typ uint8) IndexRecord {
 //
 //nolint:unparam // error reserved for future validation/compression features
 func (bt *WritableBTreeV2) encodeLeafNode(sb *core.Superblock) ([]byte, error) {
+	// The image is the whole node, zero after the checksum, as
+	// H5B2__cache_leaf_serialize writes it (H5B2cache.c, "Clear rest of leaf
+	// node"). The node is allocated at its full size (WriteToFile); writing
+	// only the used bytes left the file short of its end-of-file address
+	// when the leaf was the last block, and the C library refuses such a file.
 	size := bt.calculateLeafSize(sb)
+	if node := uint64(bt.nodeSize); node > size {
+		size = node
+	}
 	buf := make([]byte, size)
 	offset := 0
 
@@ -950,6 +958,40 @@ func compareLinkNames(a, b string) int {
 	return 0
 }
 
+const (
+	// undefinedBTreeV2Addr is HADDR_UNDEF: the root of an empty tree.
+	undefinedBTreeV2Addr = ^uint64(0)
+
+	// maxBTreeV2NodeSize caps the node size a loaded header may state. The C
+	// library creates 512-byte nodes for dense links and attributes
+	// (H5G_NAME_BT2_NODE_SIZE, H5A_NAME_BT2_NODE_SIZE) and 2 KiB nodes for
+	// chunk indexes (H5D_BT2_NODE_SIZE); 16 MiB leaves ample room for other
+	// writers and bounds the in-memory image of a node rewritten in place.
+	maxBTreeV2NodeSize = 16 << 20
+)
+
+// checkLeafNodeInFile refuses a header whose leaf node would not lie in the
+// file at its full size. The leaf is rewritten in place as a whole node
+// (encodeLeafNode), and the C library reads it at node_size and refuses a
+// read past the end of the file (H5B2__cache_leaf_get_initial_load_size,
+// H5F_block_read). The size is also capped: C's own version 2 B-trees use
+// nodes of a few KiB, and the cap bounds the image built in memory even
+// inside a large file (a deviation from C, which has no cap).
+func checkLeafNodeInFile(r io.ReaderAt, header *BTreeV2Header) error {
+	if header.NodeSize > maxBTreeV2NodeSize {
+		return fmt.Errorf("%w: B-tree node size %d, more than %d", utils.ErrCorrupt, header.NodeSize, maxBTreeV2NodeSize)
+	}
+	if header.RootNodeAddr == undefinedBTreeV2Addr {
+		return nil
+	}
+	size, ok := utils.ReaderSize(r)
+	if ok && (header.RootNodeAddr > size || uint64(header.NodeSize) > size-header.RootNodeAddr) {
+		return fmt.Errorf("%w: B-tree leaf node of %d bytes at 0x%X passes the end of the file at %d",
+			utils.ErrCorrupt, header.NodeSize, header.RootNodeAddr, size)
+	}
+	return nil
+}
+
 // LoadFromFile loads an existing B-tree v2 from file.
 //
 // This implements read-modify-write (RMW) support:
@@ -1005,6 +1047,10 @@ func (bt *WritableBTreeV2) LoadFromFile(r io.ReaderAt, headerAddr uint64, sb *co
 		header.TotalRecords != uint64(header.NumRecordsRoot) {
 		return fmt.Errorf("%w: B-tree leaf of %d records (total %d) in a %d-byte node", utils.ErrCorrupt,
 			header.NumRecordsRoot, header.TotalRecords, header.NodeSize)
+	}
+
+	if err := checkLeafNodeInFile(r, header); err != nil {
+		return err
 	}
 
 	// 3. Store loaded addresses for WriteAt() support (RMW)

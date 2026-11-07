@@ -292,11 +292,14 @@ func TestBTreeV2_LeafSerialization(t *testing.T) {
 		offset += 7
 	}
 
-	// Verify checksum (last 4 bytes)
-	checksumOffset := len(data) - 4
+	// Verify checksum: right after the records; the image is the whole
+	// node, zero after the checksum (H5B2__cache_leaf_serialize).
+	checksumOffset := offset
 	expectedChecksum := core.JenkinsChecksum(data[:checksumOffset])
-	actualChecksum := binary.LittleEndian.Uint32(data[checksumOffset:])
+	actualChecksum := binary.LittleEndian.Uint32(data[checksumOffset : checksumOffset+4])
 	require.Equal(t, expectedChecksum, actualChecksum)
+	require.Len(t, data, 4096)
+	require.Equal(t, make([]byte, 4096-checksumOffset-4), data[checksumOffset+4:])
 }
 
 // TestBTreeV2_CRC32 tests checksum validation.
@@ -543,9 +546,13 @@ func TestBTreeV2_EmptyTree(t *testing.T) {
 	// Verify signature present
 	require.Equal(t, "BTLF", string(data[0:4]))
 
-	// Size should be minimal (sig + ver + type + checksum)
-	expectedSize := uint64(4 + 1 + 1 + 4)
-	require.Equal(t, expectedSize, uint64(len(data)))
+	// The used part is minimal (sig + ver + type + checksum); the image is the
+	// whole node, zero after it (H5B2__cache_leaf_serialize).
+	used := 4 + 1 + 1 + 4
+	require.Equal(t, uint64(used), bt.calculateLeafSize(sb))
+	require.Len(t, data, 4096)
+	require.Equal(t, core.JenkinsChecksum(data[:used-4]), binary.LittleEndian.Uint32(data[used-4:used]))
+	require.Equal(t, make([]byte, 4096-used), data[used:])
 }
 
 // TestBTreeV2_HeapIDEncoding tests 8-byte to 7-byte heap ID conversion.
