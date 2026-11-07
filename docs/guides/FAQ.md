@@ -94,7 +94,8 @@ Not suited for:
 Yes:
 
 - Numeric types (integers and floats of every width): `Read` returns `[]float64`
-- Strings, fixed and variable-length: `ReadStrings` returns `[]string`
+- Fixed-length strings: `ReadStrings` returns `[]string`; variable-length strings: `ReadVLenBytes`
+  returns each one's bytes (`string(b)`)
 - Compound types: `ReadCompound` returns one map per element
 
 ```go

@@ -367,7 +367,8 @@ Check the result with `h5dump test.h5` or h5py.
 ### Can I read dataset values?
 Yes. The library reads:
 - integers and floating-point numbers (`Read` returns `[]float64`)
-- fixed-length and variable-length strings (`ReadStrings`)
+- fixed-length strings (`ReadStrings`) and variable-length strings (`ReadVLenBytes`, one `[]byte`
+  per string)
 - compound types (`ReadCompound`)
 - chunked, compact and contiguous datasets, with GZIP, Shuffle, Fletcher32, LZF and BZIP2 filters
 

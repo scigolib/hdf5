@@ -231,8 +231,16 @@ with h5py.File('strings.h5', 'w') as f:
 
 **Example**:
 ```go
-// HDF5 file has variable-length string dataset
-strings, err := ds.ReadStrings()  // Returns []string
+// HDF5 file has variable-length string dataset: ReadStrings reads only
+// fixed-length strings; ReadVLenBytes returns each string's bytes.
+raw, err := ds.ReadVLenBytes() // [][]byte
+if err != nil {
+    return err
+}
+strings := make([]string, len(raw))
+for i, b := range raw {
+    strings[i] = string(b)
+}
 
 // Strings can have different lengths:
 // ["short", "a much longer string", "x"]
