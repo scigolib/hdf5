@@ -581,6 +581,9 @@ type FileWriter struct {
 	// Global heap writer for variable-length data (vlen strings, ragged arrays)
 	globalHeapWriter *globalHeapWriter
 
+	// Datasets rows have been appended to, flushed by Close.
+	appenders []*DatasetWriter
+
 	// Rebalancing configurations (Phase 3)
 	// These are set via functional options: WithLazyRebalancing(), WithIncrementalRebalancing(), WithSmartRebalancing()
 	lazyRebalancingConfig        *structures.LazyRebalancingConfig
@@ -1369,6 +1372,8 @@ type DatasetWriter struct {
 	// For RMW scenarios (files opened with OpenForWrite)
 	objectHeader  *core.ObjectHeader         // Full object header (for attribute operations)
 	denseAttrInfo *core.AttributeInfoMessage // Dense attribute storage info (nil if no dense storage)
+
+	appender *appender // set once AppendRows has been called
 }
 
 // Write writes data to the dataset.
@@ -1729,6 +1734,9 @@ func (dw *DatasetWriter) Resize(newDims []uint64) error {
 	if dw.dtype == nil {
 		return errCommittedDatatypeData
 	}
+	if dw.appender != nil {
+		return errAppending
+	}
 	// 1-2. Validate input and compute the new data size.
 	newDataSize, err := dw.resizeDataSize(newDims)
 	if err != nil {
@@ -2033,8 +2041,7 @@ func encodeOpaqueData(data interface{}, expectedSize uint64) ([]byte, error) {
 // Close closes the dataset writer.
 // For MVP, this is a no-op (no per-dataset resources to release).
 func (dw *DatasetWriter) Close() error {
-	// No resources to release for MVP
-	return nil
+	return dw.Flush()
 }
 
 // DatasetOption is a functional option for customizing dataset creation.
@@ -2576,6 +2583,10 @@ func (fw *FileWriter) Close() error {
 	// Note: For MVP, this is a no-op (incremental mode is per-dataset).
 	// Future: Will stop all tracked BTrees automatically.
 	_ = fw.StopIncrementalRebalancing() // Ignore error - likely "not enabled" (MVP)
+
+	if err := fw.flushAppenders(); err != nil {
+		return err
+	}
 
 	// Flush global heap before closing (for variable-length data)
 	if fw.globalHeapWriter != nil {
