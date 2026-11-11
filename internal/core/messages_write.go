@@ -439,13 +439,17 @@ func EncodeAttributeMessage(name string, datatype *DatatypeMessage, dataspace *D
 // encodeDataspaceOf encodes a dataspace that may have been read from a file.
 // A null dataspace and a rank-0 (scalar) one are encoded as H5O__sdspace_encode
 // writes them (H5Osdspace.c:249-297): no dimensions, a null one in version 2
-// because version 1 cannot express it. Messages the writer builds always
-// carry dimensions (a scalar as [1]) and keep the simple encoding; their Type
-// is left at its zero value, so the class alone cannot tell them apart.
+// because version 1 cannot express it, and a scalar one in its message's
+// version. Messages the writer builds carry dimensions (a scalar as [1]) and
+// keep the simple encoding, except an attribute written under
+// WithScalarAttributes; the Type of the others is left at its zero value, so
+// the class alone cannot tell them apart.
 func encodeDataspaceOf(ds *DataspaceMessage) ([]byte, error) {
 	switch {
 	case ds.Type == DataspaceNull:
 		return []byte{2, 0, 0, byte(DataspaceNull)}, nil
+	case len(ds.Dimensions) == 0 && ds.Version == DataspaceVersion2:
+		return []byte{DataspaceVersion2, 0, 0, byte(DataspaceScalar)}, nil
 	case len(ds.Dimensions) == 0:
 		return []byte{1, 0, 0, 0, 0, 0, 0, 0}, nil
 	default:

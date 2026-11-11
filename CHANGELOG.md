@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `WithScalarAttributes()`, a file option for `CreateForWrite` and `OpenForWrite`: an attribute whose
+  value is a Go number or string is written with a scalar dataspace, as `H5Acreate` does with
+  `H5Screate(H5S_SCALAR)` and as h5py writes `attrs["x"] = 1`. Readers that follow the dataspace, h5py
+  among them, then return the value rather than a one-element array. A slice value keeps its simple
+  dataspace. Without the option nothing changes: such an attribute keeps the one-element simple
+  dataspace that `H5LTset_attribute_int` writes.
+
+### Fixed
+
+- A scalar dataspace in a version 2 message is encoded as version 2. It was always encoded as
+  version 1, which a file whose other messages are version 2 should not mix.
+
 ## [v0.15.0] - 2026-11-07
 
 This release adds user blocks, so files can carry an application header in front of the HDF5 data
