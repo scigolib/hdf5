@@ -785,6 +785,9 @@ func inferAndEncodeAttributeValue(fw *FileWriter, value interface{}) (*core.Data
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	if fw.config != nil && fw.config.ScalarAttributes && reflect.ValueOf(value).Kind() != reflect.Slice {
+		dataspace = &core.DataspaceMessage{Type: core.DataspaceScalar}
+	}
 
 	data, err := encodeAttributeValue(value)
 	if err != nil {

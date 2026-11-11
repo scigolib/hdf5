@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no other way to reach it. The root group of a version 0 superblock has a version 1 object header,
   to which attributes could not be added before: they now are, and stay compact however many there
   are, as in the C library, which keeps dense attribute storage for version 2 headers.
+- `WithScalarAttributes()`, a file option for `CreateForWrite` and `OpenForWrite`: an attribute whose
+  value is a Go number or string is written with a scalar dataspace, as `H5Acreate` does with
+  `H5Screate(H5S_SCALAR)` and as h5py writes `attrs["x"] = 1`. Readers that follow the dataspace, h5py
+  among them, then return the value rather than a one-element array. A slice value keeps its simple
+  dataspace. Without the option nothing changes: such an attribute keeps the one-element simple
+  dataspace that `H5LTset_attribute_int` writes.
 
 ### Changed
 
@@ -85,6 +91,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DatasetWriter.Resize` to a dimension of 0 failed, after it had already written the new dataspace to
   the file. It now succeeds, and a resize that fails leaves the dataspace unchanged. `Write` of a
   dataset with no element stores no chunk index and frees the chunks and index of the previous write.
+- A scalar dataspace in a version 2 message is encoded as version 2. It was always encoded as
+  version 1, which a file whose other messages are version 2 should not mix.
 
 ## [v0.15.0] - 2026-11-07
 
