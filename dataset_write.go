@@ -581,6 +581,9 @@ type FileWriter struct {
 	// Global heap writer for variable-length data (vlen strings, ragged arrays)
 	globalHeapWriter *globalHeapWriter
 
+	// Datasets rows have been appended to, flushed by Close.
+	appenders []*DatasetWriter
+
 	// Rebalancing configurations (Phase 3)
 	// These are set via functional options: WithLazyRebalancing(), WithIncrementalRebalancing(), WithSmartRebalancing()
 	lazyRebalancingConfig        *structures.LazyRebalancingConfig
@@ -879,6 +882,22 @@ func validateDatasetName(name string) error {
 	return nil
 }
 
+// validateExtendibleDimensions is validateDimensions, except that a dimension
+// whose maximum is Unlimited may be 0, as H5Screate_simple allows. Such a
+// dataset starts empty and is filled by AppendRows. Every other dimension must
+// be at least 1.
+func validateExtendibleDimensions(dims, maxDims []uint64) error {
+	if len(dims) == 0 || len(maxDims) != len(dims) {
+		return validateDimensions(dims)
+	}
+	for i, dim := range dims {
+		if dim == 0 && maxDims[i] != Unlimited {
+			return fmt.Errorf("dimension %d cannot be 0 unless its maximum is Unlimited", i)
+		}
+	}
+	return nil
+}
+
 // validateDimensions validates that dimensions is not empty and no dimension is zero.
 func validateDimensions(dims []uint64) error {
 	if len(dims) == 0 {
@@ -983,14 +1002,14 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 	if err := validateDatasetName(name); err != nil {
 		return nil, err
 	}
-	if err := validateDimensions(dims); err != nil {
-		return nil, err
-	}
-
 	// Apply options
 	config := &datasetConfig{}
 	for _, opt := range opts {
 		opt(config)
+	}
+
+	if err := validateExtendibleDimensions(dims, config.maxDims); err != nil {
+		return nil, err
 	}
 
 	if err := validateMaxDims(dims, config); err != nil {
@@ -1358,6 +1377,8 @@ type DatasetWriter struct {
 	// For RMW scenarios (files opened with OpenForWrite)
 	objectHeader  *core.ObjectHeader         // Full object header (for attribute operations)
 	denseAttrInfo *core.AttributeInfoMessage // Dense attribute storage info (nil if no dense storage)
+
+	appender *appender // set once AppendRows has been called
 }
 
 // Write writes data to the dataset.
@@ -1717,6 +1738,9 @@ func (dw *DatasetWriter) Resize(newDims []uint64) error {
 	if dw.dtype == nil {
 		return errCommittedDatatypeData
 	}
+	if dw.appender != nil {
+		return errAppending
+	}
 	// 1-2. Validate input and compute the new data size.
 	newDataSize, err := dw.resizeDataSize(newDims)
 	if err != nil {
@@ -2020,8 +2044,7 @@ func encodeOpaqueData(data interface{}, expectedSize uint64) ([]byte, error) {
 // Close closes the dataset writer.
 // For MVP, this is a no-op (no per-dataset resources to release).
 func (dw *DatasetWriter) Close() error {
-	// No resources to release for MVP
-	return nil
+	return dw.Flush()
 }
 
 // DatasetOption is a functional option for customizing dataset creation.
@@ -2555,6 +2578,10 @@ func (fw *FileWriter) Close() error {
 	// Note: For MVP, this is a no-op (incremental mode is per-dataset).
 	// Future: Will stop all tracked BTrees automatically.
 	_ = fw.StopIncrementalRebalancing() // Ignore error - likely "not enabled" (MVP)
+
+	if err := fw.flushAppenders(); err != nil {
+		return err
+	}
 
 	// Flush global heap before closing (for variable-length data)
 	if fw.globalHeapWriter != nil {
