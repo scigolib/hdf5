@@ -2101,7 +2101,7 @@ Sprint completed ahead of schedule (2 days vs estimated 2-4 weeks).
 - **Reference test suite** - 57 official HDF5 C library test files
 - **100% pass rate** - All 57 files readable and validated
 - **Bug fix** - V0 superblock B-tree address parsing corrected
-- **Source**: D:\projects\scigolibs\hdf5c\test\testfiles\
+- **Source**: `test/testfiles/` of the HDF5 C library
 - **File**: `reference_test.go` (317 LOC)
 - **Coverage**: Comprehensive object, dataset, group, attribute validation
 

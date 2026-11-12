@@ -1,7 +1,7 @@
 # Official HDF5 Test Suite
 
 **Source**: HDF5 1.14.6 official distribution
-**Location**: Copied from `D:\projects\scigolibs\hdf5c\`
+**Location**: Copied from a checkout of https://github.com/HDFGroup/hdf5
 **Purpose**: Comprehensive format validation and compatibility testing
 
 ## Contents

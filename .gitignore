@@ -24,6 +24,7 @@ vendor/
 
 # Private development docs (not for release)
 /docs/dev/
+/.pm/
 /docs/proposals/
 
 # Go workspace file
