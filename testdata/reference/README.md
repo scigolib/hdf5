@@ -1,6 +1,6 @@
 # HDF5 C Library Reference Test Files
 
-**Source**: `D:\projects\scigolibs\hdf5c\test\testfiles\`
+**Source**: `test/testfiles/` of the HDF5 C library (https://github.com/HDFGroup/hdf5)
 **Copied**: 2025-10-29
 **Count**: 58 files (57 from the C test suite plus `userblock-512.h5`, generated locally
 with `h5repack -b 512` from `aggr.h5` to cover a 512-byte user block)
@@ -36,7 +36,8 @@ file driver or an old data layout version (skipped with a reason). Any other fai
 ## Maintenance
 
 When updating test files:
-1. Copy new files from C library: `D:\projects\scigolibs\hdf5c\test\testfiles\`
+1. Copy new files from `test/testfiles/` of a checkout of https://github.com/HDFGroup/hdf5 (at the
+   commit recorded in `UPSTREAM.md`)
 2. Update count in this README
 3. Regenerate file-list.txt: `ls -1 *.h5 > file-list.txt`
 4. Run tests: `go test -v -run TestReference_AllFiles`

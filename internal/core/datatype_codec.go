@@ -4,8 +4,8 @@ package core
 // used for top-level messages and for every nested datatype (compound member,
 // enumeration, variable-length, array and complex base types). They mirror
 // H5O__dtype_decode_helper (H5Odtype.c:120-916) and H5O__dtype_encode_helper
-// (H5Odtype.c:932-1446) of the HDF5 C library; line numbers refer to
-// hdf5c/src at the commit recorded in UPSTREAM.md.
+// (H5Odtype.c:932-1446) of the HDF5 C library; line numbers refer to src/
+// of https://github.com/HDFGroup/hdf5 at the commit recorded in UPSTREAM.md.
 //
 // Every decode error reports bytes the C library would reject too and wraps
 // utils.ErrCorrupt. The encoder decodes what it produced before returning it,
