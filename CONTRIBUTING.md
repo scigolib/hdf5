@@ -3,7 +3,8 @@
 Contributions are welcome: bug reports with a sample file, fixes, documentation, and files from your
 own field that the library should read. This document describes how changes get into `main`.
 
-To report a security vulnerability, do not open an issue; follow [SECURITY.md](SECURITY.md).
+To report a security vulnerability, do not open an issue; follow [SECURITY.md](SECURITY.md). By taking
+part you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Before you start
 
@@ -46,7 +47,8 @@ The project uses GitHub Flow.
 - Keep a pull request to one logical change. Unrelated fixes go in separate pull requests.
 - Push the branch and open a pull request against `main`. If review asks for changes, push more
   commits to the same branch; the pull request updates itself.
-- A maintainer merges once the required checks pass and review comments are resolved. The merge method
+- A pull request needs an approving review from someone other than its author, and the required checks
+  must pass. A maintainer merges once both hold and the review comments are resolved. The merge method
   (rebase, squash or merge commit) is chosen from the pull request's commits: a clean series of
   commits is kept as it is, a work log of fixups is squashed. You do not need to rewrite your history
   for this.
@@ -65,8 +67,8 @@ The project uses GitHub Flow.
 | C Library Interop | `go test -run TestCInterop .` with the HDF5 tools installed |
 | Fuzz | 60 seconds each of `FuzzOpenFile` and `FuzzParseAttributeMessage`; informational, does not block merging |
 
-The branch ruleset requires these checks to pass: the three Unit Tests jobs, Lint, Code Formatting and
-Cross-Build 32-bit.
+The branch ruleset requires these checks to pass — the three Unit Tests jobs, Lint, Code Formatting and
+Cross-Build 32-bit — and one approving review on the pull request.
 
 A change that passes `go test ./...` on one platform can still fail on another or on a 32-bit target.
 If a CI job fails on your pull request, the log shows which test; fix it on the same branch.
