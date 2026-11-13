@@ -46,16 +46,69 @@ func Open(filename string) (*File, error) {
 		_ = f.Close()
 		return nil, utils.WrapError("file stat failed", err)
 	}
-	fileSize := fi.Size()
 
+	file, err := openReader(f, fi.Size())
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	file.osFile = f
+
+	return file, nil
+}
+
+// OpenReader opens the HDF5 file held in the first size bytes of r and
+// returns a File handle, as Open does for a named file. It is for a file
+// that is not on disk under a name: bytes in memory, a member of an archive,
+// a range of a larger file (io.SectionReader), or a remote object.
+//
+// size is the length of the file in bytes and is what the library takes the
+// file's end to be: nothing past it is read, whatever r itself holds or
+// reports, and a file that needs bytes past it is refused as truncated. A
+// size of zero holds no file. r needs no method besides ReadAt.
+//
+// r must stay usable for as long as the File is, and must allow concurrent
+// ReadAt calls if the File is used from several goroutines, as io.ReaderAt
+// asks. Close does not close r; the caller owns it. External raw data files
+// are resolved as for Open, from the directory SetExternalFilePrefix names.
+func OpenReader(r io.ReaderAt, size int64) (*File, error) {
+	if utils.IsNilReader(r) {
+		return nil, errors.New("hdf5: OpenReader: nil reader")
+	}
+	if size < 0 {
+		return nil, fmt.Errorf("hdf5: OpenReader: negative size %d", size)
+	}
+
+	bounded := utils.NewBoundedReader(r, uint64(size))
+
+	return openReader(sizedReader{ReaderAt: bounded, size: size}, size)
+}
+
+// sizedReader gives a reader the length its caller stated. The superblock is
+// searched for at every power of two up to the file's length (a file with a
+// user block does not start at address 0), and that search asks the reader
+// for its length (utils.ReaderSize); a bare io.ReaderAt has none to give, and
+// one that reports its own may hold more than the file.
+type sizedReader struct {
+	io.ReaderAt
+
+	size int64
+}
+
+// Size returns the length the caller of OpenReader stated.
+func (s sizedReader) Size() int64 { return s.size }
+
+// openReader builds a File over a reader whose length is fileSize. It does
+// not take ownership of f: the caller closes it when this fails, and sets
+// File.osFile when Close should.
+func openReader(f io.ReaderAt, fileSize int64) (*File, error) {
 	// Bound every internal read to the real file size — the Go counterpart of
 	// the VFD's get_eof contract (ADR-003). The size is already at hand from the
-	// stat above, so no second syscall is needed. A non-positive size cannot
+	// caller, so no second syscall is needed. A non-positive size cannot
 	// describe a byte range, and the per-site checks still apply without the
 	// backstop.
 	sb, err := core.ReadSuperblock(f)
 	if err != nil {
-		_ = f.Close()
 		if errors.Is(err, core.ErrNoSignature) {
 			return nil, errors.New("not an HDF5 file")
 		}
@@ -65,7 +118,7 @@ func Open(filename string) (*File, error) {
 	// Every read below is bounded by the real file size (ADR-003) and, for a
 	// file with a user block, shifted by the base address: HDF5 metadata stores
 	// addresses relative to the superblock position (H5FDint.c:267).
-	reader := io.ReaderAt(f)
+	reader := f
 	if fileSize > 0 {
 		reader = utils.NewBoundedReader(f, uint64(fileSize))
 	}
@@ -74,7 +127,6 @@ func Open(filename string) (*File, error) {
 	}
 
 	file := &File{
-		osFile:        f,
 		reader:        reader,
 		sb:            sb,
 		visitedBTrees: make(map[uint64]bool),
@@ -89,9 +141,8 @@ func Open(filename string) (*File, error) {
 
 	// Validate the root group address. It is relative to the base address, so
 	// the check compares the absolute position with the file size.
-	//nolint:gosec // G115: os.FileInfo.Size is non-negative for a regular file
+	//nolint:gosec // G115: the size is non-negative: a regular file's, or checked by OpenReader
 	if !regionInFile(sb.BaseAddress, sb.RootGroup, 1, uint64(fileSize)) {
-		_ = f.Close()
 		return nil, fmt.Errorf("root group address %d (base %d) beyond file size %d",
 			sb.RootGroup, sb.BaseAddress, fileSize)
 	}
@@ -99,7 +150,6 @@ func Open(filename string) (*File, error) {
 	// For all versions, sb.RootGroup now contains the correct object header address.
 	file.root, err = loadGroup(file, sb.RootGroup)
 	if err != nil {
-		_ = f.Close()
 		return nil, utils.WrapError("root group load failed", err)
 	}
 

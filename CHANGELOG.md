@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `OpenReader(r io.ReaderAt, size int64)` opens a file that is not on disk under a name: bytes in
+  memory, a member of an archive, a range of a larger file (`io.SectionReader`) or a remote object.
+  It reads what `Open` reads from the same bytes, files with a user block included, and needs no
+  method of the reader besides `ReadAt`: `size` is taken as the file's end. The caller owns the
+  reader: it must stay usable for as long as the `File` is, and `Close` does not close it. `Open` is
+  unchanged for its callers and is now a wrapper over the same code.
+
 ## [v0.15.0] - 2026-11-07
 
 This release adds user blocks, so files can carry an application header in front of the HDF5 data

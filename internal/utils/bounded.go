@@ -30,7 +30,7 @@ type boundedReader struct {
 // ReadAt implements io.ReaderAt. It rejects a negative offset and any read
 // that ends past the file size.
 func (b *boundedReader) ReadAt(p []byte, off int64) (int, error) {
-	if isNilReader(b.r) {
+	if IsNilReader(b.r) {
 		return 0, errors.New("bounded reader: nil underlying reader")
 	}
 
