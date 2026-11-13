@@ -66,9 +66,12 @@ The project uses GitHub Flow.
 | Cross-Build 32-bit | the module builds for linux/386, linux/arm (GOARM=6) and windows/386, and `go vet` passes on linux/386 |
 | C Library Interop | `go test -run TestCInterop .` with the HDF5 tools installed |
 | Fuzz | 60 seconds each of `FuzzOpenFile` and `FuzzParseAttributeMessage`; informational, does not block merging |
+| Govulncheck | known vulnerabilities in the dependencies and the standard library; informational, does not block merging |
+| Required checks | the gate the ruleset requires: fails unless every required job passed |
 
-The branch ruleset requires these checks to pass — every Unit Tests job, Lint, Code Formatting and
-Cross-Build 32-bit — and one approving review on the pull request.
+The branch ruleset requires one check, `Required checks`: a gate that fails unless every required job
+passed — the Unit Tests jobs, Lint, Code Formatting, Cross-Build 32-bit and C Library Interop — plus one
+approving review on the pull request.
 
 A change that passes `go test ./...` on one platform can still fail on another, on a 32-bit target or
 on a different Go version. If a CI job fails on your pull request, the log shows which test; fix it on
