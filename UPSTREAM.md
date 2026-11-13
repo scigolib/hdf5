@@ -13,14 +13,64 @@ Status:     Fully supported (superblock v0, v2, v3)
 
 ### HDF5 C Library (Reference Implementation)
 Repository: https://github.com/HDFGroup/hdf5
-Branch:     develop
-Commit:     [`bc8f6bb02a`](https://github.com/HDFGroup/hdf5/commit/bc8f6bb02aaa8b162bf04b42f2b59bcbbbfcf9f8)
-Date:       2025-12-19 (local sync)
+Tag:        2.2.0
+Commit:     [`49df1b4e5`](https://github.com/HDFGroup/hdf5/commit/49df1b4e5ca4108d56e80f06321a749da1535268)
+Date:       2026-07-28 (release)
 Local Copy: Clone repository for development reference
 
 ## Upstream Sync History
 
-### Latest Sync: 2025-12-19
+### Latest Sync: 2026-11-14
+
+**Reference**: tag [2.2.0](https://github.com/HDFGroup/hdf5/commit/49df1b4e5ca4108d56e80f06321a749da1535268)
+(2026-07-28); releases in the range: 2.1.0 (2026-03-02), 2.1.1 (2026-03-23, packaging only), 2.2.0
+**Previous sync**: develop [`bc8f6bb02a`](https://github.com/HDFGroup/hdf5/commit/bc8f6bb02aaa8b162bf04b42f2b59bcbbbfcf9f8) (2025-12-19)
+**Commits Analyzed**: 242 since the previous sync (301 from tag hdf5_2.0.0)
+
+No serialized metadata layout changed in the range: the chunk index, B-tree, fractal and local heap,
+object header, attribute, layout and datatype message readers had no format change, only hardening,
+one reader relaxation and new predefined datatypes.
+
+#### New CVEs Identified
+
+| CVE | File | Status |
+|-----|------|--------|
+| CVE-2025-44904 | H5Dchunk.c | ✅ Not affected (stored chunk size is bounded by the file and the chunk maximum; short data is rejected) |
+| CVE-2025-2309 | H5Odtype.c | ✅ Not affected (the same bitfield offset and precision checks are in place) |
+| CVE-2025-2308 | H5Zscaleoffset.c | ✅ Not affected (filter not implemented) |
+| CVE-2026-17572 | H5SMcache.c | ✅ Not affected (shared message index not decoded) |
+| CVE-2026-17574 | H5Odtype.c | ⚠️ Strictness gap: the variable-length type is not validated yet (TASK-103) |
+| CVE-2025-9274 | H5A.c | ✅ Not affected (C API only) |
+
+#### Format and Reader Changes
+
+- 2.1.0 added the predefined FP6 (E2M3, E3M2) and FP4 (E2M1) datatypes: float class, one byte,
+  precision 6 or 4, ordinary datatype messages on disk. The decoder reads them; conversion to
+  float32/float64 is not implemented yet (TASK-106).
+- 2.1.0 allows filters on variable-length datatypes
+  ([`b074586d9`](https://github.com/HDFGroup/hdf5/commit/b074586d9ea853bf509ac97c9cf8f17c60e73a40));
+  the filter pipeline is datatype-agnostic.
+- 2.2.0 accepts layout messages whose chunk dimensions are encoded in more bytes than necessary
+  ([`e124c36c5`](https://github.com/HDFGroup/hdf5/commit/e124c36c55bf69e9087352a91c77e62ad52f4306));
+  the layout parser already accepts any stored width from 1 to 8.
+- 2.2.0 validates the superblock base, the stored EOF and the driver and extension addresses
+  ([`1da455e53`](https://github.com/HDFGroup/hdf5/commit/1da455e53a3fe11698815415b0012ee3cec8c03a));
+  aligning the decoder is TASK-105.
+- 2.2.0 hardened the chunk-size checks for unfiltered chunks (CVE-2025-44904,
+  [`d069f1526`](https://github.com/HDFGroup/hdf5/commit/d069f15269509d14f86479f760b2edc62c0c6e9b));
+  comparing the stored size with the computed chunk size is TASK-104.
+
+#### Tasks Created
+
+- **TASK-103**: validate the variable-length datatype type at decode (CVE-2026-17574 parity)
+- **TASK-104**: compare an unfiltered chunk's stored size with the computed chunk size
+  (CVE-2025-44904 parity)
+- **TASK-105**: align superblock decode validation with HDF5 2.2.0
+- **TASK-106**: interop fixtures for the 2.1/2.2 reader changes; decide FP6/FP4 value support
+
+---
+
+### Previous Sync: 2025-12-19
 
 **Commit**: [`bc8f6bb02a`](https://github.com/HDFGroup/hdf5/commit/bc8f6bb02aaa8b162bf04b42f2b59bcbbbfcf9f8)
 **Commits Analyzed**: 34 new commits since last sync
@@ -44,7 +94,7 @@ Local Copy: Clone repository for development reference
 
 ---
 
-### Previous Sync: 2025-11-13 (v0.13.0 Release)
+### Earlier Sync: 2025-11-13 (v0.13.0 Release)
 
 **Commit**: `e99a49585760aeb34f2bb2144d8e80e207a68ec4`
 **Version**: HDF5 2.0.0 (Format Spec v4.0)
@@ -84,7 +134,7 @@ This is a **Pure Go implementation**, not a CGo wrapper or line-by-line port.
 |---------------------|-----------|------------|-------|
 | Superblock v0,v2,v3 | ✅        | ✅         | Full support |
 | Object Header v1,v2 | ✅        | ✅         | With continuations |
-| All Datatypes       | ✅        | ✅         | Including FP8, bfloat16 |
+| All Datatypes       | ✅        | ✅         | Including FP8, bfloat16, FP6 and FP4 (FP6/FP4 decode only, no float conversion yet) |
 | Bitfield Datatype   | ✅        | ❌         | Not supported (explicit rejection) |
 | Chunked + Filters   | ✅        | ✅         | GZIP, Shuffle, Fletcher32, LZF |
 | BZIP2 Filter        | ✅        | ⚠️         | Read only (stdlib) |
