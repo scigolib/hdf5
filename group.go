@@ -420,18 +420,19 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 			// First check for Symbol Table message in object header
 			for _, msg := range header.Messages {
 				if msg.Type == core.MsgSymbolTable {
-					// Symbol table message data format:
-					// Bytes 0-7: B-tree address.
-					// Bytes 8-15: Local heap address.
-					if len(msg.Data) >= 16 {
-						btreeAddr := sb.Endianness.Uint64(msg.Data[0:8])
-						heapAddr := sb.Endianness.Uint64(msg.Data[8:16])
+					// A message too short for its addresses does not say
+					// where the group's members are; passing over it
+					// would open the group from the superblock's cache,
+					// or with no members at all.
+					btreeAddr, heapAddr, err := decodeSymbolTableMessage(msg.Data, sb)
+					if err != nil {
+						return nil, fmt.Errorf("group at 0x%X: %w", address, err)
+					}
 
-						group.symbolTable = &structures.SymbolTable{
-							Version:      1,
-							BTreeAddress: btreeAddr,
-							HeapAddress:  heapAddr,
-						}
+					group.symbolTable = &structures.SymbolTable{
+						Version:      1,
+						BTreeAddress: btreeAddr,
+						HeapAddress:  heapAddr,
 					}
 				}
 			}
@@ -462,6 +463,24 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 	return group, nil
 }
 
+// decodeSymbolTableMessage returns the two addresses a Symbol Table message
+// holds: the group's B-tree, then its local heap, each of the file's size of
+// offsets. A message too short for both is corrupt, as in the C library,
+// which checks its buffer before each address (H5O__stab_decode,
+// H5Ostab.c:100-106).
+func decodeSymbolTableMessage(data []byte, sb *core.Superblock) (btreeAddr, heapAddr uint64, err error) {
+	width := int(sb.OffsetSize)
+	if len(data) < 2*width {
+		return 0, 0, fmt.Errorf("symbol table message of %d bytes cannot hold two %d-byte addresses: %w",
+			len(data), width, utils.ErrCorrupt)
+	}
+
+	btreeAddr = core.DecodeAddress(data[:width], width, sb.Endianness)
+	heapAddr = core.DecodeAddress(data[width:2*width], width, sb.Endianness)
+
+	return btreeAddr, heapAddr, nil
+}
+
 func loadTraditionalGroup(file *File, address uint64) (*Group, error) {
 	// Parse the Symbol Table Node (SNOD).
 	node, err := structures.ParseSymbolTableNode(file.reader, address, file.sb)
@@ -486,14 +505,18 @@ func loadTraditionalGroup(file *File, address uint64) (*Group, error) {
 	if err == nil {
 		// Find symbol table message.
 		for _, msg := range rootHeader.Messages {
-			if msg.Type == core.MsgSymbolTable && len(msg.Data) >= 16 {
-				heapAddr := file.sb.Endianness.Uint64(msg.Data[8:16])
-				heap, err = structures.LoadLocalHeap(file.reader, heapAddr, file.sb)
-				if err != nil {
-					return nil, utils.WrapError("local heap load failed", err)
-				}
-				break
+			if msg.Type != core.MsgSymbolTable {
+				continue
 			}
+			_, heapAddr, err := decodeSymbolTableMessage(msg.Data, file.sb)
+			if err != nil {
+				return nil, fmt.Errorf("root group: %w", err)
+			}
+			heap, err = structures.LoadLocalHeap(file.reader, heapAddr, file.sb)
+			if err != nil {
+				return nil, utils.WrapError("local heap load failed", err)
+			}
+			break
 		}
 	}
 
@@ -680,14 +703,18 @@ func loadObject(file *File, address uint64, name string) (Object, error) {
 
 			var heap *structures.LocalHeap
 			for _, msg := range rootHeader.Messages {
-				if msg.Type == core.MsgSymbolTable && len(msg.Data) >= 16 {
-					heapAddr := file.sb.Endianness.Uint64(msg.Data[8:16])
-					heap, err = structures.LoadLocalHeap(file.reader, heapAddr, file.sb)
-					if err != nil {
-						return nil, err
-					}
-					break
+				if msg.Type != core.MsgSymbolTable {
+					continue
 				}
+				_, heapAddr, err := decodeSymbolTableMessage(msg.Data, file.sb)
+				if err != nil {
+					return nil, fmt.Errorf("root group: %w", err)
+				}
+				heap, err = structures.LoadLocalHeap(file.reader, heapAddr, file.sb)
+				if err != nil {
+					return nil, err
+				}
+				break
 			}
 
 			if heap != nil {
