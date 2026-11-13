@@ -1,6 +1,7 @@
 package hdf5
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -12,6 +13,11 @@ import (
 // contiguous dataset, the default raw-data sieve buffer of the C library
 // (H5F_ACS_SIEVE_BUF_SIZE_DEF, H5Pfapl.c:121).
 const sieveBufSize = 64 * 1024
+
+// errNoDimensionsToSlice is what ReadSlice returns for a dataset whose
+// dataspace has no dimensions.
+var errNoDimensionsToSlice = errors.New(
+	"ReadSlice: the dataset has no dimensions (a scalar or null dataspace); use Read")
 
 // HyperslabSelection represents a rectangular selection in N-dimensional space.
 // It follows the HDF5 hyperslab specification with start, count, stride, and block parameters.
@@ -55,6 +61,8 @@ type HyperslabSelection struct {
 //   - count: Number of elements to read in each dimension
 //
 // The number of dimensions in start and count must match the dataset's dimensionality.
+// A dataset with no dimensions (a scalar or null dataspace) has nothing to
+// select a block from and is refused; Read returns a scalar's one value.
 //
 // Example (2D dataset):
 //
@@ -62,7 +70,8 @@ type HyperslabSelection struct {
 //	data, err := dataset.ReadSlice([]uint64{100, 200}, []uint64{50, 50})
 //
 // Returns:
-//   - interface{}: The selected data in the dataset's native type ([]float64, []int32, etc.)
+//   - interface{}: The selected values as a []float64, whatever the dataset's
+//     numeric type, as Read returns them
 //   - error: Error if selection is invalid or reading fails
 func (d *Dataset) ReadSlice(start, count []uint64) (interface{}, error) {
 	desc, err := d.descriptor()
@@ -71,6 +80,15 @@ func (d *Dataset) ReadSlice(start, count []uint64) (interface{}, error) {
 	}
 
 	dims := desc.Dims()
+
+	// A hyperslab of a scalar or null dataspace is refused, as the C library
+	// does (H5Sselect_hyperslab, H5Shyper.c:10336-10339). Without this, every
+	// check below passes on empty slices and the selection holds no elements,
+	// so the read would return no values and no error for a dataset that
+	// holds one.
+	if len(dims) == 0 {
+		return nil, errNoDimensionsToSlice
+	}
 
 	// Validate dimensions match
 	if len(start) != len(dims) {
@@ -120,7 +138,8 @@ func (d *Dataset) ReadSlice(start, count []uint64) (interface{}, error) {
 //	data, err := dataset.ReadHyperslab(sel)
 //
 // Returns:
-//   - interface{}: The selected data in the dataset's native type
+//   - interface{}: The selected values as a []float64, whatever the dataset's
+//     numeric type, as Read returns them
 //   - error: Error if selection is invalid or reading fails
 func (d *Dataset) ReadHyperslab(selection *HyperslabSelection) (interface{}, error) {
 	desc, err := d.descriptor()
