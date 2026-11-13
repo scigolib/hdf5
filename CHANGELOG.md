@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A rewritten chunked dataset no longer keeps every generation in the file (issue #80).** A
+  `Resize` + `Write` loop is today's way to append rows to a chunked dataset, and each write used to
+  allocate new blocks for every chunk and a new chunk B-tree without freeing the previous ones: 60
+  appends of 100 rows by 1000 float32 made a 732 MB file for 24 MB of data (30.5x). A chunk whose
+  stored size is unchanged is now written over its own block, and the blocks a rewrite no longer
+  uses (a chunk that grew or shrank, a shrinking dataset, the previous B-tree) are freed once the
+  file points at the new index. No API change. A file opened with `OpenForWrite` still leaves one
+  generation behind on its first rewrite in a session: the writer learns the blocks on disk only as
+  it writes them.
+
 ## [v0.15.0] - 2026-11-07
 
 This release adds user blocks, so files can carry an application header in front of the HDF5 data
