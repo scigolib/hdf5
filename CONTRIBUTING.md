@@ -60,18 +60,19 @@ The project uses GitHub Flow.
 
 | Job | What it checks |
 |-----|----------------|
-| Unit Tests (Linux, macOS, Windows; Go 1.25) | `go vet` (Linux), then `go test -short -race` with coverage |
+| Unit Tests (Linux, macOS, Windows; Go 1.25, 1.26, 1.27) | `go vet` (Linux), then `go test -short -race` with coverage |
 | Lint | `golangci-lint` with the repository's `.golangci.yml` |
 | Code Formatting | `gofmt -l .` prints nothing |
 | Cross-Build 32-bit | the module builds for linux/386, linux/arm (GOARM=6) and windows/386, and `go vet` passes on linux/386 |
 | C Library Interop | `go test -run TestCInterop .` with the HDF5 tools installed |
 | Fuzz | 60 seconds each of `FuzzOpenFile` and `FuzzParseAttributeMessage`; informational, does not block merging |
 
-The branch ruleset requires these checks to pass — the three Unit Tests jobs, Lint, Code Formatting and
+The branch ruleset requires these checks to pass — every Unit Tests job, Lint, Code Formatting and
 Cross-Build 32-bit — and one approving review on the pull request.
 
-A change that passes `go test ./...` on one platform can still fail on another or on a 32-bit target.
-If a CI job fails on your pull request, the log shows which test; fix it on the same branch.
+A change that passes `go test ./...` on one platform can still fail on another, on a 32-bit target or
+on a different Go version. If a CI job fails on your pull request, the log shows which test; fix it on
+the same branch.
 
 ## Quality gates to run locally
 
