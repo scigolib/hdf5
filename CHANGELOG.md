@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `Dataset.ReadSlice` on a dataset with no dimensions (a scalar or null dataspace) returned an empty
+  slice and no error, so a scalar holding one value could not be told from an empty dataset. It now
+  returns an error, as `H5Sselect_hyperslab` refuses such a dataspace in the C library and as
+  `ReadHyperslab` already did; `Read` returns a scalar's value.
+  **Upgrading**: code that called `ReadSlice` on a scalar dataset and ignored the empty result now
+  gets an error; use `Read`.
+- The doc comments of `ReadSlice` and `ReadHyperslab` promised "the dataset's native type
+  ([]float64, []int32, etc.)". Both return a `[]float64` for every numeric type, as `Read` does, and
+  the comments now say so. No behaviour changed.
+
 ## [v0.15.0] - 2026-11-07
 
 This release adds user blocks, so files can carry an application header in front of the HDF5 data
