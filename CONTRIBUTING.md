@@ -3,6 +3,9 @@
 Contributions are welcome: bug reports with a sample file, fixes, documentation, and files from your
 own field that the library should read. This document describes how changes get into `main`.
 
+The standard a change is held to — correctness against the C library, code, tests, architecture, review
+and release — is [docs/QUALITY.md](docs/QUALITY.md).
+
 To report a security vulnerability, do not open an issue; follow [SECURITY.md](SECURITY.md). By taking
 part you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
