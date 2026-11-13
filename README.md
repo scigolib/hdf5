@@ -330,6 +330,9 @@ own field that the library should read. Before a pull request:
 2. Check the [open issues](https://github.com/scigolib/hdf5/issues)
 3. Look at the [architecture overview](docs/architecture/OVERVIEW.md)
 
+The standards the project holds itself to — correctness, code, tests, architecture, review and release
+— are in [docs/QUALITY.md](docs/QUALITY.md).
+
 ---
 
 ## Other Go HDF5 Libraries
