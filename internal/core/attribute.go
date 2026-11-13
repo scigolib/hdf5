@@ -279,10 +279,11 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 			return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
 				totalBytes, len(a.Data))
 		}
-		// 1- and 2-byte integers read with their sign. 4- and 8-byte integers
-		// keep the int32/int64 values attributes have always returned, also
-		// when the type is unsigned; every width reads in its stored byte order.
-		signed := a.Datatype.IsSignedFixedPoint() || size >= 4
+		// Every width reads with the sign its datatype stores (the sign bit of
+		// the fixed-point class bit field) and in its stored byte order, as
+		// compound members do: an unsigned 4- or 8-byte attribute is a uint32
+		// or a uint64, not the signed value with the same bits.
+		signed := a.Datatype.IsSignedFixedPoint()
 		return fixedArray(a.Data, totalElements, size, signed, a.Datatype.GetByteOrder(), isScalar), nil
 
 	case DatatypeFloat:
