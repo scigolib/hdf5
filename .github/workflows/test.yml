@@ -10,7 +10,7 @@ name: Tests
 # - fix/** branches: Bug fixes
 # - release/** branches: Pre-release testing
 # - main branch: Production-ready code only (protected)
-# - Pull requests: Must pass all tests before merge (--squash)
+# - Pull requests: must pass the "Required checks" gate and get an approving review
 
 on:
   push:
@@ -20,6 +20,11 @@ on:
     branches:
       - main
 
+env:
+  # The go command must not download a newer toolchain: with GOTOOLCHAIN=auto the 1.25 and 1.26
+  # legs would quietly test the newest Go instead of the version they name.
+  GOTOOLCHAIN: local
+
 jobs:
   # Unit tests - Cross-platform
   unit-tests:
@@ -28,7 +33,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        go-version: ['1.25']  # Match go.mod requirement
+        go-version: ['1.25', '1.26', '1.27']  # go.mod minimum, oldstable and stable
 
     steps:
     - name: Checkout code
@@ -212,3 +217,39 @@ jobs:
           exit 1
         fi
         echo "All files are properly formatted ✓"
+
+  # Informational: a known vulnerability in the dependencies or the standard library is reported,
+  # but it does not block a merge by itself. It is read before a release.
+  vulncheck:
+    name: Govulncheck
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Run govulncheck
+      uses: golang/govulncheck-action@v1
+      with:
+        go-version-input: stable
+        go-package: ./...
+
+  # The one required check. `if: always()` and the explicit result loop are both needed: a job that
+  # is skipped (for example because a job it needs failed) counts as passed for a required check, so
+  # a gate without them can let a red pull request through.
+  required:
+    name: Required checks
+    if: always()
+    needs: [unit-tests, c-interop, cross-build, lint, formatting]
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Every required job succeeded
+      env:
+        RESULTS: ${{ join(needs.*.result, ' ') }}
+      run: |
+        echo "results: $RESULTS"
+        for r in $RESULTS; do
+          if [ "$r" != success ]; then echo "a required job ended with: $r"; exit 1; fi
+        done
