@@ -1067,7 +1067,7 @@ Added support for additional compression filters used by h5py and scientific app
 
 ---
 
-## [v0.13.4] - 2025-01-29
+## [v0.13.4] - 2026-01-30
 
 ### 🐛 Bug Fixes
 
@@ -1124,7 +1124,7 @@ All attributes now read successfully.
 
 ---
 
-## [v0.13.3] - 2025-01-28
+## [v0.13.3] - 2026-01-28
 
 ### 🐛 Bug Fixes
 
@@ -1219,7 +1219,7 @@ Files with V2 object headers and attribute creation order tracking enabled
 
 ---
 
-## [v0.13.2] - 2025-01-17
+## [v0.13.2] - 2026-01-17
 
 ### 🐛 Bug Fixes
 
