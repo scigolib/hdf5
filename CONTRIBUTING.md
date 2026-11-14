@@ -100,10 +100,13 @@ go test -coverprofile=tmp/coverage.out ./... && go tool cover -html=tmp/coverage
 GOOS=linux GOARCH=386 go build ./...   # 32-bit build, as CI does
 ```
 
-`make` wraps the same steps: `make test`, `make test-race`, `make lint`, `make fmt` (runs
-`gofmt -w -s` and `go mod tidy`), `make fmt-check`, `make benchmark` and `make ci` (format check,
-tests, lint). Put generated files (coverage, profiles, test binaries) outside the source tree or under
-a directory that is ignored by git, and do not commit them.
+`make` wraps the common steps as a shortcut: `make test`, `make test-race`, `make lint`, `make fmt`
+(runs `gofmt -w -s` and `go mod tidy`), `make fmt-check`, `make benchmark` and `make ci` (format
+check, tests, lint). CI runs more than any make target — the race tests on three operating systems,
+the C interop tests, the 386 cross-builds, fuzzing and `govulncheck` — so a green `make ci` is not a
+green CI; the pull request's CI run is the authority. Put generated files (coverage, profiles, test
+binaries) outside the source tree or under a directory that is ignored by git, and do not commit
+them.
 
 The linter configuration is `.golangci.yml`: it enables complexity, bug-detection (`staticcheck`,
 `gosec`, `errcheck`, `errorlint`, `nilerr`), style and performance linters. Fix what it reports instead
