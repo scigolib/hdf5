@@ -128,6 +128,11 @@ test: cover a truncated fractal heap block
 Make each commit one finished change: a fix and its test go together. Do not commit credentials,
 generated files or personal paths.
 
+A user-visible change adds its entry under `[Unreleased]` in `CHANGELOG.md` in the same PR. When
+several PRs are open at once each carries its own entry, and after the first merge the rest conflict
+in that section — resolve it by keeping both entries. The maintainer who merges owns the final shape
+of `[Unreleased]`, so a PR never stacks on another just to avoid the conflict.
+
 ## Tests
 
 Every change ends with tests. The test suite is the main safeguard against a library that parses
