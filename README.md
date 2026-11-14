@@ -258,10 +258,11 @@ v0.15.0. Library packages have 82–95% test coverage.
 ### Writing
 
 **Datasets and attributes**:
-- Create datasets in every layout (contiguous, chunked, compact) and write every datatype above
+- Create datasets in contiguous and chunked layouts (compact-layout datasets are read, not
+  written) and write every datatype above
 - Resize datasets with unlimited dimensions
 - Variable-length strings and ragged arrays
-- Filters: GZIP, Shuffle, Fletcher32, LZF
+- Filters: GZIP, Shuffle, Fletcher32, LZF (BZIP2 is decompression-only)
 - Write, modify and delete attributes (compact and dense storage)
 - Delete objects as `H5Ldelete` does: a group goes with everything only it links to, and an object
   also linked from elsewhere keeps its data (v0.15.0)
