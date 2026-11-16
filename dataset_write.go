@@ -631,6 +631,7 @@ type FileWriteConfig struct {
 	SuperblockVersion uint8  // HDF5 superblock version (0, 2, or 3)
 	BTreeRebalancing  bool   // Enable B-tree rebalancing after deletions (default: true)
 	UserBlock         uint64 // User block size in bytes (0: none; see WithUserBlock)
+	ScalarAttributes  bool   // Write Go scalar attributes with a scalar dataspace (see WithScalarAttributes)
 }
 
 // WithSuperblockVersion sets the HDF5 superblock version.
@@ -649,6 +650,19 @@ type FileWriteConfig struct {
 func WithSuperblockVersion(version uint8) WriteOption {
 	return func(cfg *FileWriteConfig) {
 		cfg.SuperblockVersion = version
+	}
+}
+
+// WithScalarAttributes writes an attribute whose value is a Go scalar (a number or a string) with a
+// scalar dataspace, as H5Acreate does with H5Screate(H5S_SCALAR), and as h5py writes attrs["x"] = 1.
+// Readers that follow the dataspace, h5py among them, then return the value rather than a one-element
+// array.
+//
+// Without it, such an attribute has a one-element simple dataspace, as H5LTset_attribute_int writes.
+// A slice value keeps a simple dataspace either way.
+func WithScalarAttributes() WriteOption {
+	return func(cfg *FileWriteConfig) {
+		cfg.ScalarAttributes = true
 	}
 }
 
