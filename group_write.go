@@ -53,7 +53,8 @@ type GroupWriter struct {
 // Supported value types:
 //   - Scalars: int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64
 //   - Arrays: []int32, []float64, etc. (1D arrays only)
-//   - Strings: string (fixed-length, converted to byte array)
+//   - Strings: string (fixed-length, null-terminated, len+1 bytes)
+//   - FixedStringValue: a string with the size and padding of its type
 //   - String arrays: []string (variable-length strings via Global Heap)
 //
 // Parameters:
