@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now carry the attribute types the C library's writers use, such as a null-terminated type exactly
   as long as its text (`STRSIZE 8` for an 8-byte value) or a space-padded one. A value longer than
   the type is refused.
+- Extendible datasets with no element yet, as the C library's packet tables start: `CreateDataset`,
+  `CreateCompound` and `CreateCompoundDataset` accept a dimension of 0 when the dataset can grow in it
+  (`WithChunkDims` and `WithMaxDims` with a maximum above 0, typically `Unlimited`). h5dump shows such
+  a dataset as `SIMPLE { ( 0 ) / ( H5S_UNLIMITED ) }`, and `Read` returns no value. A zero dimension
+  that cannot grow is still refused.
 
 ### Changed
 
@@ -53,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so `h5dump -p` reports the same `LEVEL 0` and chunk `SIZE` for the file as for one the C library
   wrote. `compress/zlib` is not used at level 0: it ends the stream with an extra empty block, 5
   bytes longer per chunk.
+- `DatasetWriter.Resize` to a dimension of 0 failed, after it had already written the new dataspace to
+  the file. It now succeeds, and a resize that fails leaves the dataspace unchanged. `Write` of a
+  dataset with no element stores no chunk index and frees the chunks and index of the previous write.
 
 ## [v0.15.0] - 2026-11-07
 

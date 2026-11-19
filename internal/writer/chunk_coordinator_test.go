@@ -61,7 +61,8 @@ func TestNewChunkCoordinator(t *testing.T) {
 			name:        "zero dataset dimension",
 			datasetDims: []uint64{10, 0},
 			chunkDims:   []uint64{5, 5},
-			wantErr:     true,
+			wantChunks:  []uint64{2, 0}, // no chunk: GetTotalChunks is 0
+			wantErr:     false,
 		},
 		{
 			name:        "zero chunk dimension",
@@ -130,6 +131,12 @@ func TestGetTotalChunks(t *testing.T) {
 			datasetDims: []uint64{10, 20},
 			chunkDims:   []uint64{10, 20},
 			wantTotal:   1,
+		},
+		{
+			name:        "zero rows",
+			datasetDims: []uint64{0, 3},
+			chunkDims:   []uint64{8, 3},
+			wantTotal:   0,
 		},
 	}
 
