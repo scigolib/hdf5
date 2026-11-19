@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file points at the new index. No API change. A file opened with `OpenForWrite` still leaves one
   generation behind on its first rewrite in a session: the writer learns the blocks on disk only as
   it writes them.
+- **A variable-length datatype with an unknown kind is rejected.** The decoder treated every kind
+  other than string as a sequence; the kind must be 0 (sequence) or 1 (string), as the C library
+  requires since HDF5 2.2.0 (CVE-2026-17574), and the encoder refuses to write any other value.
 
 ## [v0.15.0] - 2026-11-07
 
