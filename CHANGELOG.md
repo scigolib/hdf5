@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A root group whose Symbol Table message is too short to hold its two addresses was opened as if
+  the message were absent: a version 0 file fell back to the addresses cached in the superblock, and
+  with nothing cached it opened with no members and no error, so a damaged file looked like a valid,
+  empty one. `Open` now returns an error wrapping `ErrCorrupt`, as `H5O__stab_decode` fails on a
+  short message in the C library. The cached addresses still stand in for a message that is absent.
+- A valid file with 4-byte offsets whose root entry caches nothing opened with an empty root group:
+  its 8-byte Symbol Table message was passed over by a fixed 16-byte length test. The message is now
+  read at the file's size of offsets wherever `Open` reads it.
+- **A rewritten chunked dataset no longer keeps every generation in the file (issue #80).** A
+  `Resize` + `Write` loop is today's way to append rows to a chunked dataset, and each write used to
+  allocate new blocks for every chunk and a new chunk B-tree without freeing the previous ones: 60
+  appends of 100 rows by 1000 float32 made a 732 MB file for 24 MB of data (30.5x). A chunk whose
+  stored size is unchanged is now written over its own block, and the blocks a rewrite no longer
+  uses (a chunk that grew or shrank, a shrinking dataset, the previous B-tree) are freed once the
+  file points at the new index. No API change. A file opened with `OpenForWrite` still leaves one
+  generation behind on its first rewrite in a session: the writer learns the blocks on disk only as
+  it writes them.
 - **A variable-length datatype with an unknown kind is rejected.** The decoder treated every kind
   other than string as a sequence; the kind must be 0 (sequence) or 1 (string), as the C library
   requires since HDF5 2.2.0 (CVE-2026-17574), and the encoder refuses to write any other value.

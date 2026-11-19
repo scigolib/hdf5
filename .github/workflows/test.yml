@@ -89,7 +89,10 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y hdf5-tools
 
     - name: Run C interop tests
-      run: go test -v -run TestCInterop .
+      # TestChunkedRewrite files are checked with h5dump as well: the rewrite
+      # fix (issue #80) relies on the C library reading files whose blocks
+      # were reused and freed.
+      run: go test -v -run 'TestCInterop|TestChunkedRewrite' .
 
   # 32-bit cross-build - the library must compile on Raspberry Pi (arm) and 386
   cross-build:
