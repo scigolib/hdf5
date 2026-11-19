@@ -279,6 +279,10 @@ func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 	// element, not the base type that dtype describes.
 	elemSize := dw.elementSize
 
+	if dw.chunkCoordinator.GetTotalChunks() == 0 {
+		return dw.clearChunkIndex()
+	}
+
 	// 1. Create B-tree writer
 	// Per C reference (H5Dbtree.c:687-690), B-tree keys store byte offsets,
 	// so the writer needs chunk dimensions for the conversion.
@@ -474,6 +478,31 @@ func chunkKey(coord []uint64) string {
 		binary.LittleEndian.PutUint64(key[8*i:], c)
 	}
 	return string(key)
+}
+
+// clearChunkIndex leaves the dataset without a chunk index, as a dataset with
+// no element has no chunk: the index address is undefined, as C leaves it
+// until the first chunk is allocated. Once the layout no longer points at
+// them, the chunks and index of the previous write are freed.
+func (dw *DatasetWriter) clearChunkIndex() error {
+	if dw.dataAddress == undefinedAddress {
+		return nil
+	}
+	if err := dw.setChunkIndexAddress(undefinedAddress); err != nil {
+		return err
+	}
+	dw.dataAddress = undefinedAddress
+
+	obsolete := dw.chunkIndexBlocks
+	for _, block := range dw.chunkBlocks {
+		obsolete = append(obsolete, block)
+	}
+	dw.chunkBlocks = nil
+	dw.chunkIndexBlocks = nil
+	if err := dw.freeBlocks(obsolete); err != nil {
+		return fmt.Errorf("dataset emptied, but freeing the blocks it replaces failed: %w", err)
+	}
+	return nil
 }
 
 // setChunkIndexAddress stores addr as the chunk index address of the

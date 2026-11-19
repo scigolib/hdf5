@@ -879,29 +879,33 @@ func validateDatasetName(name string) error {
 	return nil
 }
 
-// validateDimensions validates that dimensions is not empty and no dimension is zero.
+// validateDimensions validates that dimensions is not empty. Zero
+// dimensions are checked against the maximum dimensions by validateMaxDims.
 func validateDimensions(dims []uint64) error {
 	if len(dims) == 0 {
 		return fmt.Errorf("dimensions cannot be empty (use []uint64{1} for scalar)")
-	}
-	for i, dim := range dims {
-		if dim == 0 {
-			return fmt.Errorf("dimension %d cannot be 0", i)
-		}
 	}
 	return nil
 }
 
 // validateMaxDims checks the maximum dimensions of config, if any: one per
 // dimension, none smaller than the dimension, and chunked layout, which an
-// extendible dataset needs (H5Dcontig.c:457).
+// extendible dataset needs (H5Dcontig.c:457). A dimension may be 0 only if
+// the dataset can grow in it, as a C packet table starts with no record
+// (H5PTcreate, hl/src/H5PT.c).
 func validateMaxDims(dims []uint64, config *datasetConfig) error {
-	if len(config.maxDims) == 0 {
-		return nil
-	}
-	if len(config.maxDims) != len(dims) {
+	if len(config.maxDims) != 0 && len(config.maxDims) != len(dims) {
 		return fmt.Errorf("maxDims length (%d) must match dims length (%d)",
 			len(config.maxDims), len(dims))
+	}
+	for i, dim := range dims {
+		if dim == 0 && (len(config.maxDims) == 0 || config.maxDims[i] == 0) {
+			return fmt.Errorf("dimension %d cannot be 0 unless the dataset can grow in it "+
+				"(use WithMaxDims with a maximum above 0, and WithChunkDims)", i)
+		}
+	}
+	if len(config.maxDims) == 0 {
+		return nil
 	}
 	for i, maxDim := range config.maxDims {
 		if maxDim != Unlimited && maxDim < dims[i] {
@@ -1712,7 +1716,8 @@ func (dw *DatasetWriter) resizeDataSize(newDims []uint64) (uint64, error) {
 // newDims must be <= maxDims for each dimension.
 //
 // When extending (growing), new space is initialized with zeros.
-// When shrinking, data beyond new dimensions is lost.
+// When shrinking, data beyond new dimensions is lost. A dimension may shrink
+// to 0, and a dataset created with a dimension of 0 grows from there.
 //
 // Example:
 //
@@ -1728,6 +1733,12 @@ func (dw *DatasetWriter) Resize(newDims []uint64) error {
 	newDataSize, err := dw.resizeDataSize(newDims)
 	if err != nil {
 		return err
+	}
+	// The chunk coordinator for future writes, made before the file changes so
+	// that an error leaves the dataspace as it was.
+	newCoordinator, err := writer.NewChunkCoordinator(newDims, dw.chunkDims)
+	if err != nil {
+		return fmt.Errorf("update chunk coordinator: %w", err)
 	}
 
 	// 3. Read the object header from the file: attribute calls of this
@@ -1791,11 +1802,6 @@ func (dw *DatasetWriter) Resize(newDims []uint64) error {
 	dw.dataSize = newDataSize
 
 	// 11. Update chunk coordinator with new dimensions.
-	// ChunkCoordinator needs to know about new dataset shape for future writes.
-	newCoordinator, err := writer.NewChunkCoordinator(newDims, dw.chunkDims)
-	if err != nil {
-		return fmt.Errorf("update chunk coordinator: %w", err)
-	}
 	dw.chunkCoordinator = newCoordinator
 
 	// Note: For extending datasets, new chunks will be allocated and initialized
@@ -2127,6 +2133,8 @@ func WithOpaqueTag(tag string, size uint32) DatasetOption {
 //
 // The maxDims slice must have the same length as the dataset dimensions.
 // Each maxDim value must be >= the corresponding dimension, or Unlimited.
+// A dimension may be 0 when its maximum is above 0: the dataset starts with
+// no element and grows with [DatasetWriter.Resize].
 //
 // Example:
 //
@@ -2139,6 +2147,11 @@ func WithOpaqueTag(tag string, size uint32) DatasetOption {
 //	ds2, _ := fw.CreateDataset("/matrix", hdf5.Float64, []uint64{10, 20},
 //	    hdf5.WithChunkDims([]uint64{5, 10}),
 //	    hdf5.WithMaxDims([]uint64{hdf5.Unlimited, 20}))  // Rows unlimited, cols fixed
+//
+//	// A table with no row yet
+//	ds3, _ := fw.CreateDataset("/log", hdf5.Float64, []uint64{0},
+//	    hdf5.WithChunkDims([]uint64{512}),
+//	    hdf5.WithMaxDims([]uint64{hdf5.Unlimited}))
 func WithMaxDims(maxDims []uint64) DatasetOption {
 	return func(cfg *datasetConfig) {
 		cfg.maxDims = maxDims
