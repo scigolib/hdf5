@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A root group whose Symbol Table message is too short to hold its two addresses was opened as if
+  the message were absent: a version 0 file fell back to the addresses cached in the superblock, and
+  with nothing cached it opened with no members and no error, so a damaged file looked like a valid,
+  empty one. `Open` now returns an error wrapping `ErrCorrupt`, as `H5O__stab_decode` fails on a
+  short message in the C library. The cached addresses still stand in for a message that is absent.
+- A valid file with 4-byte offsets whose root entry caches nothing opened with an empty root group:
+  its 8-byte Symbol Table message was passed over by a fixed 16-byte length test. The message is now
+  read at the file's size of offsets wherever `Open` reads it.
+
 ## [v0.15.0] - 2026-11-07
 
 This release adds user blocks, so files can carry an application header in front of the HDF5 data
