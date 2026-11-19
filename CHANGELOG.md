@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- String attributes of a chosen size and padding: `WriteAttribute(name, FixedStringValue{Value, Type})`
+  stores `Value` with the fixed-length string type `Type` (a `FixedString`, as for compound members),
+  where a plain `string` always gets a null-terminated type one byte longer than its text. A file can
+  now carry the attribute types the C library's writers use, such as a null-terminated type exactly
+  as long as its text (`STRSIZE 8` for an 8-byte value) or a space-padded one. A value longer than
+  the type is refused.
+
 ### Fixed
 
 - A root group whose Symbol Table message is too short to hold its two addresses was opened as if
