@@ -2,6 +2,7 @@ package hdf5
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 
@@ -284,60 +285,195 @@ func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 	dimensionality := len(dw.dims)
 	btreeWriter := structures.NewChunkBTreeWriter(dimensionality, dw.chunkDims, elemSize)
 
-	// 2. Process each chunk
+	// 2. Write every chunk, taking the blocks of the previous write over
+	// where the stored size is unchanged.
+	nextBlocks, obsolete, allocated, err := dw.writeChunkBlocks(buf, elemSize, btreeWriter)
+	if err != nil {
+		// The layout still points at the previous index, so nothing references
+		// the blocks this attempt allocated: give them back.
+		return errors.Join(err, dw.freeBlocks(allocated))
+	}
+
+	// 3. Write the B-tree, point the layout at it, and free the blocks of the
+	// previous write.
+	return dw.writeChunkIndex(btreeWriter, nextBlocks, obsolete, allocated)
+}
+
+// writeChunkBlocks writes every chunk of buf, with the filters applied. It
+// returns the blocks written by this call, keyed by coordinate, the blocks of
+// the previous write that this one replaces, and the blocks it allocated (for
+// freeing when a later step fails): a chunk whose stored size is unchanged is
+// written over its block, a chunk that grew or shrank gets a new block, and a
+// coordinate that is no longer written loses its block. Before this, every
+// rewrite left the previous chunks behind (issue #80: 24 MB of data made a
+// 732 MB file).
+func (dw *DatasetWriter) writeChunkBlocks(buf []byte, elemSize uint32, btreeWriter *structures.ChunkBTreeWriter) (map[string]chunkBlock, []chunkBlock, []chunkBlock, error) {
 	totalChunks := dw.chunkCoordinator.GetTotalChunks()
+	nextBlocks := make(map[string]chunkBlock)
+	var obsolete, allocated []chunkBlock
 
 	for i := uint64(0); i < totalChunks; i++ {
 		// Get chunk coordinate
 		coord := dw.chunkCoordinator.GetChunkCoordinate(i)
 
-		// Extract chunk data
-		chunkData := dw.chunkCoordinator.ExtractChunkData(buf, coord, elemSize)
-
-		// Apply filters to chunk (if pipeline configured)
-		if dw.pipeline != nil && !dw.pipeline.IsEmpty() {
-			filtered, err := dw.pipeline.Apply(chunkData)
-			if err != nil {
-				return fmt.Errorf("filter application failed for chunk %v: %w", coord, err)
-			}
-			chunkData = filtered
+		// Extract chunk data and apply filters (if pipeline configured)
+		chunkData, err := dw.filterChunk(coord, dw.chunkCoordinator.ExtractChunkData(buf, coord, elemSize))
+		if err != nil {
+			return nil, nil, allocated, err
 		}
 
-		// Allocate space for chunk (filtered size may differ from original)
-		chunkAddr, err := dw.fileWriter.writer.Allocate(uint64(len(chunkData)))
+		// Reuse the block of the previous write when the stored size is the
+		// same; otherwise allocate a new block and free the old one after the
+		// new index is in place.
+		key := chunkKey(coord)
+		chunkAddr, replaced, allocatedHere, err := dw.chunkBlockFor(key, coord, uint64(len(chunkData)))
 		if err != nil {
-			return fmt.Errorf("failed to allocate chunk %v: %w", coord, err)
+			return nil, nil, allocated, err
+		}
+		if replaced != nil {
+			obsolete = append(obsolete, *replaced)
+		}
+		if allocatedHere {
+			allocated = append(allocated, chunkBlock{addr: chunkAddr, size: uint64(len(chunkData))})
 		}
 
 		// Write chunk data (filtered)
 		if err := dw.fileWriter.writer.WriteAtAddress(chunkData, chunkAddr); err != nil {
-			return fmt.Errorf("failed to write chunk %v: %w", coord, err)
+			return nil, nil, allocated, fmt.Errorf("failed to write chunk %v: %w", coord, err)
 		}
+		nextBlocks[key] = chunkBlock{addr: chunkAddr, size: uint64(len(chunkData))}
 
 		// Add to B-tree index with chunk size. The raw chunk is below 4 GiB
 		// (checked at create time), but a filter may enlarge it: the v1
 		// B-tree records the stored size in 32 bits (H5Dchunk.c:1197-1199).
 		if uint64(len(chunkData)) > maxV1BTreeChunkSize {
-			return fmt.Errorf("chunk %v: filtered size %d bytes must be < 4GB with v1 b-tree index", coord, len(chunkData))
+			return nil, nil, allocated, fmt.Errorf("chunk %v: filtered size %d bytes must be < 4GB with v1 b-tree index", coord, len(chunkData))
 		}
 		//nolint:gosec // G115: checked against maxV1BTreeChunkSize (MaxUint32) above
 		if err := btreeWriter.AddChunkWithSize(coord, chunkAddr, uint32(len(chunkData))); err != nil {
-			return fmt.Errorf("failed to add chunk %v to index: %w", coord, err)
+			return nil, nil, allocated, fmt.Errorf("failed to add chunk %v to index: %w", coord, err)
 		}
 	}
 
-	// 3. Write B-tree
-	btreeAddr, err := btreeWriter.WriteToFile(dw.fileWriter.writer, dw.fileWriter.writer.Allocator())
-	if err != nil {
-		return fmt.Errorf("failed to write B-tree: %w", err)
+	// A coordinate that is no longer written (a shrinking dataset) loses its
+	// block as well.
+	for key, old := range dw.chunkBlocks {
+		if _, ok := nextBlocks[key]; !ok {
+			obsolete = append(obsolete, old)
+		}
 	}
 
-	// 4. Store B-tree address
-	dw.dataAddress = btreeAddr
+	return nextBlocks, obsolete, allocated, nil
+}
 
-	// 5. Record the B-tree address in the layout message, so that the file
-	// can be read after closing.
-	return dw.setChunkIndexAddress(btreeAddr)
+// writeChunkIndex writes the chunk index and points the dataset's layout
+// message at it. Every block the index allocates is tracked: a multi-level v1
+// B-tree is several nodes. Once the file points at the new index, the blocks
+// of the previous write, chunks and index alike, are freed, so later
+// allocations reuse them and the file stops growing with each rewrite. A
+// failure before that point gives back everything this attempt allocated.
+func (dw *DatasetWriter) writeChunkIndex(btreeWriter *structures.ChunkBTreeWriter, nextBlocks map[string]chunkBlock, obsolete, allocated []chunkBlock) error {
+	recorder := &blockRecorder{Allocator: dw.fileWriter.writer.Allocator()}
+	btreeAddr, err := btreeWriter.WriteToFile(dw.fileWriter.writer, recorder)
+	if err != nil {
+		return errors.Join(fmt.Errorf("failed to write B-tree: %w", err),
+			dw.freeBlocks(append(allocated, recorder.blocks...)))
+	}
+
+	dw.dataAddress = btreeAddr
+	if err := dw.setChunkIndexAddress(btreeAddr); err != nil {
+		return errors.Join(err, dw.freeBlocks(append(allocated, recorder.blocks...)))
+	}
+
+	obsolete = append(obsolete, dw.chunkIndexBlocks...)
+	dw.chunkBlocks = nextBlocks
+	dw.chunkIndexBlocks = recorder.blocks
+	if err := dw.freeBlocks(obsolete); err != nil {
+		// The dataset was rewritten and the layout points at the new index;
+		// the error reports only space that could not be given back.
+		return fmt.Errorf("dataset rewritten, but freeing the blocks it replaces failed: %w", err)
+	}
+
+	return nil
+}
+
+// freeBlocks returns blocks to the allocator and reports every block it could
+// not free.
+func (dw *DatasetWriter) freeBlocks(blocks []chunkBlock) error {
+	var errs []error
+	for _, block := range blocks {
+		if err := dw.fileWriter.writer.Free(block.addr, block.size); err != nil {
+			errs = append(errs, fmt.Errorf("free block at %d (%d bytes): %w", block.addr, block.size, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// filterChunk returns the bytes stored for a chunk: the chunk itself when no
+// filter pipeline is configured, its filtered form otherwise.
+func (dw *DatasetWriter) filterChunk(coord []uint64, chunkData []byte) ([]byte, error) {
+	if dw.pipeline == nil || dw.pipeline.IsEmpty() {
+		return chunkData, nil
+	}
+	filtered, err := dw.pipeline.Apply(chunkData)
+	if err != nil {
+		return nil, fmt.Errorf("filter application failed for chunk %v: %w", coord, err)
+	}
+	return filtered, nil
+}
+
+// chunkBlockFor returns the address to write a chunk of storedSize bytes to:
+// the block of the previous write when it has exactly that size (the file
+// space is reused), otherwise a fresh allocation. The replaced block, if any,
+// is returned so that the caller can free it once the new index is in place,
+// and allocated tells whether the returned address is a new block.
+func (dw *DatasetWriter) chunkBlockFor(key string, coord []uint64, storedSize uint64) (addr uint64, replaced *chunkBlock, allocated bool, err error) {
+	old, ok := dw.chunkBlocks[key]
+	if ok && old.size == storedSize {
+		return old.addr, nil, false, nil
+	}
+
+	addr, err = dw.fileWriter.writer.Allocate(storedSize)
+	if err != nil {
+		return 0, nil, false, fmt.Errorf("failed to allocate chunk %v: %w", coord, err)
+	}
+	if ok {
+		return addr, &old, true, nil
+	}
+	return addr, nil, true, nil
+}
+
+// chunkBlock is a block of the file that a chunked write allocated.
+type chunkBlock struct {
+	addr uint64 // address of the block
+	size uint64 // number of bytes allocated at that address
+}
+
+// blockRecorder wraps an allocator and records every block it hands out. The
+// chunk index is one block for a single-leaf v1 B-tree and several for a
+// multi-level one; a rewrite has to free all of them.
+type blockRecorder struct {
+	structures.Allocator
+	blocks []chunkBlock
+}
+
+// Allocate allocates a block and records it.
+func (r *blockRecorder) Allocate(size uint64) (uint64, error) {
+	addr, err := r.Allocator.Allocate(size)
+	if err != nil {
+		return 0, err
+	}
+	r.blocks = append(r.blocks, chunkBlock{addr: addr, size: size})
+	return addr, nil
+}
+
+// chunkKey identifies a chunk coordinate in the writer's block map.
+func chunkKey(coord []uint64) string {
+	key := make([]byte, 8*len(coord))
+	for i, c := range coord {
+		binary.LittleEndian.PutUint64(key[8*i:], c)
+	}
+	return string(key)
 }
 
 // setChunkIndexAddress stores addr as the chunk index address of the

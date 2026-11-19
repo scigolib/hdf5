@@ -1355,6 +1355,13 @@ type DatasetWriter struct {
 	chunkDims        []uint64                 // Chunk dimensions
 	pipeline         *writer.FilterPipeline   // Filter pipeline for chunked datasets
 
+	// Blocks this writer allocated for the chunk data (by coordinate) and for
+	// the chunk index, so that a rewrite reuses or frees them instead of
+	// leaving every generation in the file (issue #80). Empty until the first
+	// Write.
+	chunkBlocks      map[string]chunkBlock
+	chunkIndexBlocks []chunkBlock
+
 	// For RMW scenarios (files opened with OpenForWrite)
 	objectHeader  *core.ObjectHeader         // Full object header (for attribute operations)
 	denseAttrInfo *core.AttributeInfoMessage // Dense attribute storage info (nil if no dense storage)
