@@ -3,7 +3,9 @@ package writer
 import (
 	"bytes"
 	"compress/zlib"
+	"encoding/binary"
 	"fmt"
+	"hash/adler32"
 	"io"
 )
 
@@ -20,24 +22,26 @@ const filterDeflateName = "deflate"
 //
 // Compression levels:
 //
+//	0 = no compression (stored blocks)
 //	1 = fastest compression, larger files
 //	6 = balanced (default)
 //	9 = best compression, slower
 type GZIPFilter struct {
-	level int // Compression level (1-9)
+	level int // Compression level (0-9)
 }
 
 // NewGZIPFilter creates a deflate (zlib) filter with the specified compression level.
 //
 // Valid levels:
 //
+//	0 = No compression: the data is stored in zlib framing, as H5Pset_deflate(plist, 0) does
 //	1 = Fast compression, lower ratio
 //	6 = Default (balanced)
 //	9 = Best compression, slower
 //
 // Invalid levels are automatically adjusted to 6 (default).
 func NewGZIPFilter(level int) *GZIPFilter {
-	if level < 1 || level > 9 {
+	if level < 0 || level > 9 {
 		level = 6 // Default compression level
 	}
 	return &GZIPFilter{level: level}
@@ -58,6 +62,10 @@ func (f *GZIPFilter) Name() string {
 // (RFC 1950). The HDF5 deflate filter stores zlib streams (what the C
 // library's compress2() produces), NOT gzip-wrapped (RFC 1952) streams.
 func (f *GZIPFilter) Apply(data []byte) ([]byte, error) {
+	if f.level == 0 {
+		return zlibStored(data), nil
+	}
+
 	var buf bytes.Buffer
 
 	w, err := zlib.NewWriterLevel(&buf, f.level)
@@ -77,6 +85,32 @@ func (f *GZIPFilter) Apply(data []byte) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+// maxStoredBlock is the largest DEFLATE stored block (RFC 1951, section 3.2.4).
+const maxStoredBlock = 65535
+
+// zlibStored returns data as a zlib stream of stored blocks, byte for byte what
+// C zlib's compress2() writes at level 0: a final block ends the stream, where
+// compress/zlib at NoCompression appends an empty one, five bytes longer.
+func zlibStored(data []byte) []byte {
+	blocks := max(1, (len(data)+maxStoredBlock-1)/maxStoredBlock)
+	out := make([]byte, 0, 2+5*blocks+len(data)+4)
+	out = append(out, 0x78, 0x01) // 32 KiB window, FLEVEL 0, as deflate.c writes for level 0
+
+	for i := range blocks {
+		block := data[i*maxStoredBlock : min(len(data), (i+1)*maxStoredBlock)]
+		var final byte
+		if i == blocks-1 {
+			final = 1
+		}
+		n := uint16(len(block)) //nolint:gosec // G115: a stored block is at most 65535 bytes
+		out = append(out, final)
+		out = binary.LittleEndian.AppendUint16(out, n)
+		out = binary.LittleEndian.AppendUint16(out, ^n)
+		out = append(out, block...)
+	}
+	return binary.BigEndian.AppendUint32(out, adler32.Checksum(data))
 }
 
 // Remove decompresses zlib-compressed data.
@@ -106,5 +140,5 @@ func (f *GZIPFilter) Remove(data []byte) ([]byte, error) {
 // For GZIP, the client data contains a single value: the compression level.
 // The filter is optional, as H5Pset_deflate adds it (H5Pocpl.c:1065).
 func (f *GZIPFilter) Encode() (flags uint16, cdValues []uint32) {
-	return FilterFlagOptional, []uint32{uint32(f.level)} //nolint:gosec // G115: Compression level is 1-9, always fits in uint32
+	return FilterFlagOptional, []uint32{uint32(f.level)} //nolint:gosec // G115: Compression level is 0-9, always fits in uint32
 }
