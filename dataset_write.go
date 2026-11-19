@@ -2161,11 +2161,12 @@ func WithChunkDims(dims []uint64) DatasetOption {
 	}
 }
 
-// WithGZIPCompression enables GZIP compression with specified level (1-9).
+// WithGZIPCompression enables GZIP compression with specified level (0-9).
 // This option is only valid for chunked datasets (requires WithChunkDims).
 //
 // Compression levels:
 //
+//	0 = no compression: chunks are stored in zlib framing, byte for byte as the C library writes them
 //	1 = fastest compression, larger files
 //	6 = balanced (default if invalid level)
 //	9 = best compression, slower

@@ -97,6 +97,22 @@ func TestCInterop_WriteMatrix(t *testing.T) {
 			want: []string{"CHUNKED", "DEFLATE", "(0): 0, 1, 2", "99"},
 		},
 		{
+			// Level 0 stores each chunk in zlib framing, as compress2() at
+			// level 0 does: 960 bytes take 971.
+			name: "chunked_deflate_level0",
+			build: func(t *testing.T, fw *FileWriter) {
+				data := make([]uint8, 960)
+				for i := range data {
+					data[i] = uint8(i % 251)
+				}
+				ds, err := fw.CreateDataset("/z0", Uint8, []uint64{960},
+					WithChunkDims([]uint64{960}), WithGZIPCompression(0))
+				require.NoError(t, err)
+				require.NoError(t, ds.Write(data))
+			},
+			want: []string{"COMPRESSION DEFLATE { LEVEL 0 }", "SIZE 971 ", "(0): 0, 1, 2"},
+		},
+		{
 			name: "shuffle_fletcher32",
 			build: func(t *testing.T, fw *FileWriter) {
 				data := make([]float64, 50)

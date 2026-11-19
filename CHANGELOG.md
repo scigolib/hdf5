@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A variable-length datatype with an unknown kind is rejected.** The decoder treated every kind
   other than string as a sequence; the kind must be 0 (sequence) or 1 (string), as the C library
   requires since HDF5 2.2.0 (CVE-2026-17574), and the encoder refuses to write any other value.
+- `WithGZIPCompression(0)` writes a deflate filter of level 0, as `H5Pset_deflate(plist, 0)` does.
+  Level 0 was turned into 6 before. Each chunk is stored uncompressed in the zlib framing that the C
+  library's `compress2()` writes at level 0 (one stored block per 65535 bytes, the last one final),
+  so `h5dump -p` reports the same `LEVEL 0` and chunk `SIZE` for the file as for one the C library
+  wrote. `compress/zlib` is not used at level 0: it ends the stream with an extra empty block, 5
+  bytes longer per chunk.
 
 ## [v0.15.0] - 2026-11-07
 

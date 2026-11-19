@@ -2,6 +2,9 @@ package writer
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -13,10 +16,10 @@ func TestNewGZIPFilter(t *testing.T) {
 		inputLevel    int
 		expectedLevel int
 	}{
+		{"valid level 0", 0, 0},
 		{"valid level 1", 1, 1},
 		{"valid level 6", 6, 6},
 		{"valid level 9", 9, 9},
-		{"invalid level 0", 0, 6},   // Should default to 6
 		{"invalid level 10", 10, 6}, // Should default to 6
 		{"invalid level -1", -1, 6}, // Should default to 6
 	}
@@ -46,6 +49,7 @@ func TestGZIPFilter_Encode(t *testing.T) {
 		name  string
 		level int
 	}{
+		{"level 0", 0},
 		{"level 1", 1},
 		{"level 6", 6},
 		{"level 9", 9},
@@ -59,6 +63,59 @@ func TestGZIPFilter_Encode(t *testing.T) {
 			require.Equal(t, FilterFlagOptional, flags, "H5Pset_deflate adds deflate as optional (H5Pocpl.c:1065)")
 			require.Equal(t, 1, len(cdValues))
 			require.Equal(t, uint32(tt.level), cdValues[0])
+		})
+	}
+}
+
+// TestGZIPFilter_Level0MatchesCZlib checks level 0 against the bytes C zlib's
+// compress2() writes at level 0 into a compressBound() buffer, as
+// H5Z_filter_deflate calls it. The expected values came from zlib 1.2.12 on
+// data[i] = i % 251. Python's zlib.compress is no reference above 64 KiB: its
+// growing output buffer changes where the stored blocks split.
+func TestGZIPFilter_Level0MatchesCZlib(t *testing.T) {
+	pattern := func(n int) []byte {
+		data := make([]byte, n)
+		for i := range data {
+			data[i] = byte(i % 251)
+		}
+		return data
+	}
+
+	t.Run("hello", func(t *testing.T) {
+		got, err := NewGZIPFilter(0).Apply([]byte("hello"))
+		require.NoError(t, err)
+		require.Equal(t, "7801010500faff68656c6c6f062c0215", hex.EncodeToString(got))
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		got, err := NewGZIPFilter(0).Apply(nil)
+		require.NoError(t, err)
+		require.Equal(t, "7801010000ffff00000001", hex.EncodeToString(got))
+	})
+
+	tests := []struct {
+		n      int
+		size   int
+		sha256 string
+	}{
+		{960, 971, "00c36311b40bf1f7ce17ecf8b63f5b62360ba4936c21562b4d897422a5093495"},
+		{65535, 65546, "9881331fd58a9bbabb90ab8183df28d656aa8842e9803b9c59887f4dba2e5652"},
+		{65536, 65552, "859a87cf3e62ebc586ea75afd22590201cec9f4b7264e77660902135d20fa2db"},
+		{140000, 140021, "1e63c60992d4ffde7b5ba4964171c6d761ed11d575ff6186a1d3af583bf42259"},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%d bytes", tt.n), func(t *testing.T) {
+			data := pattern(tt.n)
+			filter := NewGZIPFilter(0)
+			got, err := filter.Apply(data)
+			require.NoError(t, err)
+			require.Len(t, got, tt.size)
+			sum := sha256.Sum256(got)
+			require.Equal(t, tt.sha256, hex.EncodeToString(sum[:]))
+
+			back, err := filter.Remove(got)
+			require.NoError(t, err)
+			require.Equal(t, data, back)
 		})
 	}
 }
