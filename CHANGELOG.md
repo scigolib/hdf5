@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`WithChunkDims` and `WithMaxDims` with a maximum above 0, typically `Unlimited`). h5dump shows such
   a dataset as `SIMPLE { ( 0 ) / ( H5S_UNLIMITED ) }`, and `Read` returns no value. A zero dimension
   that cannot grow is still refused.
+- `FileWriter.Root()` returns a `GroupWriter` for the root group, so its attributes can be written
+  and deleted like those of any other group, on new files and on files opened with `OpenForWrite`.
+  `CreateGroup("/")` still refuses, since the file has the root group from its creation; there was
+  no other way to reach it. The root group of a version 0 superblock has a version 1 object header,
+  to which attributes could not be added before: they now are, and stay compact however many there
+  are, as in the C library, which keeps dense attribute storage for version 2 headers.
 
 ### Changed
 
