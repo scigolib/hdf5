@@ -490,8 +490,8 @@ func AddMessageToObjectHeader(oh *ObjectHeader, msgType MessageType, msgData []b
 		return fmt.Errorf("object header is nil")
 	}
 
-	if oh.Version != 2 {
-		return fmt.Errorf("only object header version 2 is supported for modification, got version %d", oh.Version)
+	if oh.Version != 1 && oh.Version != 2 {
+		return fmt.Errorf("only object header versions 1 and 2 are supported for modification, got version %d", oh.Version)
 	}
 
 	// Create new message.

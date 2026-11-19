@@ -5,6 +5,7 @@ package hdf5
 // tools are not in PATH; the c-interop CI job installs them.
 
 import (
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -177,6 +178,26 @@ func TestCInterop_WriteMatrix(t *testing.T) {
 				`ATTRIBUTE "channels"`, "RGB", "IR",
 				"(0): 7, 8, 9",
 			},
+		},
+		{
+			name: "root_attributes",
+			build: func(t *testing.T, fw *FileWriter) {
+				require.NoError(t, fw.Root().WriteAttribute("Number of Steps", int32(3)))
+				require.NoError(t, fw.Root().WriteAttribute("title", "run"))
+			},
+			want: []string{`GROUP "/"`, `ATTRIBUTE "Number of Steps"`, "(0): 3", `ATTRIBUTE "title"`, `"run"`},
+		},
+		{
+			// The root group of a version 0 superblock has a version 1 header.
+			name: "root_attributes_superblock_v0",
+			opts: []interface{}{WithSuperblockVersion(SuperblockV0)},
+			build: func(t *testing.T, fw *FileWriter) {
+				for i := range 2 * MaxCompactAttributes {
+					require.NoError(t, fw.Root().WriteAttribute(fmt.Sprintf("attr%02d", i), int32(i)))
+				}
+				require.NoError(t, fw.Root().WriteAttribute("title", "run"))
+			},
+			want: []string{`GROUP "/"`, `ATTRIBUTE "attr00"`, `ATTRIBUTE "attr15"`, "(0): 15", `ATTRIBUTE "title"`, `"run"`},
 		},
 		{
 			name: "hard_link",

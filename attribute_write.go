@@ -256,7 +256,9 @@ func writeAttribute(fw *FileWriter, objectAddr uint64, name string, value interf
 		return writeDenseAttribute(fw, objectAddr, oh, name, value, sb)
 	}
 
-	if totalCompactCount < MaxCompactAttributes {
+	// A version 1 header has no dense attribute storage: its attributes stay
+	// compact however many there are (H5O__attr_create, H5Oattribute.c).
+	if totalCompactCount < MaxCompactAttributes || oh.Version == 1 {
 		// Still compact -> add compact attribute.
 		return writeCompactAttribute(fw, objectAddr, oh, name, value, sb)
 	}
@@ -269,7 +271,8 @@ func writeAttribute(fw *FileWriter, objectAddr uint64, name string, value interf
 //
 // The header is rewritten by rewriteObjectHeader, which keeps it inside its
 // space on disk or moves attributes to a continuation chunk (H5Oalloc.c); a
-// header that cannot take the attribute even so moves to dense storage.
+// version 2 header that cannot take the attribute even so moves to dense
+// storage.
 func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
 	// 1. Infer datatype and encode attribute (handles []string via Global Heap).
@@ -319,7 +322,7 @@ func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHea
 	}
 
 	err = fw.rewriteObjectHeader(objectAddr, oh)
-	if errors.Is(err, errHeaderFull) {
+	if errors.Is(err, errHeaderFull) && oh.Version != 1 {
 		return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
 	}
 	return err
