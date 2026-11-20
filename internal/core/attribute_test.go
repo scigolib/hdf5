@@ -394,20 +394,43 @@ func TestAttributeReadValue_ScalarTypes(t *testing.T) {
 		{
 			name: "scalar int32",
 			datatype: &DatatypeMessage{
-				Class: DatatypeFixed,
-				Size:  4,
+				Class:         DatatypeFixed,
+				Size:          4,
+				ClassBitField: flagSigned,
 			},
-			data:      []byte{0x2A, 0x00, 0x00, 0x00}, // 42 in little-endian
-			wantValue: int32(42),
+			data:      []byte{0xD6, 0xFF, 0xFF, 0xFF}, // -42 in little-endian two's complement
+			wantValue: int32(-42),
 		},
 		{
 			name: "scalar int64",
 			datatype: &DatatypeMessage{
-				Class: DatatypeFixed,
-				Size:  8,
+				Class:         DatatypeFixed,
+				Size:          8,
+				ClassBitField: flagSigned,
 			},
 			data:      []byte{0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // 100
 			wantValue: int64(100),
+		},
+		{
+			// The sign bit of the class bit field is clear: unsigned. The
+			// value is above the int32 range, so it reads as -1 if the sign
+			// is taken from the size instead of the datatype.
+			name: "scalar uint32",
+			datatype: &DatatypeMessage{
+				Class: DatatypeFixed,
+				Size:  4,
+			},
+			data:      []byte{0xFF, 0xFF, 0xFF, 0xFF}, // 4294967295
+			wantValue: uint32(4294967295),
+		},
+		{
+			name: "scalar uint64",
+			datatype: &DatatypeMessage{
+				Class: DatatypeFixed,
+				Size:  8,
+			},
+			data:      []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, // 18446744073709551615
+			wantValue: uint64(18446744073709551615),
 		},
 		{
 			name: "scalar float32",
@@ -459,8 +482,9 @@ func TestAttributeReadValue_ArrayTypes(t *testing.T) {
 		{
 			name: "array of int32",
 			datatype: &DatatypeMessage{
-				Class: DatatypeFixed,
-				Size:  4,
+				Class:         DatatypeFixed,
+				Size:          4,
+				ClassBitField: flagSigned,
 			},
 			dimensions: []uint64{3},
 			data: []byte{
