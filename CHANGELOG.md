@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Unsigned 4- and 8-byte integer attributes read negative above 2^31 and 2^63: `Dataset.ReadAttribute`
+  and `Attribute.ReadValue` returned `int32` / `int64` whatever the datatype's sign bit said. They now
+  return `uint32` / `uint64`, as compound members do since v0.14.3.
+  **Upgrading**: code that asserts an attribute's value as `int32`, `int64`, `[]int32` or `[]int64`
+  must also handle the unsigned types. This includes files from writers that leave the sign bit clear
+  on integers they mean as signed; such attributes read as unsigned, as their datasets already do.
 - `Dataset.ReadSlice` on a dataset with no dimensions (a scalar or null dataspace) returned an empty
   slice and no error, so a scalar holding one value could not be told from an empty dataset. It now
   returns an error, as `H5Sselect_hyperslab` refuses such a dataspace in the C library and as
