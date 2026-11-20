@@ -404,7 +404,7 @@ Yes. The library has no C dependencies, so the image needs no HDF5 packages.
 
 Minimal Dockerfile:
 ```dockerfile
-FROM golang:1.25-alpine
+FROM golang:1.27-alpine
 
 WORKDIR /app
 COPY . .
