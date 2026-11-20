@@ -21,8 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The library now requires Go 1.27: the `go` line is `1.27.0`, CI tests 1.27 only, and no leg runs
-  below the line (user decision for the ecosystem, 2026-11-20). Users on an older Go need 1.27 to
-  build it.
+  below the line. We support only Go releases that still receive security fixes (1.26 and 1.27
+  today). Go 1.27 also enables generic methods, which let one type-safe method replace a family of
+  per-type methods — so the API stays small; they are used only where they replace real duplication.
 
 ### Fixed
 

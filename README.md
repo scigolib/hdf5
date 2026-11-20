@@ -305,7 +305,9 @@ See [ROADMAP.md](ROADMAP.md) for what comes next.
 ## Development
 
 ### Requirements
-- Go 1.27 or later
+- Go 1.27 or newer. We support only Go releases that still receive security fixes (1.26 and 1.27
+  today). Go 1.27 also enables generic methods, which let one type-safe method replace a family of
+  per-type methods — so the API stays small. We use them only where they replace real duplication.
 - The library has no dependencies outside the Go standard library; tests use testify, and the C
   interoperability tests use the HDF5 command-line tools when they are installed
 
