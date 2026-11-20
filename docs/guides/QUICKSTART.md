@@ -11,7 +11,7 @@ go get github.com/scigolib/hdf5
 ```
 
 Requirements:
-- Go 1.25 or later
+- Go 1.27 or later
 - No cgo and no external libraries
 
 ---

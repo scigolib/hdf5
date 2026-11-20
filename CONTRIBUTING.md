@@ -20,7 +20,7 @@ part you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Development setup
 
-- Go 1.25 or later (the `go` line of `go.mod`). The library has no dependencies outside the standard
+- Go 1.27 or later (the `go` line of `go.mod`). The library has no dependencies outside the standard
   library; tests use `github.com/stretchr/testify`.
 - [golangci-lint](https://golangci-lint.run/) for linting; `make install-lint` installs it if it is
   missing.
@@ -63,7 +63,7 @@ The project uses GitHub Flow.
 
 | Job | What it checks |
 |-----|----------------|
-| Unit Tests (Linux, macOS, Windows; Go 1.25, 1.26, 1.27) | `go vet` (Linux), then `go test -short -race` with coverage |
+| Unit Tests (Linux, macOS, Windows; Go 1.27) | `go vet` (Linux), then `go test -short -race` with coverage |
 | Lint | `golangci-lint` with the repository's `.golangci.yml` |
 | Code Formatting | `gofmt -l .` prints nothing |
 | Cross-Build 32-bit | the module builds for linux/386, linux/arm (GOARM=6) and windows/386, and `go vet` passes on linux/386 |
