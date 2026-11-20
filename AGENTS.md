@@ -19,7 +19,7 @@ against `h5dump` in CI.
 Do not use it for: SZIP, N-bit or scale-offset compressed datasets (see Limitations), SWMR or
 parallel I/O, or the family and multi file drivers.
 
-Import path `github.com/scigolib/hdf5`, package name `hdf5`. Go 1.25 or later.
+Import path `github.com/scigolib/hdf5`, package name `hdf5`. Go 1.27 or later.
 
 ## Install
 

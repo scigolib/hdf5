@@ -305,7 +305,7 @@ See [ROADMAP.md](ROADMAP.md) for what comes next.
 ## Development
 
 ### Requirements
-- Go 1.25 or later
+- Go 1.27 or later
 - The library has no dependencies outside the Go standard library; tests use testify, and the C
   interoperability tests use the HDF5 command-line tools when they are installed
 
