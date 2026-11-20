@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Upgrading**: code that asserts an attribute's value as `int32`, `int64`, `[]int32` or `[]int64`
   must also handle the unsigned types. This includes files from writers that leave the sign bit clear
   on integers they mean as signed; such attributes read as unsigned, as their datasets already do.
+- `Dataset.ReadSlice` on a dataset with no dimensions (a scalar or null dataspace) returned an empty
+  slice and no error, so a scalar holding one value could not be told from an empty dataset. It now
+  returns an error, as `H5Sselect_hyperslab` refuses such a dataspace in the C library and as
+  `ReadHyperslab` already did; `Read` returns a scalar's value.
+  **Upgrading**: code that called `ReadSlice` on a scalar dataset and ignored the empty result now
+  gets an error; use `Read`.
 - A root group whose Symbol Table message is too short to hold its two addresses was opened as if
   the message were absent: a version 0 file fell back to the addresses cached in the superblock, and
   with nothing cached it opened with no members and no error, so a damaged file looked like a valid,
