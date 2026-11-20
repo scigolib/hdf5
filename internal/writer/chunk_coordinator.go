@@ -34,7 +34,8 @@ type ChunkCoordinator struct {
 // NewChunkCoordinator creates coordinator.
 //
 // Calculates the number of chunks needed in each dimension using
-// ceiling division: numChunks[i] = ceil(datasetDims[i] / chunkDims[i])
+// ceiling division: numChunks[i] = ceil(datasetDims[i] / chunkDims[i]).
+// A dataset dimension of 0 gives no chunk at all.
 //
 // Parameters:
 //   - datasetDims: Dataset size in each dimension
@@ -62,13 +63,8 @@ func NewChunkCoordinator(datasetDims, chunkDims []uint64) (*ChunkCoordinator, er
 		return nil, fmt.Errorf("dataset must have at least 1 dimension")
 	}
 
-	// Validate no zero dimensions
-	for i, dim := range datasetDims {
-		if dim == 0 {
-			return nil, fmt.Errorf("dataset dimension %d cannot be zero", i)
-		}
-	}
-
+	// A dataset dimension may be 0 (an extendible dataset with no element
+	// yet): it has no chunk.
 	for i, dim := range chunkDims {
 		if dim == 0 {
 			return nil, fmt.Errorf("chunk dimension %d cannot be zero", i)

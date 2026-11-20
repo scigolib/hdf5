@@ -1,9 +1,11 @@
 # HDF5 Go Library Makefile
 # Pure Go HDF5 file format reader and writer.
 #
-# The checks CI runs are in .github/workflows/test.yml; `make ci` runs the
-# same gates locally (formatting, tests, lint). Outputs go to tmp/, which
-# is ignored by git.
+# The gates are in .github/workflows/test.yml, and CI runs more than any
+# target here (race tests on three operating systems, C interop, 386
+# cross-builds, fuzzing, govulncheck). `make ci` is a quick local pass —
+# formatting, tests, lint — not a substitute for the CI run. Outputs go to
+# tmp/, which is ignored by git.
 
 PROJECT = hdf5
 
@@ -74,9 +76,9 @@ examples:
 dev: fmt lint test
 	@echo "Development checks complete."
 
-# The gates CI runs (formatting, tests, lint)
+# A quick local pass — formatting, tests, lint; CI runs more (test.yml)
 ci: fmt-check test lint
-	@echo "CI checks passed."
+	@echo "Local checks passed (CI runs more — see the workflow)."
 
 # Pre-commit checks
 pre-commit: fmt lint test
@@ -103,7 +105,7 @@ help:
 	@echo "  make clean         - Remove generated outputs"
 	@echo "  make examples      - Build all examples"
 	@echo "  make dev           - fmt, lint, test"
-	@echo "  make ci            - The gates CI runs"
+	@echo "  make ci            - Formatting, tests, lint (a local pass; CI runs more)"
 	@echo "  make pre-commit    - fmt, lint, test"
 	@echo "  make install-lint  - Install golangci-lint"
 

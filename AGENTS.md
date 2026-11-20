@@ -19,7 +19,7 @@ against `h5dump` in CI.
 Do not use it for: SZIP, N-bit or scale-offset compressed datasets (see Limitations), SWMR or
 parallel I/O, or the family and multi file drivers.
 
-Import path `github.com/scigolib/hdf5`, package name `hdf5`. Go 1.25 or later.
+Import path `github.com/scigolib/hdf5`, package name `hdf5`. Go 1.27 or later.
 
 ## Install
 
@@ -252,6 +252,14 @@ func writeFile(path string) (err error) {
         return err
     }
     if err := ds.WriteAttribute("calibration", []float64{1, 0}); err != nil {
+        return err
+    }
+    // A plain string is written null-terminated, one byte longer than its text. For the fixed-length
+    // type a C writer produces, pass FixedStringValue with the size, padding and character set.
+    if err := ds.WriteAttribute("name", hdf5.FixedStringValue{
+        Value: "node-007",
+        Type:  hdf5.FixedString{Size: 8},
+    }); err != nil {
         return err
     }
 

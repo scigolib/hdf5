@@ -629,7 +629,7 @@ h5repack -f GZIP=3 input.h5 output.h5  # Level 3 instead of 9
 # Install Go from https://golang.org/dl/
 
 # Verify installation
-go version  # Should show Go 1.25+
+go version  # Should show Go 1.27+
 
 # Check PATH
 echo $PATH  # Should include Go bin directory
@@ -803,7 +803,7 @@ Include:
 
 **Good issue report template**:
 
-**Go version**: go1.25.1 linux/amd64
+**Go version**: go1.27.4 linux/amd64
 **Library version**: github.com/scigolib/hdf5 vX.Y.Z (use `go list -m github.com/scigolib/hdf5`)
 **OS**: Ubuntu 22.04
 
