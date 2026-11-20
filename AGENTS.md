@@ -254,6 +254,14 @@ func writeFile(path string) (err error) {
     if err := ds.WriteAttribute("calibration", []float64{1, 0}); err != nil {
         return err
     }
+    // A plain string is written null-terminated, one byte longer than its text. For the fixed-length
+    // type a C writer produces, pass FixedStringValue with the size, padding and character set.
+    if err := ds.WriteAttribute("name", hdf5.FixedStringValue{
+        Value: "node-007",
+        Type:  hdf5.FixedString{Size: 8},
+    }); err != nil {
+        return err
+    }
 
     // Fixed-length strings need their size.
     names, err := fw.CreateDataset("/run1/names", hdf5.String, []uint64{2}, hdf5.WithStringSize(8))
