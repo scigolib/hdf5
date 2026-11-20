@@ -3,7 +3,7 @@ name: Tests
 # Testing Strategy:
 # - Tests run on Linux, macOS, and Windows (cross-platform library)
 # - HDF5 is a cross-platform file format - must work everywhere
-# - Go 1.25+ required (matches go.mod requirement)
+# - Go 1.27+ required (the go.mod line; CI runs 1.27 only)
 #
 # Branch Strategy (GitHub Flow):
 # - feature/** branches: Development work
@@ -21,8 +21,8 @@ on:
       - main
 
 env:
-  # The go command must not download a newer toolchain: with GOTOOLCHAIN=auto the 1.25 and 1.26
-  # legs would quietly test the newest Go instead of the version they name.
+  # The go command must not download a newer toolchain: every job installs the exact Go it names,
+  # and with GOTOOLCHAIN=local a version below the go.mod line fails loudly instead of switching.
   GOTOOLCHAIN: local
 
 jobs:
@@ -33,7 +33,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        go-version: ['1.25', '1.26', '1.27']  # go.mod minimum, oldstable and stable
+        go-version: ['1.27']  # the go.mod minimum: no leg below it
 
     steps:
     - name: Checkout code
@@ -60,7 +60,7 @@ jobs:
       run: go test -short -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
     - name: Upload coverage to Codecov
-      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
+      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.27'
       uses: codecov/codecov-action@v7
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
@@ -82,7 +82,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version: '1.25'
+        go-version: '1.27'
         cache: true
 
     - name: Install HDF5 tools
@@ -108,7 +108,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version: '1.25'
+        go-version: '1.27'
         cache: true
 
     - name: Download dependencies
@@ -149,7 +149,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version: '1.25'
+        go-version: '1.27'
         cache: true
 
     - name: Download dependencies
@@ -186,7 +186,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version: '1.25'
+        go-version: '1.27'
         cache: true
 
     - name: Run golangci-lint
@@ -207,7 +207,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version: '1.25'
+        go-version: '1.27'
         cache: true
 
     - name: Check formatting

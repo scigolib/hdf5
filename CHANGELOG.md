@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as long as its text (`STRSIZE 8` for an 8-byte value) or a space-padded one. A value longer than
   the type is refused.
 
+### Changed
+
+- The library now requires Go 1.27: the `go` line is `1.27.0`, CI tests 1.27 only, and no leg runs
+  below the line (user decision for the ecosystem, 2026-11-20). Users on an older Go need 1.27 to
+  build it.
+
 ### Fixed
 
 - A root group whose Symbol Table message is too short to hold its two addresses was opened as if

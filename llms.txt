@@ -1,6 +1,6 @@
 # scigolib/hdf5
 
-> Pure Go library to read and write HDF5 files, without cgo and without the HDF5 C library. Import path `github.com/scigolib/hdf5`, Go 1.25 or later, latest release v0.15.0. It reads superblock versions 0, 2 and 3 and every common dataset layout (compact, contiguous, chunked) with GZIP, Shuffle, Fletcher32, LZF and BZIP2 filters, partial reads by hyperslab and chunk-by-chunk iteration for data larger than memory, attributes, groups and links; it writes files that the C library's h5dump reads back, and modifies existing files in place.
+> Pure Go library to read and write HDF5 files, without cgo and without the HDF5 C library. Import path `github.com/scigolib/hdf5`, Go 1.27 or later, latest release v0.15.0. It reads superblock versions 0, 2 and 3 and every common dataset layout (compact, contiguous, chunked) with GZIP, Shuffle, Fletcher32, LZF and BZIP2 filters, partial reads by hyperslab and chunk-by-chunk iteration for data larger than memory, attributes, groups and links; it writes files that the C library's h5dump reads back, and modifies existing files in place.
 
 - Numeric datasets are read with `Dataset.Read()` as `[]float64`, flattened in row-major order; strings, compounds and variable-length data have their own read methods.
 - Errors are classified with `errors.Is`: `ErrCorrupt`, `ErrNotSupported`, `ErrLimit`, `ErrNoData`, `ErrNeedsRepack`. For untrusted files set `File.SetReadLimit`.
