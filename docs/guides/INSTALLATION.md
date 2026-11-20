@@ -7,7 +7,7 @@ How to install and verify the HDF5 Go library.
 ## Requirements
 
 ### Minimum Requirements
-- **Go**: Version 1.25 or later
+- **Go**: Version 1.27 or later
 - **Operating System**: Windows, Linux, macOS, or any Go-supported platform
 - **Architecture**: amd64, arm64, or any Go-supported architecture
 - **Dependencies**: none outside the Go standard library (pure Go, no cgo)
@@ -148,7 +148,7 @@ No special requirements. The library is pure Go and has no C dependencies.
 go get github.com/scigolib/hdf5
 
 # Verify
-go version  # Should show Go 1.25+
+go version  # Should show Go 1.27+
 ```
 
 **Common Windows issues**:
@@ -161,7 +161,7 @@ No special requirements.
 
 ```bash
 # Verify Go version
-go version  # Should show Go 1.25+
+go version  # Should show Go 1.27+
 
 # Install library
 go get github.com/scigolib/hdf5
@@ -175,7 +175,7 @@ No special requirements.
 
 ```bash
 # Verify Go version
-go version  # Should show Go 1.25+
+go version  # Should show Go 1.27+
 
 # Install library
 go get github.com/scigolib/hdf5
@@ -228,7 +228,7 @@ If you prefer using Docker:
 
 ```dockerfile
 # Dockerfile
-FROM golang:1.25-alpine
+FROM golang:1.27-alpine
 
 WORKDIR /app
 
@@ -293,11 +293,11 @@ go get github.com/scigolib/hdf5
 
 **Problem**:
 ```
-go: github.com/scigolib/hdf5 requires go >= 1.25
+go: github.com/scigolib/hdf5 requires go >= 1.27
 ```
 
 **Solution**:
-Update Go to version 1.25 or later:
+Update Go to version 1.27 or later:
 - **Official Go downloads**: https://golang.org/dl/
 - **Ubuntu/Debian**: `sudo snap install go --classic`
 - **macOS**: `brew install go`

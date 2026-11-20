@@ -1,6 +1,6 @@
 module github.com/scigolib/hdf5
 
-go 1.25
+go 1.27.0
 
 require github.com/stretchr/testify v1.12.1
 

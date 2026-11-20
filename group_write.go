@@ -53,7 +53,8 @@ type GroupWriter struct {
 // Supported value types:
 //   - Scalars: int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64
 //   - Arrays: []int32, []float64, etc. (1D arrays only)
-//   - Strings: string (fixed-length, converted to byte array)
+//   - Strings: string (fixed-length, null-terminated, len+1 bytes)
+//   - FixedStringValue: a string with the size and padding of its type
 //   - String arrays: []string (variable-length strings via Global Heap)
 //
 // Parameters:
@@ -130,7 +131,7 @@ func validateGroupPath(path string) error {
 		return fmt.Errorf("group path must start with '/' (got %q)", path)
 	}
 	if path == "/" {
-		return fmt.Errorf("root group already exists")
+		return fmt.Errorf("root group already exists; use FileWriter.Root to write its attributes")
 	}
 	return nil
 }
@@ -260,6 +261,24 @@ func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 		headerAddr: headerAddr,
 		file:       fw,
 	}, nil
+}
+
+// Root returns a handle for writing the attributes of the root group, which
+// the file has from its creation and CreateGroup therefore refuses. It works
+// on files from both CreateForWrite and OpenForWrite.
+//
+// Example:
+//
+//	fw, _ := hdf5.CreateForWrite("data.h5", hdf5.CreateTruncate)
+//	defer fw.Close()
+//
+//	fw.Root().WriteAttribute("Number of Steps", int32(3))
+func (fw *FileWriter) Root() *GroupWriter {
+	return &GroupWriter{
+		path:       "/",
+		headerAddr: fw.rootGroupAddr,
+		file:       fw,
+	}
 }
 
 // parsePath splits a path into parent directory and name.

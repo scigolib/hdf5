@@ -2,6 +2,7 @@ package hdf5
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -212,6 +213,60 @@ func TestChunkedDatasetGZIPLevels(t *testing.T) {
 			t.Logf("Level %d: file size = %d bytes", tt.level, info.Size())
 		})
 	}
+}
+
+// TestChunkedDatasetGZIPLevel0 checks that level 0 is kept as the deflate
+// filter's level and that each chunk is stored uncompressed in zlib framing:
+// ten 96-byte rows take 960 bytes and 11 of framing, as the C library writes.
+func TestChunkedDatasetGZIPLevel0(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "level0.h5")
+
+	fw, err := CreateForWrite(path, CreateTruncate)
+	require.NoError(t, err)
+	ds, err := fw.CreateDataset("/data", Uint8, []uint64{20, 96},
+		WithChunkDims([]uint64{10, 96}),
+		WithGZIPCompression(0))
+	require.NoError(t, err)
+	data := make([]uint8, 20*96)
+	for i := range data {
+		data[i] = uint8(i % 251)
+	}
+	require.NoError(t, ds.Write(data))
+	require.NoError(t, fw.Close())
+
+	f, err := Open(path)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	var got *Dataset
+	f.Walk(func(p string, obj Object) {
+		if d, ok := obj.(*Dataset); ok && p == "/data" {
+			got = d
+		}
+	})
+	require.NotNil(t, got)
+
+	layout, err := got.Layout()
+	require.NoError(t, err)
+	require.Len(t, layout.Filters, 1)
+	require.Equal(t, FilterDeflate, layout.Filters[0].ID)
+	require.Equal(t, []uint32{0}, layout.Filters[0].ClientData)
+
+	values, err := got.Read()
+	require.NoError(t, err)
+	require.Len(t, values, len(data))
+	for i, v := range data {
+		require.Equal(t, float64(v), values[i], "element %d", i)
+	}
+
+	it, err := got.ChunkIterator()
+	require.NoError(t, err)
+	chunks := 0
+	for it.Next() {
+		chunks++
+	}
+	require.NoError(t, it.Err())
+	require.Equal(t, 2, chunks)
 }
 
 func TestChunkedDatasetShuffleImprovement(t *testing.T) {

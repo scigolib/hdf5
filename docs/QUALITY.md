@@ -48,7 +48,7 @@ The library parses and writes binary files that may come from anywhere. That set
   regression input under `testdata/fuzz` together with the fix.
 - Damage and security tests use small inputs that cannot exhaust the memory of the test machine: prove
   the check, not the crash.
-- CI runs on Linux, macOS and Windows with Go 1.25 (the `go.mod` minimum), 1.26 and 1.27; with the race
+- CI runs on Linux, macOS and Windows with Go 1.27 (the `go.mod` line); with the race
   detector, 32-bit cross-builds, the linter, formatting, the C-interoperability job and 60-second fuzz
   runs. The full job list is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 

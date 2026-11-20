@@ -70,8 +70,8 @@ type HyperslabSelection struct {
 //	data, err := dataset.ReadSlice([]uint64{100, 200}, []uint64{50, 50})
 //
 // Returns:
-//   - interface{}: The selected values as a []float64, whatever the dataset's
-//     numeric type, as Read returns them
+//   - interface{}: the selected values as []float64. The dataset's element type is
+//     converted to float64, so 8-byte integers above 2^53 lose precision.
 //   - error: Error if selection is invalid or reading fails
 func (d *Dataset) ReadSlice(start, count []uint64) (interface{}, error) {
 	desc, err := d.descriptor()
@@ -138,8 +138,8 @@ func (d *Dataset) ReadSlice(start, count []uint64) (interface{}, error) {
 //	data, err := dataset.ReadHyperslab(sel)
 //
 // Returns:
-//   - interface{}: The selected values as a []float64, whatever the dataset's
-//     numeric type, as Read returns them
+//   - interface{}: the selected values as []float64, converted from the dataset's
+//     element type (8-byte integers above 2^53 lose precision, as in ReadSlice)
 //   - error: Error if selection is invalid or reading fails
 func (d *Dataset) ReadHyperslab(selection *HyperslabSelection) (interface{}, error) {
 	desc, err := d.descriptor()

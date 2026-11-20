@@ -76,16 +76,29 @@ func TestAddMessageToObjectHeader_NilHeader(t *testing.T) {
 	assert.Contains(t, err.Error(), "object header is nil")
 }
 
-// TestAddMessageToObjectHeader_V1NotSupported tests error with v1 header.
-func TestAddMessageToObjectHeader_V1NotSupported(t *testing.T) {
+// TestAddMessageToObjectHeader_V1 tests adding a message to a v1 header.
+func TestAddMessageToObjectHeader_V1(t *testing.T) {
 	oh := &ObjectHeader{
-		Version:  1, // Version 1 not supported for modification
-		Flags:    0,
+		Version:  1,
+		Type:     ObjectTypeGroup,
+		Messages: []*HeaderMessage{},
+	}
+
+	require.NoError(t, AddMessageToObjectHeader(oh, MsgAttribute, []byte{1, 2, 3}))
+	require.Len(t, oh.Messages, 1)
+	assert.Equal(t, []byte{1, 2, 3}, oh.Messages[0].Data)
+}
+
+// TestAddMessageToObjectHeader_UnknownVersion tests error with a header
+// version other than 1 and 2.
+func TestAddMessageToObjectHeader_UnknownVersion(t *testing.T) {
+	oh := &ObjectHeader{
+		Version:  3,
 		Type:     ObjectTypeDataset,
 		Messages: []*HeaderMessage{},
 	}
 
 	err := AddMessageToObjectHeader(oh, MsgAttribute, []byte{1, 2, 3})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "only object header version 2 is supported")
+	assert.Contains(t, err.Error(), "only object header versions 1 and 2 are supported")
 }

@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- String attributes of a chosen size and padding: `WriteAttribute(name, FixedStringValue{Value, Type})`
+  stores `Value` with the fixed-length string type `Type` (a `FixedString`, as for compound members),
+  where a plain `string` always gets a null-terminated type one byte longer than its text. A file can
+  now carry the attribute types the C library's writers use, such as a null-terminated type exactly
+  as long as its text (`STRSIZE 8` for an 8-byte value) or a space-padded one. A value longer than
+  the type is refused.
+- Extendible datasets with no element yet, as the C library's packet tables start: `CreateDataset`,
+  `CreateCompound` and `CreateCompoundDataset` accept a dimension of 0 when the dataset can grow in it
+  (`WithChunkDims` and `WithMaxDims` with a maximum above 0, typically `Unlimited`). h5dump shows such
+  a dataset as `SIMPLE { ( 0 ) / ( H5S_UNLIMITED ) }`, and `Read` returns no value. A zero dimension
+  that cannot grow is still refused.
+- `FileWriter.Root()` returns a `GroupWriter` for the root group, so its attributes can be written
+  and deleted like those of any other group, on new files and on files opened with `OpenForWrite`.
+  `CreateGroup("/")` still refuses, since the file has the root group from its creation; there was
+  no other way to reach it. The root group of a version 0 superblock has a version 1 object header,
+  to which attributes could not be added before: they now are, and stay compact however many there
+  are, as in the C library, which keeps dense attribute storage for version 2 headers.
+
+### Changed
+
+- The library now requires Go 1.27: the `go` line is `1.27.0`, CI tests 1.27 only, and no leg runs
+  below the line. We support only Go releases that still receive security fixes (1.26 and 1.27
+  today). Go 1.27 also enables generic methods, which let one type-safe method replace a family of
+  per-type methods — so the API stays small; they are used only where they replace real duplication.
+
 ### Fixed
 
 - `Dataset.ReadSlice` on a dataset with no dimensions (a scalar or null dataspace) returned an empty
@@ -17,9 +44,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ReadHyperslab` already did; `Read` returns a scalar's value.
   **Upgrading**: code that called `ReadSlice` on a scalar dataset and ignored the empty result now
   gets an error; use `Read`.
-- The doc comments of `ReadSlice` and `ReadHyperslab` promised "the dataset's native type
-  ([]float64, []int32, etc.)". Both return a `[]float64` for every numeric type, as `Read` does, and
-  the comments now say so. No behaviour changed.
+- A root group whose Symbol Table message is too short to hold its two addresses was opened as if
+  the message were absent: a version 0 file fell back to the addresses cached in the superblock, and
+  with nothing cached it opened with no members and no error, so a damaged file looked like a valid,
+  empty one. `Open` now returns an error wrapping `ErrCorrupt`, as `H5O__stab_decode` fails on a
+  short message in the C library. The cached addresses still stand in for a message that is absent.
+- A valid file with 4-byte offsets whose root entry caches nothing opened with an empty root group:
+  its 8-byte Symbol Table message was passed over by a fixed 16-byte length test. The message is now
+  read at the file's size of offsets wherever `Open` reads it.
+- **A rewritten chunked dataset no longer keeps every generation in the file (issue #80).** A
+  `Resize` + `Write` loop is today's way to append rows to a chunked dataset, and each write used to
+  allocate new blocks for every chunk and a new chunk B-tree without freeing the previous ones: 60
+  appends of 100 rows by 1000 float32 made a 732 MB file for 24 MB of data (30.5x). A chunk whose
+  stored size is unchanged is now written over its own block, and the blocks a rewrite no longer
+  uses (a chunk that grew or shrank, a shrinking dataset, the previous B-tree) are freed once the
+  file points at the new index. No API change. A file opened with `OpenForWrite` still leaves one
+  generation behind on its first rewrite in a session: the writer learns the blocks on disk only as
+  it writes them.
+- **A variable-length datatype with an unknown kind is rejected.** The decoder treated every kind
+  other than string as a sequence; the kind must be 0 (sequence) or 1 (string), as the C library
+  requires since HDF5 2.2.0 (CVE-2026-17574), and the encoder refuses to write any other value.
+- `WithGZIPCompression(0)` writes a deflate filter of level 0, as `H5Pset_deflate(plist, 0)` does.
+  Level 0 was turned into 6 before. Each chunk is stored uncompressed in the zlib framing that the C
+  library's `compress2()` writes at level 0 (one stored block per 65535 bytes, the last one final),
+  so `h5dump -p` reports the same `LEVEL 0` and chunk `SIZE` for the file as for one the C library
+  wrote. `compress/zlib` is not used at level 0: it ends the stream with an extra empty block, 5
+  bytes longer per chunk.
+- `DatasetWriter.Resize` to a dimension of 0 failed, after it had already written the new dataspace to
+  the file. It now succeeds, and a resize that fails leaves the dataspace unchanged. `Write` of a
+  dataset with no element stores no chunk index and frees the chunks and index of the previous write.
 
 ## [v0.15.0] - 2026-11-07
 
@@ -1056,7 +1109,7 @@ Added support for additional compression filters used by h5py and scientific app
 
 ---
 
-## [v0.13.4] - 2025-01-29
+## [v0.13.4] - 2026-01-30
 
 ### 🐛 Bug Fixes
 
@@ -1113,7 +1166,7 @@ All attributes now read successfully.
 
 ---
 
-## [v0.13.3] - 2025-01-28
+## [v0.13.3] - 2026-01-28
 
 ### 🐛 Bug Fixes
 
@@ -1208,7 +1261,7 @@ Files with V2 object headers and attribute creation order tracking enabled
 
 ---
 
-## [v0.13.2] - 2025-01-17
+## [v0.13.2] - 2026-01-17
 
 ### 🐛 Bug Fixes
 

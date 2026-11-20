@@ -258,11 +258,14 @@ v0.15.0. Library packages have 82–95% test coverage.
 ### Writing
 
 **Datasets and attributes**:
-- Create datasets in every layout (contiguous, chunked, compact) and write every datatype above
+- Create datasets in contiguous and chunked layouts (compact-layout datasets are read, not
+  written) and write every datatype above
 - Resize datasets with unlimited dimensions
 - Variable-length strings and ragged arrays
-- Filters: GZIP, Shuffle, Fletcher32, LZF
+- Filters: GZIP, Shuffle, Fletcher32, LZF (BZIP2 is decompression-only)
 - Write, modify and delete attributes (compact and dense storage)
+- Choose a string attribute's stored type: `FixedStringValue{Value, Type}` writes a fixed-length
+  string with its own size, padding and character set, as the C library's writers do
 - Delete objects as `H5Ldelete` does: a group goes with everything only it links to, and an object
   also linked from elsewhere keeps its data (v0.15.0)
 
@@ -302,7 +305,9 @@ See [ROADMAP.md](ROADMAP.md) for what comes next.
 ## Development
 
 ### Requirements
-- Go 1.25 or later
+- Go 1.27 or newer. We support only Go releases that still receive security fixes (1.26 and 1.27
+  today). Go 1.27 also enables generic methods, which let one type-safe method replace a family of
+  per-type methods — so the API stays small. We use them only where they replace real duplication.
 - The library has no dependencies outside the Go standard library; tests use testify, and the C
   interoperability tests use the HDF5 command-line tools when they are installed
 
