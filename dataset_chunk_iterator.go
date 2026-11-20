@@ -144,7 +144,8 @@ func (it *ChunkIterator) Next() bool {
 
 // Chunk returns the data for the current chunk.
 // Must be called after Next() returns true.
-// Returns the chunk data as interface{} (typically []float64).
+// The value is a []float64 read through ReadSlice: the dataset's element type is
+// converted, so 8-byte integers above 2^53 lose precision.
 func (it *ChunkIterator) Chunk() (interface{}, error) {
 	if it.current < 1 || it.current > len(it.chunkCoords) {
 		return nil, errors.New("no current chunk: call Next() first")

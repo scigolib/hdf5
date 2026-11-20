@@ -20,7 +20,7 @@ part you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Development setup
 
-- Go 1.25 or later (the `go` line of `go.mod`). The library has no dependencies outside the standard
+- Go 1.27 or later (the `go` line of `go.mod`). The library has no dependencies outside the standard
   library; tests use `github.com/stretchr/testify`.
 - [golangci-lint](https://golangci-lint.run/) for linting; `make install-lint` installs it if it is
   missing.
@@ -63,7 +63,7 @@ The project uses GitHub Flow.
 
 | Job | What it checks |
 |-----|----------------|
-| Unit Tests (Linux, macOS, Windows; Go 1.25, 1.26, 1.27) | `go vet` (Linux), then `go test -short -race` with coverage |
+| Unit Tests (Linux, macOS, Windows; Go 1.27) | `go vet` (Linux), then `go test -short -race` with coverage |
 | Lint | `golangci-lint` with the repository's `.golangci.yml` |
 | Code Formatting | `gofmt -l .` prints nothing |
 | Cross-Build 32-bit | the module builds for linux/386, linux/arm (GOARM=6) and windows/386, and `go vet` passes on linux/386 |
@@ -100,10 +100,13 @@ go test -coverprofile=tmp/coverage.out ./... && go tool cover -html=tmp/coverage
 GOOS=linux GOARCH=386 go build ./...   # 32-bit build, as CI does
 ```
 
-`make` wraps the same steps: `make test`, `make test-race`, `make lint`, `make fmt` (runs
-`gofmt -w -s` and `go mod tidy`), `make fmt-check`, `make benchmark` and `make ci` (format check,
-tests, lint). Put generated files (coverage, profiles, test binaries) outside the source tree or under
-a directory that is ignored by git, and do not commit them.
+`make` wraps the common steps as a shortcut: `make test`, `make test-race`, `make lint`, `make fmt`
+(runs `gofmt -w -s` and `go mod tidy`), `make fmt-check`, `make benchmark` and `make ci` (format
+check, tests, lint). CI runs more than any make target — the race tests on three operating systems,
+the C interop tests, the 386 cross-builds, fuzzing and `govulncheck` — so a green `make ci` is not a
+green CI; the pull request's CI run is the authority. Put generated files (coverage, profiles, test
+binaries) outside the source tree or under a directory that is ignored by git, and do not commit
+them.
 
 The linter configuration is `.golangci.yml`: it enables complexity, bug-detection (`staticcheck`,
 `gosec`, `errcheck`, `errorlint`, `nilerr`), style and performance linters. Fix what it reports instead
@@ -124,6 +127,11 @@ test: cover a truncated fractal heap block
 
 Make each commit one finished change: a fix and its test go together. Do not commit credentials,
 generated files or personal paths.
+
+A user-visible change adds its entry under `[Unreleased]` in `CHANGELOG.md` in the same PR. When
+several PRs are open at once each carries its own entry, and after the first merge the rest conflict
+in that section — resolve it by keeping both entries. The maintainer who merges owns the final shape
+of `[Unreleased]`, so a PR never stacks on another just to avoid the conflict.
 
 ## Tests
 

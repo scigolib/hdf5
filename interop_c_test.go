@@ -5,6 +5,7 @@ package hdf5
 // tools are not in PATH; the c-interop CI job installs them.
 
 import (
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -97,6 +98,22 @@ func TestCInterop_WriteMatrix(t *testing.T) {
 			want: []string{"CHUNKED", "DEFLATE", "(0): 0, 1, 2", "99"},
 		},
 		{
+			// Level 0 stores each chunk in zlib framing, as compress2() at
+			// level 0 does: 960 bytes take 971.
+			name: "chunked_deflate_level0",
+			build: func(t *testing.T, fw *FileWriter) {
+				data := make([]uint8, 960)
+				for i := range data {
+					data[i] = uint8(i % 251)
+				}
+				ds, err := fw.CreateDataset("/z0", Uint8, []uint64{960},
+					WithChunkDims([]uint64{960}), WithGZIPCompression(0))
+				require.NoError(t, err)
+				require.NoError(t, ds.Write(data))
+			},
+			want: []string{"COMPRESSION DEFLATE { LEVEL 0 }", "SIZE 971 ", "(0): 0, 1, 2"},
+		},
+		{
 			name: "shuffle_fletcher32",
 			build: func(t *testing.T, fw *FileWriter) {
 				data := make([]float64, 50)
@@ -161,6 +178,26 @@ func TestCInterop_WriteMatrix(t *testing.T) {
 				`ATTRIBUTE "channels"`, "RGB", "IR",
 				"(0): 7, 8, 9",
 			},
+		},
+		{
+			name: "root_attributes",
+			build: func(t *testing.T, fw *FileWriter) {
+				require.NoError(t, fw.Root().WriteAttribute("Number of Steps", int32(3)))
+				require.NoError(t, fw.Root().WriteAttribute("title", "run"))
+			},
+			want: []string{`GROUP "/"`, `ATTRIBUTE "Number of Steps"`, "(0): 3", `ATTRIBUTE "title"`, `"run"`},
+		},
+		{
+			// The root group of a version 0 superblock has a version 1 header.
+			name: "root_attributes_superblock_v0",
+			opts: []interface{}{WithSuperblockVersion(SuperblockV0)},
+			build: func(t *testing.T, fw *FileWriter) {
+				for i := range 2 * MaxCompactAttributes {
+					require.NoError(t, fw.Root().WriteAttribute(fmt.Sprintf("attr%02d", i), int32(i)))
+				}
+				require.NoError(t, fw.Root().WriteAttribute("title", "run"))
+			},
+			want: []string{`GROUP "/"`, `ATTRIBUTE "attr00"`, `ATTRIBUTE "attr15"`, "(0): 15", `ATTRIBUTE "title"`, `"run"`},
 		},
 		{
 			name: "hard_link",

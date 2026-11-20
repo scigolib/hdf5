@@ -1,6 +1,7 @@
 package hdf5
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -31,7 +32,8 @@ const (
 // Supported value types:
 //   - Scalars: int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64
 //   - Arrays: []int32, []float64, etc. (1D arrays only)
-//   - Strings: string (fixed-length, converted to byte array)
+//   - Strings: string (fixed-length, null-terminated, len+1 bytes)
+//   - FixedStringValue: a string with the size and padding of its type
 //   - String arrays: []string (variable-length strings via Global Heap)
 //
 // Parameters:
@@ -254,7 +256,9 @@ func writeAttribute(fw *FileWriter, objectAddr uint64, name string, value interf
 		return writeDenseAttribute(fw, objectAddr, oh, name, value, sb)
 	}
 
-	if totalCompactCount < MaxCompactAttributes {
+	// A version 1 header has no dense attribute storage: its attributes stay
+	// compact however many there are (H5O__attr_create, H5Oattribute.c).
+	if totalCompactCount < MaxCompactAttributes || oh.Version == 1 {
 		// Still compact -> add compact attribute.
 		return writeCompactAttribute(fw, objectAddr, oh, name, value, sb)
 	}
@@ -267,7 +271,8 @@ func writeAttribute(fw *FileWriter, objectAddr uint64, name string, value interf
 //
 // The header is rewritten by rewriteObjectHeader, which keeps it inside its
 // space on disk or moves attributes to a continuation chunk (H5Oalloc.c); a
-// header that cannot take the attribute even so moves to dense storage.
+// version 2 header that cannot take the attribute even so moves to dense
+// storage.
 func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
 	// 1. Infer datatype and encode attribute (handles []string via Global Heap).
@@ -317,7 +322,7 @@ func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHea
 	}
 
 	err = fw.rewriteObjectHeader(objectAddr, oh)
-	if errors.Is(err, errHeaderFull) {
+	if errors.Is(err, errHeaderFull) && oh.Version != 1 {
 		return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
 	}
 	return err
@@ -709,10 +714,59 @@ func transitionToDenseAttributes(fw *FileWriter, objectAddr uint64, _ *core.Obje
 	return nil
 }
 
+// FixedStringValue is a string attribute value stored with the fixed-length
+// string type Type, for WriteAttribute. A plain string value gets a
+// null-terminated type of len(Value)+1 bytes; FixedStringValue chooses the
+// size, padding and character set, as H5Tset_size, H5Tset_strpad and
+// H5Tset_cset do in the C library.
+//
+// Value may have up to Type.Size bytes. With [PaddingNullTerm] a value of
+// exactly Type.Size bytes is stored without a terminator, as H5Awrite stores
+// a buffer that fills the type; a shorter one is followed by zero bytes, or
+// by spaces with [PaddingSpacePad].
+//
+// Example:
+//
+//	g.WriteAttribute("host", hdf5.FixedStringValue{Value: "node-007", Type: hdf5.FixedString{Size: 8}})
+type FixedStringValue struct {
+	Value string
+	Type  FixedString
+}
+
+// encode returns the datatype and the Type.Size bytes of v.
+func (v FixedStringValue) encode() (*core.DatatypeMessage, []byte, error) {
+	dt, err := v.Type.compoundMemberDatatype()
+	if err != nil {
+		return nil, nil, err
+	}
+	if uint64(len(v.Value)) > uint64(v.Type.Size) {
+		return nil, nil, fmt.Errorf("string of %d bytes does not fit the %d-byte string type", len(v.Value), v.Type.Size)
+	}
+	if uint64(v.Type.Size) > math.MaxInt {
+		return nil, nil, fmt.Errorf("string type of %d bytes does not fit in memory on this platform", v.Type.Size)
+	}
+	pad := []byte{0}
+	if v.Type.Padding == PaddingSpacePad {
+		pad[0] = ' '
+	}
+	data := append([]byte(v.Value), bytes.Repeat(pad, int(v.Type.Size)-len(v.Value))...)
+	return dt, data, nil
+}
+
 // inferAndEncodeAttributeValue infers the HDF5 datatype and encodes the value for attribute storage.
 // For []string values, this uses the Global Heap via prepareVLenStringAttribute.
 // For all other types, it delegates to inferDatatypeFromValue + encodeAttributeValue.
 func inferAndEncodeAttributeValue(fw *FileWriter, value interface{}) (*core.DatatypeMessage, *core.DataspaceMessage, []byte, error) {
+	if fs, ok := value.(FixedStringValue); ok {
+		datatype, data, err := fs.encode()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		dataspace := &core.DataspaceMessage{Dimensions: []uint64{1}}
+		setAttributeDataspaceAsC(fw, dataspace)
+		return datatype, dataspace, data, nil
+	}
+
 	// Handle []string specially — requires Global Heap I/O.
 	if strs, ok := value.([]string); ok {
 		if len(strs) == 0 {

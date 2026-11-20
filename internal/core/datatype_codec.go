@@ -502,7 +502,7 @@ func decodeProperties(c *dtCursor, dt *DatatypeMessage) error {
 	case DatatypeEnum:
 		return decodeEnum(c, dt)
 	case DatatypeVarLen:
-		return decodeBase(c, dt, "variable-length base type")
+		return decodeVL(c, dt)
 	case DatatypeArray:
 		return decodeArray(c, dt)
 	case DatatypeComplex:
@@ -973,6 +973,18 @@ func checkReferenceFlags(flags uint32) error {
 			(flags>>4)&0x0F, referenceEncodeVersion)
 	}
 	return nil
+}
+
+// decodeVL decodes a variable-length datatype: the kind nibble must be
+// sequence (0) or string (1), as C requires (H5Odtype.c:760-764), and the base
+// type follows.
+func decodeVL(c *dtCursor, dt *DatatypeMessage) error {
+	kind := dt.ClassBitField & nibbleMask
+	if kind != vlenSequence && kind != vlenString {
+		return errDatatypef("invalid variable-length type %d: must be %d (sequence) or %d (string) (H5Odtype.c:760-764)",
+			kind, vlenSequence, vlenString)
+	}
+	return decodeBase(c, dt, "variable-length base type")
 }
 
 // decodeBase decodes the parent type of an enumeration, variable-length,
