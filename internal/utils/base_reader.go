@@ -35,7 +35,7 @@ type baseReader struct {
 // negative offsets and offsets whose sum with the base overflows int64 are
 // rejected before touching the underlying reader.
 func (b *baseReader) ReadAt(p []byte, off int64) (int, error) {
-	if isNilReader(b.r) {
+	if IsNilReader(b.r) {
 		return 0, errors.New("base reader: nil underlying reader")
 	}
 

@@ -19,7 +19,7 @@ import (
 // io.SectionReader via Size(). A negative size is treated as unknown because it
 // cannot describe a byte range.
 func ReaderSize(r io.ReaderAt) (uint64, bool) {
-	if isNilReader(r) {
+	if IsNilReader(r) {
 		return 0, false
 	}
 
@@ -53,10 +53,10 @@ func ReaderSize(r io.ReaderAt) (uint64, bool) {
 	}
 }
 
-// isNilReader reports whether r is nil, including a typed nil pointer such as
+// IsNilReader reports whether r is nil, including a typed nil pointer such as
 // (*bytes.Reader)(nil). The latter is a non-nil interface whose method call
 // would panic, so the plain r == nil test is not enough.
-func isNilReader(r io.ReaderAt) bool {
+func IsNilReader(r io.ReaderAt) bool {
 	if r == nil {
 		return true
 	}
