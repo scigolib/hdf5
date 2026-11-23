@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/scigolib/hdf5"
+	"github.com/scigolib/hdf5/internal/core"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,24 +32,31 @@ func writeScalarAttrs(t *testing.T, filename string, opts ...interface{}) {
 	require.NoError(t, fw.Close())
 }
 
+// readAttrs reads the attributes of the group or dataset at path, by name.
 func readAttrs(t *testing.T, filename, path string) map[string]interface{} {
 	t.Helper()
 	f, err := hdf5.Open(filename)
 	require.NoError(t, err)
 	defer f.Close()
-	got := map[string]interface{}{}
+	var got map[string]interface{}
 	f.Walk(func(p string, obj hdf5.Object) {
-		if p != path {
+		if strings.TrimSuffix(p, "/") != path {
 			return
 		}
-		ds, ok := obj.(*hdf5.Dataset)
-		require.True(t, ok)
-		for _, name := range []string{"n", "f", "s", "v"} {
-			v, err := ds.ReadAttribute(name)
-			require.NoError(t, err, name)
-			got[name] = v
+		holder, ok := obj.(interface {
+			Attributes() ([]*core.Attribute, error)
+		})
+		require.True(t, ok, path)
+		attrs, err := holder.Attributes()
+		require.NoError(t, err, path)
+		got = map[string]interface{}{}
+		for _, a := range attrs {
+			v, err := a.ReadValue()
+			require.NoError(t, err, "%s/%s", path, a.Name)
+			got[a.Name] = v
 		}
 	})
+	require.Len(t, got, 4, path)
 	return got
 }
 
@@ -59,7 +67,9 @@ func TestScalarAttributesReadBack(t *testing.T) {
 	scalar := filepath.Join(dir, "scalar.h5")
 	writeScalarAttrs(t, plain)
 	writeScalarAttrs(t, scalar, hdf5.WithScalarAttributes())
-	require.Equal(t, readAttrs(t, plain, "/g/d"), readAttrs(t, scalar, "/g/d"))
+	for _, path := range []string{"/g", "/g/d"} {
+		require.Equal(t, readAttrs(t, plain, path), readAttrs(t, scalar, path), path)
+	}
 }
 
 // TestCInterop_ScalarAttributes has h5dump show the dataspaces each mode writes, in both superblock
@@ -94,7 +104,7 @@ func TestCInterop_ScalarAttributes(t *testing.T) {
 			for _, obj := range []string{"/g", "/g/d"} {
 				out, err := exec.Command(h5dump, "-a", obj+"/"+name, plain).CombinedOutput()
 				require.NoError(t, err, "superblock %d %s/%s:\n%s", sb, obj, name, out)
-				require.True(t, strings.Contains(string(out), want),
+				require.Contains(t, string(out), want,
 					"superblock %d %s/%s: without the option the dataspace is unchanged:\n%s", sb, obj, name, out)
 			}
 		}
