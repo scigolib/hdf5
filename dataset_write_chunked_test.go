@@ -462,3 +462,74 @@ func TestChunkedWrite_MultiLevel_RoundTrip(t *testing.T) {
 	})
 	require.True(t, found, "dataset /data not found")
 }
+
+// TestChunkedWrite_EdgeChunksStoredWhole: a chunk the dataset does not fill
+// is stored whole, chunkDims elements, as the C library stores every chunk;
+// the elements past the dataset are zero. A reader takes a stored chunk to be
+// whole: h5dump 2.x could not print a dataset whose last chunk was stored
+// short, and this module's reader read a short chunk that is partial in a
+// dimension other than the slowest with the wrong strides, or not at all.
+func TestChunkedWrite_EdgeChunksStoredWhole(t *testing.T) {
+	cases := []struct {
+		name      string
+		dims      []uint64
+		chunkDims []uint64
+		opts      []DatasetOption
+	}{
+		{name: "1d_last_chunk", dims: []uint64{2}, chunkDims: []uint64{10},
+			opts: []DatasetOption{WithMaxDims([]uint64{Unlimited})}},
+		{name: "1d_last_chunk_deflate", dims: []uint64{23}, chunkDims: []uint64{10},
+			opts: []DatasetOption{WithMaxDims([]uint64{Unlimited}), WithGZIPCompression(0)}},
+		{name: "2d_edges_both_dims", dims: []uint64{5, 3}, chunkDims: []uint64{2, 2}},
+		{name: "2d_edge_fast_dim", dims: []uint64{4, 7}, chunkDims: []uint64{2, 3},
+			opts: []DatasetOption{WithShuffle(), WithGZIPCompression(6), WithFletcher32()}},
+		{name: "3d_edges", dims: []uint64{3, 5, 4}, chunkDims: []uint64{2, 2, 3}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			filename := filepath.Join(t.TempDir(), "edge.h5")
+			n := uint64(1)
+			for _, d := range tc.dims {
+				n *= d
+			}
+			data := make([]int32, n)
+			for i := range data {
+				data[i] = int32(i + 1)
+			}
+
+			fw, err := CreateForWrite(filename, CreateTruncate)
+			require.NoError(t, err)
+			opts := append([]DatasetOption{WithChunkDims(tc.chunkDims)}, tc.opts...)
+			ds, err := fw.CreateDataset("/data", Int32, tc.dims, opts...)
+			require.NoError(t, err)
+			require.NoError(t, ds.Write(data))
+
+			if len(tc.opts) == 0 {
+				requireWholeChunks(t, ds, 4)
+			}
+			require.NoError(t, fw.Close())
+
+			got := requireDataReads(t, filename)
+			require.Len(t, got, len(data))
+			for i, v := range data {
+				require.InDelta(t, float64(v), got[i], 0, "element %d", i)
+			}
+			requireH5dumpClean(t, filename)
+		})
+	}
+}
+
+// requireWholeChunks checks that every chunk ds stored, unfiltered, is one
+// whole chunk of elemSize-byte elements.
+func requireWholeChunks(t *testing.T, ds *DatasetWriter, elemSize uint64) {
+	t.Helper()
+	chunkBytes := elemSize
+	for _, d := range ds.chunkDims {
+		chunkBytes *= d
+	}
+	require.Len(t, ds.chunkBlocks, int(ds.chunkCoordinator.GetTotalChunks()))
+	for _, block := range ds.chunkBlocks {
+		require.Equal(t, chunkBytes, block.size)
+	}
+}
