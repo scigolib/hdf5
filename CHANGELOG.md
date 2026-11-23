@@ -34,9 +34,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no other way to reach it. The root group of a version 0 superblock has a version 1 object header,
   to which attributes could not be added before: they now are, and stay compact however many there
   are, as in the C library, which keeps dense attribute storage for version 2 headers.
+- Appending to a chunked dataset without rewriting it: `DatasetWriter.AppendRows(data)` adds whole rows
+  to the end of the first dimension, `AppendRawRows(buf)` does the same for bytes already encoded, and
+  `Flush()` makes what has been appended readable in the file. Each chunk is written once, when the rows
+  that fill it arrive, so an append costs the same however large the dataset is, and the file stays the
+  size of its data. `Flush` writes the incomplete last chunk padded with zeros, the dataspace, the chunk
+  index (freeing the one it replaces) and the end-of-file address, as `H5Fflush` does: what was appended
+  survives the writing process stopping, not the machine losing power. `FileWriter.Close` and
+  `DatasetWriter.Close` flush. Once rows have been appended, the dataset's `Write`, `WriteRaw` and
+  `Resize` return an error. Integer and floating-point datasets are supported; a file reopened with
+  `OpenForWrite` cannot be appended to.
 
 ### Changed
 
+- `DatasetWriter.Close` flushes the rows appended with `AppendRows`, and returns `Flush`'s error. It
+  did nothing before, and still does nothing to a dataset no rows have been appended to.
 - The library now requires Go 1.27: the `go` line is `1.27.0`, CI tests 1.27 only, and no leg runs
   below the line. We support only Go releases that still receive security fixes (1.26 and 1.27
   today). Go 1.27 also enables generic methods, which let one type-safe method replace a family of

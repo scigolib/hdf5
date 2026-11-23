@@ -270,6 +270,9 @@ func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 	if !dw.isChunked {
 		return fmt.Errorf("writeChunkedData called on non-chunked dataset")
 	}
+	if dw.appender != nil {
+		return errAppending
+	}
 
 	if uint64(len(buf)) != dw.dataSize {
 		return fmt.Errorf("data size mismatch: expected %d bytes, got %d", dw.dataSize, len(buf))
