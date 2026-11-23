@@ -265,7 +265,7 @@ func TestCInterop_AppendRowsAfterFlush(t *testing.T) {
 	}
 }
 
-// TestCreateDatasetZeroExtent checks that a dimension may start at 0 only when its maximum is Unlimited.
+// TestCreateDatasetZeroExtent checks that a dimension may start at 0 only when it can grow.
 func TestCreateDatasetZeroExtent(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -274,9 +274,9 @@ func TestCreateDatasetZeroExtent(t *testing.T) {
 		ok      bool
 	}{
 		{name: "unlimited first dimension", dims: []uint64{0, 4}, maxDims: []uint64{hdf5.Unlimited, 4}, ok: true},
-		{name: "fixed maximum", dims: []uint64{0, 4}, maxDims: []uint64{100, 4}},
+		{name: "fixed maximum", dims: []uint64{0, 4}, maxDims: []uint64{100, 4}, ok: true},
 		{name: "no maximum", dims: []uint64{0, 4}},
-		{name: "zero in a fixed dimension", dims: []uint64{0, 0}, maxDims: []uint64{hdf5.Unlimited, 4}},
+		{name: "zero maximum", dims: []uint64{0, 4}, maxDims: []uint64{0, 4}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

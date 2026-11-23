@@ -145,13 +145,9 @@ func (fw *FileWriter) createChunkedDatasetEncoded(name string, dims []uint64, co
 	}
 
 	// Create chunk coordinator
-	// An empty extendible dataset has no chunks to coordinate until it grows.
-	var chunkCoordinator *writer.ChunkCoordinator
-	if !hasZeroDim(dims) {
-		chunkCoordinator, err = writer.NewChunkCoordinator(dims, config.chunkDims)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create chunk coordinator: %w", err)
-		}
+	chunkCoordinator, err := writer.NewChunkCoordinator(dims, config.chunkDims)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create chunk coordinator: %w", err)
 	}
 
 	// No chunk is written yet, so there is no chunk index: its address is
@@ -276,9 +272,6 @@ func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 	}
 	if dw.appender != nil {
 		return errAppending
-	}
-	if dw.chunkCoordinator == nil {
-		return fmt.Errorf("dataset %q is empty: grow it with AppendRows", dw.name)
 	}
 
 	if uint64(len(buf)) != dw.dataSize {
@@ -550,14 +543,4 @@ func (dw *DatasetWriter) setChunkIndexAddress(addr uint64) error {
 	}
 
 	return fmt.Errorf("dataset %q: object header has no layout message", dw.name)
-}
-
-// hasZeroDim reports whether any dimension of dims is 0.
-func hasZeroDim(dims []uint64) bool {
-	for _, d := range dims {
-		if d == 0 {
-			return true
-		}
-	}
-	return false
 }
