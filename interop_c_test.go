@@ -114,6 +114,35 @@ func TestCInterop_WriteMatrix(t *testing.T) {
 			want: []string{"COMPRESSION DEFLATE { LEVEL 0 }", "SIZE 971 ", "(0): 0, 1, 2"},
 		},
 		{
+			// A last chunk the data does not fill is stored whole, as the C
+			// library stores it: 192 bytes in a chunk of 960 take 971 at
+			// level 0, as the full chunk above, and h5dump 2.x prints them.
+			name: "chunked_partial_last_chunk",
+			build: func(t *testing.T, fw *FileWriter) {
+				data := make([]uint8, 192)
+				for i := range data {
+					data[i] = uint8(i)
+				}
+				ds, err := fw.CreateDataset("/p", Uint8, []uint64{192},
+					WithChunkDims([]uint64{960}), WithMaxDims([]uint64{Unlimited}),
+					WithGZIPCompression(0))
+				require.NoError(t, err)
+				require.NoError(t, ds.Write(data))
+			},
+			want: []string{"SIZE 971 ", "(0): 0, 1, 2", "191"},
+		},
+		{
+			// Edge chunks partial in either dimension, unfiltered: 5x3 int32
+			// in 2x2 chunks is 3x2 chunks of 16 bytes.
+			name: "chunked_2d_edge_chunks",
+			build: func(t *testing.T, fw *FileWriter) {
+				ds, err := fw.CreateDataset("/e", Int32, []uint64{5, 3}, WithChunkDims([]uint64{2, 2}))
+				require.NoError(t, err)
+				require.NoError(t, ds.Write([]int32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}))
+			},
+			want: []string{"CHUNKED ( 2, 2 )", "SIZE 96", "(0,0): 1, 2, 3,", "(4,0): 13, 14, 15"},
+		},
+		{
 			name: "shuffle_fletcher32",
 			build: func(t *testing.T, fw *FileWriter) {
 				data := make([]float64, 50)

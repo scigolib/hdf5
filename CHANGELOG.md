@@ -44,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A chunk the data does not fill, the last chunk of a dataset whose size is not a multiple of the
+  chunk size, was stored with only the elements it holds. The C library stores every chunk whole and
+  reads it so: h5dump 2.x could not print such a dataset (`DATA {h5dump error: unable to print data`),
+  and this module's reader failed on, or misread, an edge chunk that is partial in a dimension other
+  than the slowest. Edge chunks are now stored whole, with zeros past the dataset's extent, as the C
+  library writes them for the default fill value; `h5dump -p` reports the chunk `SIZE` the C library
+  gives for the same data. Datasets whose data fills its chunks are written as before.
+  **Upgrading**: files written by earlier versions keep their short chunks; rewrite the dataset to
+  make it readable by h5dump 2.x.
 - Unsigned 4- and 8-byte integer attributes read negative above 2^31 and 2^63: `Dataset.ReadAttribute`
   and `Attribute.ReadValue` returned `int32` / `int64` whatever the datatype's sign bit said. They now
   return `uint32` / `uint64`, as compound members do since v0.14.3.

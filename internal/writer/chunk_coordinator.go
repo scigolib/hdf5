@@ -197,13 +197,23 @@ func (cc *ChunkCoordinator) GetChunkSize(coord []uint64) []uint64 {
 // The dataset is laid out in row-major order (C order), and the chunk
 // data is extracted maintaining this layout.
 //
+// The result is always a whole chunk of chunkDims elements, edge chunks
+// included, as the C library stores every chunk (H5D__chunk_lock allocates
+// the whole chunk). The elements of an edge chunk outside the dataset are
+// zero: the C library clears them when the fill value is the library default
+// and the fill time is IFSET, the fill value message this writer writes. A
+// reader, C's or this module's, takes a stored chunk to be whole: h5dump 2.x
+// cannot print a dataset with a short edge chunk, and an edge chunk that is
+// partial in a dimension other than the slowest would be read with the wrong
+// strides.
+//
 // Parameters:
 //   - data: Full dataset buffer (row-major layout)
 //   - coord: Chunk coordinate to extract
 //   - elemSize: Size of each element in bytes
 //
 // Returns:
-//   - []byte: Extracted chunk data (contiguous buffer)
+//   - []byte: Extracted chunk data (contiguous buffer of one whole chunk)
 //
 // Example (2D, dataset 20x30 uint32, chunks 10x10):
 //
@@ -213,24 +223,22 @@ func (cc *ChunkCoordinator) GetChunkSize(coord []uint64) []uint64 {
 //
 // Algorithm:
 //
-//	For each element in chunk:
+//	For each element of the chunk inside the dataset:
 //	  1. Calculate position in dataset coordinates
 //	  2. Calculate linear offset in dataset buffer
 //	  3. Copy element to chunk buffer
 func (cc *ChunkCoordinator) ExtractChunkData(data []byte, coord []uint64, elemSize uint32) []byte {
-	chunkSize := cc.GetChunkSize(coord)
-
-	// Calculate total number of elements in chunk
+	// Calculate total number of elements in a whole chunk
 	numElements := uint64(1)
-	for _, dim := range chunkSize {
+	for _, dim := range cc.chunkDims {
 		numElements *= dim
 	}
 
-	// Allocate buffer for chunk data
+	// Allocate buffer for chunk data; elements past the dataset stay zero.
 	chunkData := make([]byte, numElements*uint64(elemSize))
 
 	// Extract data recursively
-	cc.extractRecursive(data, chunkData, coord, 0, 0, 0, elemSize)
+	cc.extractRecursive(data, chunkData, coord, cc.GetChunkSize(coord), 0, 0, 0, elemSize)
 
 	return chunkData
 }
@@ -244,22 +252,21 @@ func (cc *ChunkCoordinator) ExtractChunkData(data []byte, coord []uint64, elemSi
 //   - src: Source dataset buffer
 //   - dst: Destination chunk buffer
 //   - coord: Chunk coordinate
+//   - chunkSize: Part of the chunk inside the dataset (GetChunkSize)
 //   - dim: Current dimension being processed
 //   - srcOff: Current offset in source buffer
 //   - dstOff: Current offset in destination buffer
 //   - elemSize: Size of each element in bytes
 //
 // Base case: dim == len(datasetDims) → copy single element
-// Recursive case: iterate over chunk size in current dimension.
-func (cc *ChunkCoordinator) extractRecursive(src, dst []byte, coord []uint64, dim int, srcOff, dstOff uint64, elemSize uint32) {
+// Recursive case: iterate over the part of the chunk inside the dataset in
+// the current dimension.
+func (cc *ChunkCoordinator) extractRecursive(src, dst []byte, coord, chunkSize []uint64, dim int, srcOff, dstOff uint64, elemSize uint32) {
 	// Base case: reached innermost dimension, copy element
 	if dim == len(cc.datasetDims) {
 		copy(dst[dstOff:dstOff+uint64(elemSize)], src[srcOff:srcOff+uint64(elemSize)])
 		return
 	}
-
-	// Get actual chunk size in this dimension (may be partial)
-	chunkSize := cc.GetChunkSize(coord)
 
 	// Calculate strides for dataset and chunk
 	// Dataset stride: number of bytes to skip to move one step in this dimension
@@ -269,10 +276,11 @@ func (cc *ChunkCoordinator) extractRecursive(src, dst []byte, coord []uint64, di
 	}
 	dsStride *= uint64(elemSize)
 
-	// Chunk stride: number of bytes to skip in chunk buffer
+	// Chunk stride: number of bytes to skip in the chunk buffer, which holds
+	// a whole chunk
 	chunkStride := uint64(1)
-	for i := dim + 1; i < len(chunkSize); i++ {
-		chunkStride *= chunkSize[i]
+	for i := dim + 1; i < len(cc.chunkDims); i++ {
+		chunkStride *= cc.chunkDims[i]
 	}
 	chunkStride *= uint64(elemSize)
 
@@ -283,7 +291,7 @@ func (cc *ChunkCoordinator) extractRecursive(src, dst []byte, coord []uint64, di
 	for i := uint64(0); i < chunkSize[dim]; i++ {
 		newSrc := srcOff + (start+i)*dsStride
 		newDst := dstOff + i*chunkStride
-		cc.extractRecursive(src, dst, coord, dim+1, newSrc, newDst, elemSize)
+		cc.extractRecursive(src, dst, coord, chunkSize, dim+1, newSrc, newDst, elemSize)
 	}
 }
 
