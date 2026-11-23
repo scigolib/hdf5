@@ -47,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `DatasetWriter.Close` flushes the rows appended with `AppendRows`, and returns `Flush`'s error. It
+  did nothing before, and still does nothing to a dataset no rows have been appended to.
 - The library now requires Go 1.27: the `go` line is `1.27.0`, CI tests 1.27 only, and no leg runs
   below the line. We support only Go releases that still receive security fixes (1.26 and 1.27
   today). Go 1.27 also enables generic methods, which let one type-safe method replace a family of

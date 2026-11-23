@@ -2038,8 +2038,9 @@ func encodeOpaqueData(data interface{}, expectedSize uint64) ([]byte, error) {
 	return v, nil
 }
 
-// Close closes the dataset writer.
-// For MVP, this is a no-op (no per-dataset resources to release).
+// Close flushes the rows appended to the dataset, as Flush does, and returns its error. It does nothing
+// to a dataset no rows have been appended to. FileWriter.Close flushes every appended dataset whether or
+// not its Close was called.
 func (dw *DatasetWriter) Close() error {
 	return dw.Flush()
 }

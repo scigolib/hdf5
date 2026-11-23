@@ -36,6 +36,10 @@ type appender struct {
 
 	index []block // file space of the chunk index last written, freed when it is replaced
 	dirty bool    // rows appended since the last Flush
+
+	// failed is the error of an append that stopped partway, after which the slabs written no longer
+	// match rows. Every later AppendRows, AppendRawRows and Flush returns it.
+	failed error
 }
 
 // block is a range of file space.
@@ -67,6 +71,11 @@ func (r *recordingAllocator) Allocate(size uint64) (uint64, error) {
 // the file after Flush, or after FileWriter.Close, which flushes every dataset that has been appended to.
 //
 // Once rows have been appended, Write, WriteRaw and Resize refuse the dataset.
+//
+// An append that fails while writing to the file leaves the dataset unusable for appending: that call,
+// and every later AppendRows, AppendRawRows, Flush and Close of the dataset, returns the error. The rows
+// flushed before it stay readable. An append refused before anything is written, such as one that is not
+// a whole number of rows, does not.
 func (dw *DatasetWriter) AppendRows(data interface{}) error {
 	if dw.dtype == nil {
 		return errCommittedDatatypeData
@@ -98,6 +107,9 @@ func (dw *DatasetWriter) AppendRawRows(buf []byte) error {
 	if err != nil {
 		return err
 	}
+	if a.failed != nil {
+		return a.failed
+	}
 	if uint64(len(buf))%a.rowBytes != 0 {
 		return fmt.Errorf("%d bytes is not a whole number of %d-byte rows", len(buf), a.rowBytes)
 	}
@@ -106,7 +118,9 @@ func (dw *DatasetWriter) AppendRawRows(buf []byte) error {
 	for len(buf) > 0 {
 		took, err := dw.appendSome(a, buf)
 		if err != nil {
-			return err
+			a.failed = fmt.Errorf("dataset %q: an append failed partway, so it can no longer be appended to: %w",
+				dw.name, err)
+			return a.failed
 		}
 		buf = buf[took:]
 	}
@@ -148,7 +162,13 @@ func (dw *DatasetWriter) appendSome(a *appender, buf []byte) (uint64, error) {
 // without closing the file. Flush does not wait for the data to reach the disk.
 func (dw *DatasetWriter) Flush() error {
 	a := dw.appender
-	if a == nil || !a.dirty {
+	if a == nil {
+		return nil
+	}
+	if a.failed != nil {
+		return a.failed
+	}
+	if !a.dirty {
 		return nil
 	}
 	fw := dw.fileWriter
